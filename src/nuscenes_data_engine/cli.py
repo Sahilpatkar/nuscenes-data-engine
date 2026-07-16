@@ -7,6 +7,7 @@ One subcommand per pipeline stage. All stages are stubs at scaffold time and log
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import typer
 from rich.logging import RichHandler
@@ -59,15 +60,37 @@ def _todo(stage: str, phase: int) -> None:
 
 
 @app.command()
-def ingest() -> None:
+def ingest(
+    config: Path = typer.Option(
+        Path("configs/data.yaml"), "--config", "-c", help="Path to data.yaml."
+    ),
+    limit_scenes: int | None = typer.Option(
+        None, "--limit-scenes", help="Only process the first N scenes (fast dev runs)."
+    ),
+) -> None:
     """Phase 1: parse nuScenes into Parquet metadata + 2D box projections."""
-    _todo("ingest", 1)
+    from nuscenes_data_engine.ingestion.ingest import run_ingestion
+
+    summary = run_ingestion(config, limit_scenes=limit_scenes)
+    logger.info(
+        "Done: %d images, %d annotations -> %s",
+        summary["images"],
+        summary["annotations"],
+        summary["samples_parquet"].rsplit("/", 1)[0],
+    )
 
 
 @app.command()
-def validate() -> None:
+def validate(
+    processed_dir: Path = typer.Option(
+        Path("data/processed"), "--processed-dir", help="Directory with the Parquet tables."
+    ),
+) -> None:
     """Phase 1: run Great Expectations suites over the processed dataset."""
-    _todo("validate", 1)
+    from nuscenes_data_engine.validation.expectations import validate_dataset
+
+    passed = validate_dataset(processed_dir)
+    raise typer.Exit(code=0 if passed else 1)
 
 
 @app.command()

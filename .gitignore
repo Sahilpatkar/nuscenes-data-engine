@@ -20,12 +20,15 @@ htmlcov/
 # Env / secrets
 .env
 
+# Logs
+*.log
+
 # nuScenes raw data is read from /data/ggare/datasets/nuscenes — never vendored.
-# DVC-tracked pipeline outputs (Phase 1):
 /data/raw/*
-/data/processed/*
 !/data/raw/.gitkeep
-!/data/processed/.gitkeep
+# data/processed/ is managed by DVC: `dvc add` writes a local .gitignore there for the
+# actual data files, while the *.dvc pointer files ARE committed to git.
+!/data/processed/*.dvc
 
 # ML / training artifacts (generated, large binaries)
 mlruns/
