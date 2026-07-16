@@ -20,7 +20,33 @@ pipeline stage is a `TODO` filled in during its build phase (below).
 - **Python 3.11**, managed with [`uv`](https://docs.astral.sh/uv/)
 - Packaging: `pyproject.toml` (hatchling), `src/` layout
 - Quality: `ruff` (lint + format), `mypy` (strict), `pytest`
-- Infra: `docker-compose` (MinIO + MLflow), DVC, GitHub Actions
+- Infra (on the local infra machine): `docker-compose` (MinIO + MLflow), DVC, GitHub Actions
+
+## Two-machine topology
+
+Compute is split from ops so the GPU box never has to run infra:
+
+| | **GPU server** (this repo's host) | **Local infra machine** |
+|---|---|---|
+| Has | the read-only nuScenes data + GPU | Docker |
+| Runs | `ingest`, `train`, `evaluate` — **infra-free**, writes plain files | MinIO, MLflow server + registry, FastAPI serving, Streamlit, Evidently, CI |
+| MLflow | logs to a local file store (`file:./mlruns`) | MLflow **server** owns the UI + model registry |
+| DVC | never pushes | `dvc add`/`push` into MinIO |
+
+**Hand-off (rsync):** the server produces files; you sync them to the infra machine, which
+owns all versioning/serving:
+
+```bash
+# on the infra machine — pull compute outputs off the GPU server:
+rsync -a  user@gpu-server:/home/mgaur/sahil/nuscenes_project/data/processed/  ./data/processed/
+rsync -a  user@gpu-server:/home/mgaur/sahil/nuscenes_project/mlruns/          ./mlruns/
+# then, locally:
+make infra-up                 # MinIO + MLflow
+dvc add data/processed/*.parquet && dvc push
+```
+
+Nothing on the GPU server needs Docker/MinIO/an MLflow server. Point a run at the infra
+host by overriding `MLFLOW_TRACKING_URI` in `.env` if the machines are reachable.
 
 ## Quickstart
 
@@ -36,7 +62,7 @@ Common tasks via the Makefile:
 ```bash
 make setup      # uv sync --extra dev
 make check      # ruff + mypy + pytest
-make infra-up   # start MinIO + MLflow (docker compose)
+make infra-up   # [infra machine only] start MinIO + MLflow (docker compose)
 ```
 
 Heavy dependencies are opt-in extras so the base install stays light:

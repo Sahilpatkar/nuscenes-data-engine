@@ -31,4 +31,7 @@ data:
 
 tracking:
   experiment_name: nuscenes-yolo
-  mlflow_tracking_uri: http://localhost:5000
+  # Local file store: training on the GPU server needs no MLflow server. Sync ./mlruns to
+  # the infra machine (its MLflow server owns the UI + registry), or override via
+  # MLFLOW_TRACKING_URI=http://<infra-host>:5000.
+  mlflow_tracking_uri: file:./mlruns

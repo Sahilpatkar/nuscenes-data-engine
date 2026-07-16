@@ -1,5 +1,7 @@
 # nuScenes data engine — developer entrypoints.
-# Most targets are STUBS that call CLI subcommands filled in per build phase.
+#
+# Topology: GPU-server targets run compute and need NO infra (no docker/MinIO/MLflow
+# server). Infra-machine targets run the local ops stack. See README "Two-machine topology".
 
 .DEFAULT_GOAL := help
 .PHONY: help setup infra-up infra-down ingest validate train evaluate serve monitor \
@@ -12,13 +14,14 @@ help:  ## Show this help.
 setup:  ## Create the venv and install base + dev deps.
 	uv sync --extra dev
 
-infra-up:  ## Start local infra (MinIO + MLflow).
+# --- Local INFRA MACHINE only (needs docker; do NOT run on the GPU server) ---
+infra-up:  ## [infra machine] Start MinIO + MLflow.
 	docker compose up -d minio minio-setup mlflow
 
-infra-down:  ## Stop local infra.
+infra-down:  ## [infra machine] Stop MinIO + MLflow.
 	docker compose down
 
-# --- Pipeline stages (Phase 1+) ---
+# --- GPU-SERVER compute stages — infra-free (Phase 1+) ---
 ingest:  ## Phase 1: parse nuScenes -> Parquet + 2D projections.
 	uv run nuscenes-data-engine ingest
 

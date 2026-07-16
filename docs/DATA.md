@@ -74,18 +74,27 @@ Run with `make validate` (or `nuscenes-data-engine validate`):
 
 ## Reproduce
 
+Compute runs on the GPU server (infra-free); versioning happens on the infra machine.
+See the README "Two-machine topology" section.
+
+**On the GPU server** — produce + validate the Parquet (no MinIO/MLflow/Docker needed):
+
 ```bash
 uv sync --extra data --extra dev
-
 make ingest      # or: nuscenes-data-engine ingest [--limit-scenes N]
 make validate    # Great Expectations suites (exit non-zero on failure)
+# outputs: data/processed/{samples,annotations}.parquet
+```
 
-# Versioning (needs local infra):
-make infra-up                      # MinIO + MLflow via docker compose
+**On the local infra machine** — sync the Parquet off the server, then version it in MinIO:
+
+```bash
+rsync -a user@gpu-server:/home/mgaur/sahil/nuscenes_project/data/processed/ ./data/processed/
+make infra-up                                  # MinIO + MLflow via docker compose
 dvc add data/processed/samples.parquet data/processed/annotations.parquet
-dvc push                           # upload to the MinIO remote
+dvc push                                       # upload to the MinIO remote
 git add data/processed/*.dvc && git commit -m "data: version processed dataset"
 ```
 
 Data version = the hashes in the committed `*.dvc` files; `dvc pull` restores the exact
-Parquet from MinIO for any commit.
+Parquet from MinIO for any commit. The GPU server never runs `dvc push`.

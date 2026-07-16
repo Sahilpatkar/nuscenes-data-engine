@@ -31,14 +31,18 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"))
     processed_dir: Path = Field(default=Path("./data/processed"))
 
-    # --- MinIO (local S3-compatible object store; DVC remote) ---
+    # --- MinIO / MLflow live on the LOCAL INFRA MACHINE, not this GPU server. ---
+    # This server runs compute only (ingest/train/evaluate) and writes plain files;
+    # these endpoints matter only when a run is pointed at the infra machine via .env.
     minio_endpoint: str = Field(default="http://localhost:9000")
     minio_access_key: str = Field(default="minioadmin")
     minio_secret_key: str = Field(default="minioadmin")
     minio_bucket: str = Field(default="nuscenes-data-engine")
 
-    # --- MLflow ---
-    mlflow_tracking_uri: str = Field(default="http://localhost:5000")
+    # MLflow defaults to a local file store so training needs no server here. The runs
+    # dir (./mlruns) is synced to the infra machine, whose MLflow server owns the UI and
+    # the model registry. Override with MLFLOW_TRACKING_URI=http://<infra-host>:5000.
+    mlflow_tracking_uri: str = Field(default="file:./mlruns")
 
 
 def get_settings() -> Settings:

@@ -1,5 +1,10 @@
 # Local infra stack for the nuScenes data engine.
-# STUB: services are defined but not yet wired into the pipeline (Phase 1 = MinIO/DVC,
+#
+# RUN THIS ON YOUR LOCAL INFRA MACHINE, *not* the GPU server. The GPU server runs compute
+# only (ingest/train/evaluate) and writes plain files that you rsync here; this stack
+# (MinIO + MLflow, later the serving API + Streamlit UI) is the ops layer around them.
+#
+# STUB: services are defined but not yet fully wired (Phase 1 = MinIO/DVC,
 # Phase 2 = MLflow, Phase 4 = the serving API + Streamlit UI).
 #
 # Bring up the data-infra layer:  docker compose up -d minio minio-setup mlflow

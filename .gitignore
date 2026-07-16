@@ -26,8 +26,10 @@ htmlcov/
 # nuScenes raw data is read from /data/ggare/datasets/nuscenes — never vendored.
 /data/raw/*
 !/data/raw/.gitkeep
-# data/processed/ is managed by DVC: `dvc add` writes a local .gitignore there for the
-# actual data files, while the *.dvc pointer files ARE committed to git.
+# Produced Parquet is compute output on this GPU server; it is rsynced to the infra
+# machine and DVC-tracked there — never git-committed from here. The *.dvc pointer files
+# (created on the infra machine by `dvc add`) ARE committed.
+/data/processed/*.parquet
 !/data/processed/*.dvc
 
 # ML / training artifacts (generated, large binaries)
