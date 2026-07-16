@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv
+.DS_Store
+
+# Caches / coverage
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Env / secrets
+.env
+
+# nuScenes raw data is read from /data/ggare/datasets/nuscenes — never vendored.
+# DVC-tracked pipeline outputs (Phase 1):
+/data/raw/*
+/data/processed/*
+!/data/raw/.gitkeep
+!/data/processed/.gitkeep
+
+# ML / training artifacts (generated, large binaries)
+mlruns/
+mlartifacts/
+wandb/
+runs/
+*.mp4
+*.safetensors
+*.pt
+*.onnx
+
+# Great Expectations local uncommitted bits
+gx/uncommitted/

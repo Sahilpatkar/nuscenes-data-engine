@@ -1,0 +1,21 @@
+# Phase 3 — evaluation + condition-sliced metrics config.
+
+metrics:
+  iou_threshold: 0.5
+  conf_threshold: 0.25
+  per_class: true
+
+# Condition slices derived from nuScenes scene descriptions (Phase 3 differentiator).
+# Each slice is matched by substrings against scene.description (case-insensitive).
+slices:
+  time_of_day:
+    day: { exclude: [night] }
+    night: { include: [night] }
+  weather:
+    clear: { exclude: [rain] }
+    rain: { include: [rain] }
+
+# Model-promotion gate (staging -> production) in the MLflow registry.
+promotion:
+  min_overall_map: 0.30
+  min_night_map: 0.20
