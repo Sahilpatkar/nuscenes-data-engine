@@ -72,10 +72,15 @@ def _setup_wandb_env(settings: Any) -> bool:
 
 
 def _extract_metrics(results: Any, save_dir: Path) -> dict[str, float]:
-    """Validation metrics from the results object, falling back to results.csv (DDP-safe)."""
+    """Validation metrics from the results, falling back to results.csv (DDP-safe).
+
+    Ultralytics returns a results object in single-GPU mode but a plain ``dict`` from the
+    main process under DDP, so handle both.
+    """
+    raw = results if isinstance(results, dict) else getattr(results, "results_dict", {})
     metrics = {
-        k.replace("metrics/", "").replace("(B)", ""): float(v)
-        for k, v in getattr(results, "results_dict", {}).items()
+        str(k).replace("metrics/", "").replace("(B)", ""): float(v)
+        for k, v in raw.items()
         if isinstance(v, (int, float))
     }
     if metrics:
@@ -182,7 +187,9 @@ def train_model(
             **{k: aug[k] for k in ("hsv_h", "hsv_s", "hsv_v", "fliplr", "mosaic") if k in aug},
         )
 
-        save_dir = Path(results.save_dir)
+        # model.train() returns a results object (single-GPU) or a dict (DDP); the trainer
+        # always carries the resolved output dir.
+        save_dir = Path(model.trainer.save_dir)
         metrics = _extract_metrics(results, save_dir)
         mlflow.log_metrics(metrics)
 
