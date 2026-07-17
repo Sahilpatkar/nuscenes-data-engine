@@ -15,7 +15,9 @@ dependencies = [
     "pyyaml>=6.0",
     "pyarrow>=15.0",
     "pandas>=2.0",
-    "numpy>=1.26",
+    # <2 pin: the nuScenes devkit pulls an old matplotlib (3.5.x) that uses `np.Inf`,
+    # removed in NumPy 2.0. The AV/CV stack here assumes NumPy 1.x.
+    "numpy>=1.26,<2",
     "opencv-python>=4.9",
     "typer>=0.12",
     "rich>=13.7",
@@ -36,6 +38,7 @@ train = [
     "mlflow>=2.12",
     "dagster>=1.7",
     "dagster-webserver>=1.7",
+    "wandb>=0.17",
 ]
 # Phase 4 — serving + demo UI
 serve = [
@@ -89,10 +92,10 @@ mypy_path = "src"
 module = ["nuscenes_data_engine.serving.app"]
 disallow_untyped_decorators = false
 
-# great_expectations ships py.typed but doesn't cleanly export its expectation
-# classes; skip following into it so it resolves to Any rather than erroring.
+# These ship py.typed but don't cleanly export the symbols we use; skip following into
+# them so they resolve to Any rather than erroring on attr-defined.
 [[tool.mypy.overrides]]
-module = ["great_expectations.*"]
+module = ["great_expectations.*", "ultralytics.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
@@ -102,7 +105,6 @@ module = [
     "cv2.*",
     "pandas.*",
     "pyarrow.*",
-    "ultralytics.*",
     "dagster.*",
     "evidently.*",
     "mlflow.*",

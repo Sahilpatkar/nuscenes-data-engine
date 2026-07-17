@@ -94,9 +94,54 @@ def validate(
 
 
 @app.command()
-def train() -> None:
-    """Phase 2: run the orchestrated YOLO fine-tuning pipeline."""
-    _todo("train", 2)
+def prepare_dataset(
+    config: Path = typer.Option(Path("configs/train.yaml"), "--config", "-c"),
+    cameras: list[str] = typer.Option(None, "--camera", help="Restrict to camera(s); repeatable."),
+    limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
+) -> None:
+    """Phase 2: build the YOLO dataset (image symlinks + labels + data.yaml)."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    settings = get_settings()
+    cfg = load_yaml(config).get("data", {})
+    processed_dir = Path(cfg.get("processed_dir", settings.processed_dir))
+    yolo_dir = Path(cfg.get("yolo_dir", processed_dir / "yolo"))
+    _, stats = build_yolo_dataset(
+        processed_dir,
+        Path(settings.nuscenes_dataroot),
+        yolo_dir,
+        cameras=cameras or None,
+        limit_scenes=limit_scenes,
+    )
+    logger.info("Prepared: %s", stats)
+
+
+@app.command()
+def train(
+    config: Path = typer.Option(Path("configs/train.yaml"), "--config", "-c"),
+    cameras: list[str] = typer.Option(None, "--camera", help="Restrict to camera(s); repeatable."),
+    limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
+    epochs: int | None = typer.Option(None, "--epochs", help="Override configured epochs."),
+    device: str | None = typer.Option(None, "--device", help="Ultralytics device, e.g. 0 or cpu."),
+    wandb: bool | None = typer.Option(
+        None, "--wandb/--no-wandb", help="Enable/disable Weights & Biases logging."
+    ),
+) -> None:
+    """Phase 2: run the YOLO fine-tuning pipeline (prepare -> train -> log to MLflow/W&B)."""
+    from nuscenes_data_engine.training.run import run_training
+
+    summary = run_training(
+        config,
+        limit_scenes=limit_scenes,
+        cameras=cameras or None,
+        epochs=epochs,
+        device=device,
+        wandb_enabled=wandb,
+    )
+    logger.info("Run '%s' metrics: %s", summary["run_name"], summary["metrics"])
+    if summary.get("wandb_url"):
+        logger.info("W&B: %s", summary["wandb_url"])
 
 
 @app.command()

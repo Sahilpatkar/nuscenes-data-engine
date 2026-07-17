@@ -98,12 +98,39 @@ docs/                       DATA.md, EVALUATION.md
 .github/workflows/          CI (ruff + mypy + pytest)
 ```
 
+## Training (Phase 2)
+
+Fine-tune a pretrained YOLO detector on the projected 2D boxes. The pipeline
+`prepare dataset → train → log to MLflow` runs on the GPU server with no infra:
+
+```bash
+uv sync --extra data --extra train
+
+# Build the YOLO dataset (image symlinks + labels + data.yaml) from the Parquet:
+uv run nuscenes-data-engine prepare-dataset [--camera CAM_FRONT] [--limit-scenes N]
+
+# Fine-tune + log params/metrics/weights/plots to a local MLflow (sqlite) store:
+uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
+                                  [--epochs N] [--device 0]
+```
+
+- Config-driven from [configs/train.yaml](configs/train.yaml); every run is reproducible
+  from `(config + data-version hash)`, both logged to the trackers.
+- The official nuScenes scene split is used for train/val.
+- **MLflow** logs to `sqlite:///mlruns/mlflow.db` (no server needed); sync `mlruns/` to the
+  infra machine to browse the UI and register/promote models.
+- **Weights & Biases** (optional, cloud): add `--wandb` and set `WANDB_API_KEY` in `.env`
+  (or `uv run wandb login`). Live metrics, PR curves, and validation-prediction images
+  stream to your W&B project. `WANDB_MODE=offline` logs to `./wandb` for later `wandb sync`.
+- Orchestrated variant (Dagster):
+  `uv run dagster dev -m nuscenes_data_engine.training.pipeline`.
+
 ## Build roadmap
 
 | Phase | Focus | Deliverable |
 |---|---|---|
-| 1 | Data engineering | `make ingest` → validated, versioned Parquet dataset |
-| 2 | Training pipeline | Reproducible Dagster + MLflow runs |
+| 1 ✅ | Data engineering | `make ingest` → validated Parquet dataset (204,894 imgs / 1M boxes) |
+| 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 | Evaluation & registry | Sliced metrics + promotion policy |
 | 4 | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 | Monitoring & CI/CD | Evidently drift reports, green CI |

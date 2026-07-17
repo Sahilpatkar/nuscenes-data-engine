@@ -37,6 +37,9 @@ mlruns/
 mlartifacts/
 wandb/
 runs/
+weights/
+.cache/
+/data/processed/yolo/
 *.mp4
 *.safetensors
 *.pt

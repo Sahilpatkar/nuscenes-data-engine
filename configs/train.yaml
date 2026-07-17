@@ -31,7 +31,11 @@ data:
 
 tracking:
   experiment_name: nuscenes-yolo
-  # Local file store: training on the GPU server needs no MLflow server. Sync ./mlruns to
-  # the infra machine (its MLflow server owns the UI + registry), or override via
-  # MLFLOW_TRACKING_URI=http://<infra-host>:5000.
-  mlflow_tracking_uri: file:./mlruns
+  # Local SQLite backend: training on the GPU server needs no MLflow server. Sync ./mlruns
+  # (db + artifacts) to the infra machine (its MLflow server owns the UI + registry), or
+  # override via MLFLOW_TRACKING_URI=http://<infra-host>:5000.
+  mlflow_tracking_uri: sqlite:///mlruns/mlflow.db
+  # Weights & Biases (cloud): set enabled: true and provide WANDB_API_KEY (.env or
+  # `wandb login`). Project/entity/mode come from .env (WANDB_PROJECT/ENTITY/MODE).
+  wandb:
+    enabled: false

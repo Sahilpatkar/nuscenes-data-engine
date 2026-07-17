@@ -39,10 +39,19 @@ class Settings(BaseSettings):
     minio_secret_key: str = Field(default="minioadmin")
     minio_bucket: str = Field(default="nuscenes-data-engine")
 
-    # MLflow defaults to a local file store so training needs no server here. The runs
-    # dir (./mlruns) is synced to the infra machine, whose MLflow server owns the UI and
-    # the model registry. Override with MLFLOW_TRACKING_URI=http://<infra-host>:5000.
-    mlflow_tracking_uri: str = Field(default="file:./mlruns")
+    # MLflow defaults to a local SQLite backend so training needs no server here (MLflow
+    # 3.x no longer accepts a plain file store, and SQLite also unlocks the model
+    # registry). The mlruns/ dir (db + artifacts) is synced to the infra machine, whose
+    # MLflow server owns the UI/registry. Override with MLFLOW_TRACKING_URI=http://<infra-host>:5000.
+    mlflow_tracking_uri: str = Field(default="sqlite:///mlruns/mlflow.db")
+
+    # --- Weights & Biases (cloud experiment tracking; complements local MLflow) ---
+    # Set WANDB_API_KEY in .env (or run `uv run wandb login`). WANDB_MODE=offline logs
+    # locally to ./wandb for later `wandb sync`; "disabled" turns W&B off entirely.
+    wandb_api_key: str = Field(default="")
+    wandb_entity: str = Field(default="")
+    wandb_project: str = Field(default="nuscenes-data-engine")
+    wandb_mode: str = Field(default="online")
 
 
 def get_settings() -> Settings:
