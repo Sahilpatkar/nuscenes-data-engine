@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.config import get_settings
-from nuscenes_data_engine.training.runtime import REPO_ROOT, RUNS_DIR, configure_ultralytics
+from nuscenes_data_engine.training.runtime import REPO_ROOT, configure_ultralytics
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -44,39 +44,53 @@ def _run_name(model_cfg: dict[str, Any], imgsz: int, epochs: int) -> str:
     return f"{stem}_imgsz{imgsz}_e{epochs}"
 
 
-def _init_wandb(run_name: str, params: dict[str, Any], experiment: str) -> Any | None:
-    """Start a W&B run so Ultralytics logs into it; return the module or None.
+def _setup_wandb_env(settings: Any) -> bool:
+    """Export W&B env vars so Ultralytics' callback (incl. DDP workers) targets our project.
 
-    Requires ``WANDB_API_KEY`` (from ``.env`` or ``wandb login``) unless
-    ``WANDB_MODE=offline``. Project/entity/mode come from settings.
+    W&B is logged by Ultralytics' own callback rather than a manual ``wandb.init`` in this
+    (main) process: under DDP the training loop runs in worker subprocesses, so a
+    main-process run would stay empty while the worker created a second, auto-named run.
+    The workers inherit these env vars. Returns False if W&B can't run (no key, online).
     """
-    settings = get_settings()
     if settings.wandb_api_key:
         os.environ.setdefault("WANDB_API_KEY", settings.wandb_api_key)
     os.environ.setdefault("WANDB_MODE", settings.wandb_mode)
+    if settings.wandb_entity:
+        os.environ.setdefault("WANDB_ENTITY", settings.wandb_entity)
 
     try:
-        import wandb
+        import wandb  # noqa: F401
     except ImportError:
         logger.warning("W&B requested but `wandb` is not installed (uv sync --extra train).")
-        return None
+        return False
     if settings.wandb_mode != "offline" and not os.environ.get("WANDB_API_KEY"):
         logger.warning(
             "W&B enabled but no WANDB_API_KEY set; skipping (or use WANDB_MODE=offline)."
         )
-        return None
+        return False
+    return True
 
-    wandb.init(
-        project=settings.wandb_project,
-        entity=settings.wandb_entity or None,
-        name=run_name,
-        group=experiment,
-        job_type="train",
-        config=params,
-    )
-    if wandb.run is not None:
-        logger.info("W&B run: %s", wandb.run.get_url())
-    return wandb
+
+def _extract_metrics(results: Any, save_dir: Path) -> dict[str, float]:
+    """Validation metrics from the results object, falling back to results.csv (DDP-safe)."""
+    metrics = {
+        k.replace("metrics/", "").replace("(B)", ""): float(v)
+        for k, v in getattr(results, "results_dict", {}).items()
+        if isinstance(v, (int, float))
+    }
+    if metrics:
+        return metrics
+    csv = save_dir / "results.csv"
+    if csv.exists():
+        import pandas as pd
+
+        last = pd.read_csv(csv).iloc[-1]
+        metrics = {
+            c.strip().replace("metrics/", "").replace("(B)", ""): float(last[c])
+            for c in last.index
+            if "metrics/" in c
+        }
+    return metrics
 
 
 def train_model(
@@ -105,11 +119,14 @@ def train_model(
     aug = train_cfg.get("augment", {}) or {}
     experiment = tracking.get("experiment_name", "nuscenes-yolo")
 
+    settings = get_settings()
     use_wandb = (
         wandb_enabled
         if wandb_enabled is not None
         else bool(tracking.get("wandb", {}).get("enabled", False))
     )
+    if use_wandb:
+        use_wandb = _setup_wandb_env(settings)
 
     configure_ultralytics(enable_wandb=use_wandb)
     import mlflow
@@ -120,7 +137,11 @@ def train_model(
     imgsz = int(model_cfg.get("imgsz", 640))
     run_name = _run_name(model_cfg, imgsz, n_epochs)
 
-    settings = get_settings()
+    # Ultralytics uses `project` as BOTH the on-disk output dir and the W&B project name
+    # (slashes sanitized), so use a clean relative name — the run lands in the user's
+    # `nuscenes-data-engine` W&B project and outputs under ./<project>/<run_name>.
+    project = settings.wandb_project if use_wandb else "runs"
+
     tracking_uri = settings.mlflow_tracking_uri or tracking.get("mlflow_tracking_uri")
     _set_up_experiment(mlflow, tracking_uri, experiment)
 
@@ -138,13 +159,13 @@ def train_model(
         **{f"aug_{k}": v for k, v in aug.items()},
     }
 
-    wandb = _init_wandb(run_name, params, experiment) if use_wandb else None
-
-    logger.info("MLflow run '%s' -> %s", run_name, tracking_uri)
+    logger.info("MLflow run '%s' -> %s | W&B: %s", run_name, tracking_uri, use_wandb)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params(params)
 
         model = YOLO(str(model_cfg.get("weights", "yolov8n.pt")))
+        # W&B is logged by Ultralytics' callback (enabled via configure_ultralytics),
+        # so it works in both single-GPU and DDP; provenance (data_version) is in MLflow.
         results = model.train(
             data=str(data_yaml),
             epochs=n_epochs,
@@ -154,7 +175,7 @@ def train_model(
             optimizer=train_cfg.get("optimizer", "auto"),
             seed=train_cfg.get("seed", 0),
             device=device if device is not None else "0",
-            project=str(RUNS_DIR),
+            project=project,
             name=run_name,
             exist_ok=True,
             plots=True,
@@ -162,11 +183,7 @@ def train_model(
         )
 
         save_dir = Path(results.save_dir)
-        metrics = {
-            k.replace("metrics/", "").replace("(B)", ""): float(v)
-            for k, v in results.results_dict.items()
-            if isinstance(v, (int, float))
-        }
+        metrics = _extract_metrics(results, save_dir)
         mlflow.log_metrics(metrics)
 
         best = save_dir / "weights" / "best.pt"
@@ -175,19 +192,13 @@ def train_model(
         # Plots + sample val-prediction images produced by Ultralytics.
         mlflow.log_artifacts(str(save_dir), artifact_path="ultralytics_run")
 
-    wandb_url = None
-    if wandb is not None and wandb.run is not None:
-        wandb.summary.update(metrics)
-        wandb_url = wandb.run.get_url()
-        wandb.finish()
-
     summary = {
         "run_name": run_name,
         "save_dir": str(save_dir),
         "best_weights": str(best),
         "data_version": data_version,
         "metrics": metrics,
-        "wandb_url": wandb_url,
+        "wandb": use_wandb,
     }
     logger.info("Training done: %s | metrics=%s", run_name, metrics)
     return summary

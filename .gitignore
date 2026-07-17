@@ -40,6 +40,8 @@ runs/
 weights/
 .cache/
 /data/processed/yolo/
+# Ultralytics training outputs when W&B is on (dir name == W&B project name)
+/nuscenes-data-engine/
 *.mp4
 *.safetensors
 *.pt

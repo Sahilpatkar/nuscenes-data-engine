@@ -135,6 +135,7 @@ def train(
     ),
 ) -> None:
     """Phase 2: run the YOLO fine-tuning pipeline (prepare -> train -> log to MLflow/W&B)."""
+    from nuscenes_data_engine.config import get_settings
     from nuscenes_data_engine.training.run import run_training
 
     summary = run_training(
@@ -148,8 +149,10 @@ def train(
         force_rebuild=rebuild,
     )
     logger.info("Run '%s' metrics: %s", summary["run_name"], summary["metrics"])
-    if summary.get("wandb_url"):
-        logger.info("W&B: %s", summary["wandb_url"])
+    if summary.get("wandb"):
+        logger.info(
+            "W&B: logged to project '%s' (see run URL above).", get_settings().wandb_project
+        )
 
 
 @app.command()
