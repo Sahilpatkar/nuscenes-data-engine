@@ -123,6 +123,7 @@ def train(
     cameras: list[str] = typer.Option(None, "--camera", help="Restrict to camera(s); repeatable."),
     limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
     epochs: int | None = typer.Option(None, "--epochs", help="Override configured epochs."),
+    batch: int | None = typer.Option(None, "--batch", help="Override batch size."),
     device: str | None = typer.Option(None, "--device", help="Ultralytics device, e.g. 0 or cpu."),
     wandb: bool | None = typer.Option(
         None, "--wandb/--no-wandb", help="Enable/disable Weights & Biases logging."
@@ -136,6 +137,7 @@ def train(
         limit_scenes=limit_scenes,
         cameras=cameras or None,
         epochs=epochs,
+        batch=batch,
         device=device,
         wandb_enabled=wandb,
     )

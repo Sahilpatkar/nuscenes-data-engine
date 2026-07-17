@@ -25,6 +25,7 @@ def run_training(
     limit_scenes: int | None = None,
     cameras: list[str] | None = None,
     epochs: int | None = None,
+    batch: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
 ) -> dict[str, Any]:
@@ -48,6 +49,7 @@ def run_training(
         data_yaml,
         data_version=data_version,
         epochs=epochs,
+        batch=batch,
         device=device,
         wandb_enabled=wandb_enabled,
     )

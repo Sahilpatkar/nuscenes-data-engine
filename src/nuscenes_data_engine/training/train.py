@@ -85,6 +85,7 @@ def train_model(
     *,
     data_version: str,
     epochs: int | None = None,
+    batch: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
 ) -> dict[str, Any]:
@@ -115,6 +116,7 @@ def train_model(
     from ultralytics import YOLO  # imported after config redirect
 
     n_epochs = int(epochs if epochs is not None else train_cfg.get("epochs", 1))
+    n_batch = int(batch if batch is not None else train_cfg.get("batch", 16))
     imgsz = int(model_cfg.get("imgsz", 640))
     run_name = _run_name(model_cfg, imgsz, n_epochs)
 
@@ -126,7 +128,7 @@ def train_model(
         "weights": model_cfg.get("weights"),
         "imgsz": imgsz,
         "epochs": n_epochs,
-        "batch": train_cfg.get("batch"),
+        "batch": n_batch,
         "lr0": train_cfg.get("lr0"),
         "optimizer": train_cfg.get("optimizer", "auto"),
         "seed": train_cfg.get("seed", 0),
@@ -147,7 +149,7 @@ def train_model(
             data=str(data_yaml),
             epochs=n_epochs,
             imgsz=imgsz,
-            batch=train_cfg.get("batch", 16),
+            batch=n_batch,
             lr0=train_cfg.get("lr0", 0.01),
             optimizer=train_cfg.get("optimizer", "auto"),
             seed=train_cfg.get("seed", 0),

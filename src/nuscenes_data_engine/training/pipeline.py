@@ -26,6 +26,7 @@ class PipelineConfig(Config):
     limit_scenes: int | None = None
     cameras: list[str] | None = None
     epochs: int | None = None
+    batch: int | None = None
     device: str | None = None
     wandb_enabled: bool | None = None
 
@@ -77,6 +78,7 @@ def train(
         Path(data_yaml),
         data_version=data_version,
         epochs=config.epochs,
+        batch=config.batch,
         device=config.device,
         wandb_enabled=config.wandb_enabled,
     )
