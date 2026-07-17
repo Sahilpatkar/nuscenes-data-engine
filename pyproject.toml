@@ -112,6 +112,7 @@ module = [
     "uvicorn.*",
     "streamlit.*",
     "pyquaternion.*",
+    "shapely.*",
 ]
 ignore_missing_imports = true
 

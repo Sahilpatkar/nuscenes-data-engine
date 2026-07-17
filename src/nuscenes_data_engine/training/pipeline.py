@@ -27,6 +27,8 @@ class PipelineConfig(Config):
     cameras: list[str] | None = None
     epochs: int | None = None
     batch: int | None = None
+    model: str | None = None
+    imgsz: int | None = None
     device: str | None = None
     wandb_enabled: bool | None = None
     force_rebuild: bool = False
@@ -81,6 +83,8 @@ def train(
         data_version=data_version,
         epochs=config.epochs,
         batch=config.batch,
+        model=config.model,
+        imgsz=config.imgsz,
         device=config.device,
         wandb_enabled=config.wandb_enabled,
     )

@@ -56,10 +56,22 @@ class TestProjection:
     def test_box_behind_camera_is_none(self) -> None:
         assert project_box_to_2d(_box((0.0, 0.0, -10.0)), INTRINSIC, IMAGE_SIZE) is None
 
-    def test_clip_keeps_box_within_bounds(self) -> None:
-        # Box pushed far to the right; clipped extent must stay inside the image.
-        bbox = project_box_to_2d(_box((20.0, 0.0, 10.0)), INTRINSIC, IMAGE_SIZE, clip=True)
-        if bbox is not None:
-            x_min, y_min, x_max, y_max = bbox
-            assert 0.0 <= x_min <= x_max <= 1600.0
-            assert 0.0 <= y_min <= y_max <= 900.0
+    def test_box_straddling_right_edge_is_clipped_to_canvas(self) -> None:
+        # Centre at X=7 pushes the right corners past x=1600; the polygon clip must cap
+        # x_max at the canvas edge (not overshoot, not drop the whole box).
+        bbox = project_box_to_2d(_box((7.0, 0.0, 10.0)), INTRINSIC, IMAGE_SIZE, clip=True)
+        assert bbox is not None
+        x_min, y_min, x_max, y_max = bbox
+        assert x_max == 1600.0  # clipped to the canvas
+        assert 0.0 <= x_min < x_max
+        assert 0.0 <= y_min < y_max <= 900.0
+
+    def test_fully_off_canvas_is_none(self) -> None:
+        # Centre at X=20: every corner projects past the right edge -> no intersection.
+        assert project_box_to_2d(_box((20.0, 0.0, 10.0)), INTRINSIC, IMAGE_SIZE, clip=True) is None
+
+    def test_no_clip_returns_hull_bounds_past_canvas(self) -> None:
+        # Without clipping, the extent can exceed the image bounds.
+        bbox = project_box_to_2d(_box((7.0, 0.0, 10.0)), INTRINSIC, IMAGE_SIZE, clip=False)
+        assert bbox is not None
+        assert bbox[2] > 1600.0  # x_max past the canvas when unclipped

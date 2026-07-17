@@ -12,17 +12,20 @@ model:
     - bicycle
 
 train:
-  epochs: 50
-  batch: 16
+  epochs: 40
+  batch: 16          # per-run default; sweeps override with --batch (sized for 12 GB)
   lr0: 0.01
   optimizer: auto
+  cos_lr: true       # cosine LR decay
   seed: 42
   augment:
     hsv_h: 0.015
     hsv_s: 0.7
-    hsv_v: 0.4
+    hsv_v: 0.5       # a touch more value jitter for low-light robustness
     fliplr: 0.5
     mosaic: 1.0
+    mixup: 0.1
+    copy_paste: 0.1
 
 data:
   processed_dir: ./data/processed

@@ -17,8 +17,8 @@ cameras:
 # 2D projection settings.
 projection:
   visibility_min: 2        # nuScenes visibility token floor (1..4)
-  min_box_area_px: 100     # drop tiny projected boxes
-  clip_to_image: true      # clamp boxes to image bounds
+  min_box_area_px: 20      # drop sub-pixel noise but keep small/distant objects (recall)
+  clip_to_image: true      # intersect projected boxes with the image canvas
 
 output:
   processed_dir: ./data/processed

@@ -26,6 +26,8 @@ def run_training(
     cameras: list[str] | None = None,
     epochs: int | None = None,
     batch: int | None = None,
+    model: str | None = None,
+    imgsz: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
     force_rebuild: bool = False,
@@ -56,6 +58,8 @@ def run_training(
         data_version=data_version,
         epochs=epochs,
         batch=batch,
+        model=model,
+        imgsz=imgsz,
         device=device,
         wandb_enabled=wandb_enabled,
     )

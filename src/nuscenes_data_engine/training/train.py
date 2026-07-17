@@ -39,9 +39,8 @@ def _set_up_experiment(mlflow: Any, tracking_uri: str, experiment_name: str) -> 
     mlflow.set_experiment(experiment_name)
 
 
-def _run_name(model_cfg: dict[str, Any], imgsz: int, epochs: int) -> str:
-    stem = Path(str(model_cfg.get("weights", "yolo"))).stem
-    return f"{stem}_imgsz{imgsz}_e{epochs}"
+def _run_name(weights: str, imgsz: int, epochs: int) -> str:
+    return f"{Path(weights).stem}_imgsz{imgsz}_e{epochs}"
 
 
 def _setup_wandb_env(settings: Any) -> bool:
@@ -105,6 +104,8 @@ def train_model(
     data_version: str,
     epochs: int | None = None,
     batch: int | None = None,
+    model: str | None = None,
+    imgsz: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
 ) -> dict[str, Any]:
@@ -114,7 +115,10 @@ def train_model(
         config: Parsed ``configs/train.yaml`` contents.
         data_yaml: Path to the YOLO dataset descriptor (from :func:`..dataset.build_yolo_dataset`).
         data_version: Content hash of the processed dataset (provenance).
-        epochs: Override ``config['train']['epochs']`` (e.g. quick runs).
+        epochs: Override ``config['train']['epochs']``.
+        batch: Override ``config['train']['batch']``.
+        model: Override ``config['model']['weights']`` (e.g. ``"yolov8s.pt"``) — sweeps.
+        imgsz: Override ``config['model']['imgsz']`` (e.g. ``960``) — sweeps.
         device: Ultralytics device string (e.g. ``"0"``, ``"0,1"``, ``"cpu"``).
         wandb_enabled: Override ``config['tracking']['wandb']['enabled']``.
     """
@@ -139,8 +143,9 @@ def train_model(
 
     n_epochs = int(epochs if epochs is not None else train_cfg.get("epochs", 1))
     n_batch = int(batch if batch is not None else train_cfg.get("batch", 16))
-    imgsz = int(model_cfg.get("imgsz", 640))
-    run_name = _run_name(model_cfg, imgsz, n_epochs)
+    weights = model or str(model_cfg.get("weights", "yolov8n.pt"))
+    n_imgsz = int(imgsz if imgsz is not None else model_cfg.get("imgsz", 640))
+    run_name = _run_name(weights, n_imgsz, n_epochs)
 
     # Ultralytics uses `project` as BOTH the on-disk output dir and the W&B project name
     # (slashes sanitized), so use a clean relative name — the run lands in the user's
@@ -150,13 +155,15 @@ def train_model(
     tracking_uri = settings.mlflow_tracking_uri or tracking.get("mlflow_tracking_uri")
     _set_up_experiment(mlflow, tracking_uri, experiment)
 
+    cos_lr = bool(train_cfg.get("cos_lr", False))
     params = {
-        "weights": model_cfg.get("weights"),
-        "imgsz": imgsz,
+        "weights": weights,
+        "imgsz": n_imgsz,
         "epochs": n_epochs,
         "batch": n_batch,
         "lr0": train_cfg.get("lr0"),
         "optimizer": train_cfg.get("optimizer", "auto"),
+        "cos_lr": cos_lr,
         "seed": train_cfg.get("seed", 0),
         "classes": ",".join(model_cfg.get("classes", [])),
         "data_version": data_version,
@@ -168,28 +175,30 @@ def train_model(
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params(params)
 
-        model = YOLO(str(model_cfg.get("weights", "yolov8n.pt")))
+        yolo = YOLO(weights)
         # W&B is logged by Ultralytics' callback (enabled via configure_ultralytics),
         # so it works in both single-GPU and DDP; provenance (data_version) is in MLflow.
-        results = model.train(
+        aug_keys = ("hsv_h", "hsv_s", "hsv_v", "fliplr", "mosaic", "mixup", "copy_paste")
+        results = yolo.train(
             data=str(data_yaml),
             epochs=n_epochs,
-            imgsz=imgsz,
+            imgsz=n_imgsz,
             batch=n_batch,
             lr0=train_cfg.get("lr0", 0.01),
             optimizer=train_cfg.get("optimizer", "auto"),
+            cos_lr=cos_lr,
             seed=train_cfg.get("seed", 0),
             device=device if device is not None else "0",
             project=project,
             name=run_name,
             exist_ok=True,
             plots=True,
-            **{k: aug[k] for k in ("hsv_h", "hsv_s", "hsv_v", "fliplr", "mosaic") if k in aug},
+            **{k: aug[k] for k in aug_keys if k in aug},
         )
 
-        # model.train() returns a results object (single-GPU) or a dict (DDP); the trainer
+        # yolo.train() returns a results object (single-GPU) or a dict (DDP); the trainer
         # always carries the resolved output dir.
-        save_dir = Path(model.trainer.save_dir)
+        save_dir = Path(yolo.trainer.save_dir)
         metrics = _extract_metrics(results, save_dir)
         mlflow.log_metrics(metrics)
 
