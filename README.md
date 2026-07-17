@@ -131,7 +131,7 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 |---|---|---|
 | 1 ✅ | Data engineering | `make ingest` → validated Parquet dataset (204,894 imgs / 1M boxes) |
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
-| 3 | Evaluation & registry | Sliced metrics + promotion policy |
+| 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
 | 4 | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 | Monitoring & CI/CD | Evidently drift reports, green CI |
 

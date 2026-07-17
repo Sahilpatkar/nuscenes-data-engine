@@ -156,9 +156,36 @@ def train(
 
 
 @app.command()
-def evaluate() -> None:
-    """Phase 3: compute mAP and condition-sliced metrics."""
-    _todo("evaluate", 3)
+def evaluate(
+    config: Path = typer.Option(Path("configs/eval.yaml"), "--config", "-c"),
+    train_config: Path = typer.Option(Path("configs/train.yaml"), "--train-config"),
+    weights: Path | None = typer.Option(None, "--weights", help="best.pt (default: latest run)."),
+    device: str = typer.Option("0", "--device", help="Ultralytics device."),
+    register: bool = typer.Option(
+        False, "--register", help="Register + promote (staging->production) in MLflow."
+    ),
+) -> None:
+    """Phase 3: compute overall + condition-sliced mAP and (optionally) promote the model."""
+    from nuscenes_data_engine.evaluation.evaluate import run_evaluation
+
+    report = run_evaluation(config, train_config, weights=weights, device=device, register=register)
+    o = report["overall"]
+    logger.info(
+        "== Overall == mAP50=%.3f mAP50-95=%.3f P=%.3f R=%.3f",
+        o["mAP50"],
+        o["mAP50-95"],
+        o["precision"],
+        o["recall"],
+    )
+    for name, m in report["slices"].items():
+        logger.info(
+            "== %-18s == mAP50=%.3f mAP50-95=%.3f (%d imgs)",
+            name,
+            m["mAP50"],
+            m["mAP50-95"],
+            m["n_images"],
+        )
+    logger.info("Promotion gate %s", "PASSED" if report["passed"] else "NOT MET")
 
 
 @app.command()
