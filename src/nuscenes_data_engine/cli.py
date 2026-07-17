@@ -98,6 +98,7 @@ def prepare_dataset(
     config: Path = typer.Option(Path("configs/train.yaml"), "--config", "-c"),
     cameras: list[str] = typer.Option(None, "--camera", help="Restrict to camera(s); repeatable."),
     limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Force rebuild even if up to date."),
 ) -> None:
     """Phase 2: build the YOLO dataset (image symlinks + labels + data.yaml)."""
     from nuscenes_data_engine.config import get_settings, load_yaml
@@ -113,6 +114,7 @@ def prepare_dataset(
         yolo_dir,
         cameras=cameras or None,
         limit_scenes=limit_scenes,
+        force=rebuild,
     )
     logger.info("Prepared: %s", stats)
 
@@ -128,6 +130,9 @@ def train(
     wandb: bool | None = typer.Option(
         None, "--wandb/--no-wandb", help="Enable/disable Weights & Biases logging."
     ),
+    rebuild: bool = typer.Option(
+        False, "--rebuild", help="Force YOLO-dataset rebuild even if up to date."
+    ),
 ) -> None:
     """Phase 2: run the YOLO fine-tuning pipeline (prepare -> train -> log to MLflow/W&B)."""
     from nuscenes_data_engine.training.run import run_training
@@ -140,6 +145,7 @@ def train(
         batch=batch,
         device=device,
         wandb_enabled=wandb,
+        force_rebuild=rebuild,
     )
     logger.info("Run '%s' metrics: %s", summary["run_name"], summary["metrics"])
     if summary.get("wandb_url"):

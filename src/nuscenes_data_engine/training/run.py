@@ -28,6 +28,7 @@ def run_training(
     batch: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
+    force_rebuild: bool = False,
 ) -> dict[str, Any]:
     """Run prepare -> train end to end and return the run summary."""
     settings = get_settings()
@@ -42,7 +43,12 @@ def run_training(
     logger.info("Data version: %s", data_version)
 
     data_yaml, stats = build_yolo_dataset(
-        processed_dir, dataroot, yolo_dir, cameras=cameras, limit_scenes=limit_scenes
+        processed_dir,
+        dataroot,
+        yolo_dir,
+        cameras=cameras,
+        limit_scenes=limit_scenes,
+        force=force_rebuild,
     )
     summary = train_model(
         cfg,

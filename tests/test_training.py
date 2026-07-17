@@ -101,6 +101,40 @@ def test_build_yolo_dataset_splits_and_labels(tmp_path: Path) -> None:
     assert meta["names"] == {0: "car", 1: "truck", 2: "bus", 3: "pedestrian", 4: "bicycle"}
 
 
+def test_rebuild_skipped_when_unchanged(tmp_path: Path) -> None:
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    out = tmp_path / "yolo"
+    _write_processed(processed, dataroot)
+
+    build_yolo_dataset(processed, dataroot, out, cameras=["CAM_FRONT"])
+    label = out / "labels" / "train" / f"{TRAIN_SCENE}.txt"
+    first_mtime = label.stat().st_mtime_ns
+    assert (out / ".build_manifest.json").exists()
+
+    # Second build with the same inputs must skip (label file left untouched).
+    _, stats = build_yolo_dataset(processed, dataroot, out, cameras=["CAM_FRONT"])
+    assert label.stat().st_mtime_ns == first_mtime
+    assert stats["train_images"] == 1 and stats["val_images"] == 1
+
+
+def test_rebuild_triggered_when_data_changes(tmp_path: Path) -> None:
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    out = tmp_path / "yolo"
+    _write_processed(processed, dataroot)
+    build_yolo_dataset(processed, dataroot, out, cameras=["CAM_FRONT"])
+    label = out / "labels" / "train" / f"{TRAIN_SCENE}.txt"
+    first_mtime = label.stat().st_mtime_ns
+
+    # Change the underlying data -> new data_version -> rebuild (label rewritten).
+    anns = pd.read_parquet(processed / "annotations.parquet")
+    anns.loc[0, "x_max"] = 320.0
+    anns.to_parquet(processed / "annotations.parquet")
+    build_yolo_dataset(processed, dataroot, out, cameras=["CAM_FRONT"])
+    assert label.stat().st_mtime_ns != first_mtime
+
+
 def test_compute_data_version_is_stable_and_content_sensitive(tmp_path: Path) -> None:
     processed = tmp_path / "processed"
     dataroot = tmp_path / "nuscenes"

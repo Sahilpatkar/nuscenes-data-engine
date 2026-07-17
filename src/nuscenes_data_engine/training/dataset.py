@@ -15,6 +15,7 @@ with no target boxes are kept as backgrounds (empty label file).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,10 @@ logger = logging.getLogger("nuscenes_data_engine")
 IMAGE_WIDTH = 1600
 IMAGE_HEIGHT = 900
 
+# Bump when the build logic changes in a way that invalidates existing YOLO datasets.
+BUILDER_VERSION = 1
+MANIFEST_NAME = ".build_manifest.json"
+
 
 def compute_data_version(processed_dir: Path) -> str:
     """Content hash of the processed Parquet tables — the data-version fingerprint."""
@@ -38,6 +43,29 @@ def compute_data_version(processed_dir: Path) -> str:
         h.update(name.encode())
         h.update((processed_dir / name).read_bytes())
     return h.hexdigest()[:16]
+
+
+def _build_key(
+    processed_dir: Path, cameras: list[str] | None, limit_scenes: int | None
+) -> dict[str, Any]:
+    """Identity of a YOLO build — everything that determines its contents."""
+    return {
+        "builder_version": BUILDER_VERSION,
+        "data_version": compute_data_version(processed_dir),
+        "cameras": sorted(cameras) if cameras else None,
+        "limit_scenes": limit_scenes,
+    }
+
+
+def _read_manifest(out_dir: Path) -> dict[str, Any] | None:
+    path = out_dir / MANIFEST_NAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def _symlink(target: Path, link: Path) -> None:
@@ -54,8 +82,14 @@ def build_yolo_dataset(
     *,
     cameras: list[str] | None = None,
     limit_scenes: int | None = None,
+    force: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Build a YOLO dataset from the processed Parquet; return (data.yaml path, stats).
+
+    Idempotent: if a prior build with the same data-version + camera/scene selection is
+    already present (per the on-disk manifest), the ~400k-file rebuild is skipped and the
+    existing dataset is reused — which also keeps Ultralytics' label cache valid (no
+    rescan). Pass ``force=True`` to rebuild regardless.
 
     Args:
         processed_dir: Directory holding samples/annotations Parquet.
@@ -63,7 +97,22 @@ def build_yolo_dataset(
         out_dir: Output dataset directory.
         cameras: Restrict to these camera channels (default: all present).
         limit_scenes: Use only the first N scenes (by name) — fast dev datasets.
+        force: Rebuild even if an up-to-date dataset already exists.
     """
+    key = _build_key(processed_dir, cameras, limit_scenes)
+    data_yaml = out_dir / "data.yaml"
+    manifest = _read_manifest(out_dir)
+    if not force and data_yaml.exists() and manifest is not None and manifest.get("key") == key:
+        stats = manifest.get("stats", {})
+        logger.info(
+            "YOLO dataset up to date (data_version %s) — reusing %s (%s train + %s val images).",
+            key["data_version"],
+            out_dir,
+            stats.get("train_images", "?"),
+            stats.get("val_images", "?"),
+        )
+        return data_yaml, stats
+
     samples = pd.read_parquet(processed_dir / "samples.parquet")
     annotations = pd.read_parquet(processed_dir / "annotations.parquet")
 
@@ -144,6 +193,8 @@ def build_yolo_dataset(
         "boxes": n_boxes,
         "classes": list(DETECTION_CLASSES),
     }
+    # Record the manifest so an identical future build can be skipped.
+    (out_dir / MANIFEST_NAME).write_text(json.dumps({"key": key, "stats": stats}, indent=2))
     logger.info(
         "YOLO dataset: %d train + %d val images, %d boxes -> %s",
         counts["train"],

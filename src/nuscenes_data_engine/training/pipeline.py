@@ -29,6 +29,7 @@ class PipelineConfig(Config):
     batch: int | None = None
     device: str | None = None
     wandb_enabled: bool | None = None
+    force_rebuild: bool = False
 
 
 def _processed_dir(config_path: str) -> Path:
@@ -59,6 +60,7 @@ def prepare_dataset(context: OpExecutionContext, config: PipelineConfig) -> str:
         yolo_dir,
         cameras=config.cameras,
         limit_scenes=config.limit_scenes,
+        force=config.force_rebuild,
     )
     context.log.info("dataset stats %s", stats)
     return str(data_yaml)
