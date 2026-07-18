@@ -34,6 +34,7 @@ def run_evaluation(
     *,
     weights: Path | None = None,
     device: str = "0",
+    imgsz: int | None = None,
     register: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a model overall and per condition slice; log to MLflow; optionally register.
@@ -44,7 +45,8 @@ def run_evaluation(
     eval_cfg = load_yaml(eval_config_path)
     train_cfg = load_yaml(train_config_path)
     data_cfg = train_cfg.get("data", {})
-    imgsz = int(train_cfg.get("model", {}).get("imgsz", 640))
+    # Evaluate at the model's training resolution; override for a specific checkpoint.
+    imgsz = int(imgsz if imgsz is not None else train_cfg.get("model", {}).get("imgsz", 640))
 
     processed_dir = Path(data_cfg.get("processed_dir", settings.processed_dir))
     yolo_dir = Path(data_cfg.get("yolo_dir", processed_dir / "yolo"))

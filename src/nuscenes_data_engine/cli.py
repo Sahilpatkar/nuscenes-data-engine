@@ -167,6 +167,7 @@ def evaluate(
     train_config: Path = typer.Option(Path("configs/train.yaml"), "--train-config"),
     weights: Path | None = typer.Option(None, "--weights", help="best.pt (default: latest run)."),
     device: str = typer.Option("0", "--device", help="Ultralytics device."),
+    imgsz: int | None = typer.Option(None, "--imgsz", help="Eval image size (default: train.yaml)."),
     register: bool = typer.Option(
         False, "--register", help="Register + promote (staging->production) in MLflow."
     ),
@@ -174,7 +175,9 @@ def evaluate(
     """Phase 3: compute overall + condition-sliced mAP and (optionally) promote the model."""
     from nuscenes_data_engine.evaluation.evaluate import run_evaluation
 
-    report = run_evaluation(config, train_config, weights=weights, device=device, register=register)
+    report = run_evaluation(
+        config, train_config, weights=weights, device=device, imgsz=imgsz, register=register
+    )
     o = report["overall"]
     logger.info(
         "== Overall == mAP50=%.3f mAP50-95=%.3f P=%.3f R=%.3f",
