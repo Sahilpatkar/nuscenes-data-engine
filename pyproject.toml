@@ -46,6 +46,7 @@ serve = [
     "uvicorn[standard]>=0.30",
     "streamlit>=1.36",
     "python-multipart>=0.0.9",
+    "httpx>=0.27",  # TestClient transport + the serving benchmark client
 ]
 dev = [
     "pytest>=8.0",
@@ -58,6 +59,12 @@ dev = [
 
 [project.scripts]
 nuscenes-data-engine = "nuscenes_data_engine.cli:app"
+
+[tool.uv]
+# nuscenes-devkit pins matplotlib<3.6, which ships no Python 3.11 wheels (source build
+# fails on macOS arm64) and would hold every extra to 2022-era matplotlib. The pin
+# predates py3.11 and the devkit runs fine on modern matplotlib, so override it.
+override-dependencies = ["matplotlib>=3.8"]
 
 [build-system]
 requires = ["hatchling"]
