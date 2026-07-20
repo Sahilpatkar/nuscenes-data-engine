@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Detection(BaseModel):
@@ -18,12 +18,21 @@ class Detection(BaseModel):
 class PredictResponse(BaseModel):
     """Response body for the ``/predict`` endpoint."""
 
+    # `model_version` collides with pydantic's protected `model_` namespace.
+    model_config = ConfigDict(protected_namespaces=())
+
     detections: list[Detection]
     model_version: str = Field(description="Registry version of the serving model.")
+    image_width: int = Field(description="Decoded input image width in pixels.")
+    image_height: int = Field(description="Decoded input image height in pixels.")
+    n_detections: int = Field(description="Number of detections returned.")
 
 
 class HealthResponse(BaseModel):
     """Response body for the ``/health`` endpoint."""
 
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str = "ok"
     model_loaded: bool = False
+    model_version: str | None = None

@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     wandb_project: str = Field(default="nuscenes-data-engine")
     wandb_mode: str = Field(default="online")
 
+    # --- Serving (Phase 4) ---
+    # The API loads `models:/<serving_model_name>@<serving_model_alias>` from the MLflow
+    # registry. SERVING_WEIGHTS (a local .pt path, kept as str: an empty env var must mean
+    # "unset", and Path("") coerces to ".") bypasses the registry entirely — the dev/test
+    # path on machines without mlruns/.
+    serving_model_name: str = Field(default="nuscenes-yolo-detector")
+    serving_model_alias: str = Field(default="production")
+    serving_imgsz: int = Field(default=960)
+    serving_conf: float = Field(default=0.25)
+    serving_device: str = Field(default="cpu")
+    serving_weights: str = Field(default="")
+
 
 def get_settings() -> Settings:
     """Return a freshly-loaded :class:`Settings` instance."""

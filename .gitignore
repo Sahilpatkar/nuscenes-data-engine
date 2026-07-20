@@ -49,3 +49,8 @@ weights/
 
 # Great Expectations local uncommitted bits
 gx/uncommitted/
+
+# Demo sample frames (nuScenes imagery is non-commercial-licensed — never committed;
+# populate per machine, see README "Serving").
+app/samples/*
+!app/samples/.gitkeep

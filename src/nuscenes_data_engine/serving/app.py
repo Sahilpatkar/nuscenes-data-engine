@@ -1,26 +1,117 @@
 """FastAPI application serving the current production detection model.
 
 Endpoints:
-    GET  /health   liveness + whether a model is loaded.
-    POST /predict  accept an image, return detections (JSON, optional annotated image).
+    GET  /health             liveness + which model version is loaded.
+    POST /predict            accept an image, return detections as JSON.
+    POST /predict/annotated  accept an image, return it annotated as PNG.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 
 from nuscenes_data_engine import __version__
-from nuscenes_data_engine.serving.schemas import HealthResponse
+from nuscenes_data_engine.config import get_settings
+from nuscenes_data_engine.serving.model import load_production_model
+from nuscenes_data_engine.serving.schemas import Detection, HealthResponse, PredictResponse
 
-app = FastAPI(title="nuScenes Data Engine — Detection API", version=__version__)
+logger = logging.getLogger("nuscenes_data_engine")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Load the model once at startup; serve degraded (503s) if the load fails."""
+    settings = get_settings()
+    app.state.settings = settings
+    try:
+        app.state.model, app.state.model_version = load_production_model(settings)
+        logger.info(
+            "Serving model version %s (imgsz=%d, conf=%.2f, device=%s)",
+            app.state.model_version,
+            settings.serving_imgsz,
+            settings.serving_conf,
+            settings.serving_device,
+        )
+    except Exception:
+        logger.exception("Model load failed; /health reports degraded, /predict returns 503")
+        app.state.model, app.state.model_version = None, None
+    yield
+
+
+app = FastAPI(title="nuScenes Data Engine — Detection API", version=__version__, lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+def health(request: Request) -> HealthResponse:
     """Liveness probe."""
-    # TODO(Phase 4): report model_loaded based on registry state.
-    return HealthResponse(status="ok", model_loaded=False)
+    return HealthResponse(
+        status="ok",
+        model_loaded=request.app.state.model is not None,
+        model_version=request.app.state.model_version,
+    )
 
 
-# TODO(Phase 4): add POST /predict that loads the `production` model from the MLflow
-# registry, runs inference on the uploaded image, and returns a PredictResponse.
+def _infer(request: Request, data: bytes) -> tuple[Any, np.ndarray[Any, Any]]:
+    """Decode the uploaded bytes and run the model; return (result, image)."""
+    model = request.app.state.model
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model is not loaded.")
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Upload is not a decodable image.")
+    settings = request.app.state.settings
+    results = model.predict(
+        img,
+        imgsz=settings.serving_imgsz,
+        conf=settings.serving_conf,
+        device=settings.serving_device,
+        verbose=False,
+    )
+    return results[0], img
+
+
+@app.post("/predict", response_model=PredictResponse)
+async def predict(request: Request, file: UploadFile = File(...)) -> PredictResponse:
+    """Run detection on an uploaded image and return the boxes as JSON."""
+    start = time.perf_counter()
+    result, img = _infer(request, await file.read())
+    names = request.app.state.model.names
+    detections = [
+        Detection(
+            label=names[int(box.cls)],
+            confidence=float(box.conf),
+            bbox=tuple(box.xyxy[0].tolist()),
+        )
+        for box in result.boxes
+    ]
+    logger.info(
+        "predict %s: %d detections in %.0f ms",
+        file.filename,
+        len(detections),
+        (time.perf_counter() - start) * 1000,
+    )
+    return PredictResponse(
+        detections=detections,
+        model_version=request.app.state.model_version,
+        image_width=img.shape[1],
+        image_height=img.shape[0],
+        n_detections=len(detections),
+    )
+
+
+@app.post("/predict/annotated")
+async def predict_annotated(request: Request, file: UploadFile = File(...)) -> Response:
+    """Run detection and return the input image with boxes drawn, as PNG."""
+    result, _ = _infer(request, await file.read())
+    ok, buf = cv2.imencode(".png", result.plot())
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode annotated image.")
+    return Response(content=buf.tobytes(), media_type="image/png")

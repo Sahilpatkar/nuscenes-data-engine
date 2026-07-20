@@ -4,10 +4,8 @@
 # only (ingest/train/evaluate) and writes plain files that you rsync here; this stack
 # (MinIO + MLflow, later the serving API + Streamlit UI) is the ops layer around them.
 #
-# STUB: services are defined but not yet fully wired (Phase 1 = MinIO/DVC,
-# Phase 2 = MLflow, Phase 4 = the serving API + Streamlit UI).
-#
 # Bring up the data-infra layer:  docker compose up -d minio minio-setup mlflow
+# Bring up serving (Phase 4):     docker compose up -d api streamlit
 
 services:
   # S3-compatible object store — DVC remote + MLflow artifact store.
@@ -60,7 +58,36 @@ services:
     depends_on:
       - minio
 
-  # TODO(Phase 4): FastAPI serving container + Streamlit demo UI.
+  # [infra machine] Phase 4: FastAPI serving the production model from the synced
+  # mlruns/ registry (or a raw checkpoint via SERVING_WEIGHTS).
+  api:
+    build:
+      context: .
+      dockerfile: docker/serving.Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-sqlite:///mlruns/mlflow.db}
+      SERVING_DEVICE: ${SERVING_DEVICE:-cpu}
+      SERVING_WEIGHTS: ${SERVING_WEIGHTS:-}
+    volumes:
+      - ./mlruns:/app/mlruns  # rw: sqlite needs journal writes even for reads
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+
+  # [infra machine] Phase 4: demo UI — an HTTP client of the api service.
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/serving.Dockerfile
+    command:
+      ["streamlit", "run", "app/streamlit_app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
 
 volumes:
   minio-data:

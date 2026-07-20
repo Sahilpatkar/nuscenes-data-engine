@@ -167,7 +167,9 @@ def evaluate(
     train_config: Path = typer.Option(Path("configs/train.yaml"), "--train-config"),
     weights: Path | None = typer.Option(None, "--weights", help="best.pt (default: latest run)."),
     device: str = typer.Option("0", "--device", help="Ultralytics device."),
-    imgsz: int | None = typer.Option(None, "--imgsz", help="Eval image size (default: train.yaml)."),
+    imgsz: int | None = typer.Option(
+        None, "--imgsz", help="Eval image size (default: train.yaml)."
+    ),
     register: bool = typer.Option(
         False, "--register", help="Register + promote (staging->production) in MLflow."
     ),
@@ -198,9 +200,15 @@ def evaluate(
 
 
 @app.command()
-def serve() -> None:
+def serve(
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address."),
+    port: int = typer.Option(8000, "--port", help="Bind port."),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev only)."),
+) -> None:
     """Phase 4: launch the FastAPI serving app."""
-    _todo("serve", 4)
+    import uvicorn
+
+    uvicorn.run("nuscenes_data_engine.serving.app:app", host=host, port=port, reload=reload)
 
 
 @app.command()

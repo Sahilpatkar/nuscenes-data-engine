@@ -1,0 +1,133 @@
+"""Tests for the Phase 4 serving API.
+
+Runs fully offline against a local yolov8n.pt loaded through the SERVING_WEIGHTS
+fallback (downloaded once into weights/ when reachable, skipped otherwise). CI installs
+only the dev extra, so the whole module skips there via importorskip.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("fastapi")  # serve extra
+pytest.importorskip("ultralytics")  # train extra
+
+import cv2
+import numpy as np
+from fastapi.testclient import TestClient
+
+from nuscenes_data_engine.serving import model as serving_model
+from nuscenes_data_engine.serving.app import app
+from nuscenes_data_engine.serving.model import _localize_source_uri
+from nuscenes_data_engine.serving.schemas import PredictResponse
+from nuscenes_data_engine.training.runtime import WEIGHTS_DIR, configure_ultralytics
+
+
+@pytest.fixture(scope="session")
+def yolov8n_weights() -> Path:
+    """A tiny stock checkpoint in weights/; downloaded once, else the tests skip."""
+    weights = WEIGHTS_DIR / "yolov8n.pt"
+    if not weights.is_file():
+        configure_ultralytics()
+        from ultralytics.utils.downloads import attempt_download_asset
+
+        with contextlib.suppress(Exception):
+            attempt_download_asset(str(weights))
+    if not weights.is_file():
+        pytest.skip("yolov8n.pt unavailable (offline)")
+    return weights
+
+
+@pytest.fixture()
+def client(yolov8n_weights: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """API client backed by yolov8n via SERVING_WEIGHTS (env beats .env)."""
+    monkeypatch.setenv("SERVING_WEIGHTS", str(yolov8n_weights))
+    serving_model.reset_model_cache()
+    with TestClient(app) as test_client:  # context manager: runs the lifespan
+        yield test_client
+    serving_model.reset_model_cache()
+
+
+@pytest.fixture()
+def degraded_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """API client whose model load failed at startup."""
+
+    def boom(settings: object = None) -> tuple[object, str]:
+        raise RuntimeError("model load failed")
+
+    monkeypatch.setattr("nuscenes_data_engine.serving.app.load_production_model", boom)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def _jpeg_bytes(width: int = 320, height: int = 240) -> bytes:
+    ok, buf = cv2.imencode(".jpg", np.zeros((height, width, 3), np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+class TestHealth:
+    def test_reports_loaded_model(self, client: TestClient) -> None:
+        body = client.get("/health").json()
+        assert body["status"] == "ok"
+        assert body["model_loaded"] is True
+        assert body["model_version"].startswith("local:")
+
+
+class TestPredict:
+    def test_synthetic_image(self, client: TestClient) -> None:
+        resp = client.post("/predict", files={"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")})
+        assert resp.status_code == 200
+        body = PredictResponse.model_validate(resp.json())
+        assert body.image_width == 320
+        assert body.image_height == 240
+        assert body.n_detections == len(body.detections)
+        assert body.model_version.startswith("local:")
+
+    def test_undecodable_upload(self, client: TestClient) -> None:
+        resp = client.post("/predict", files={"file": ("junk.jpg", b"not an image", "image/jpeg")})
+        assert resp.status_code == 400
+
+
+class TestPredictAnnotated:
+    def test_returns_png(self, client: TestClient) -> None:
+        resp = client.post(
+            "/predict/annotated", files={"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+        assert resp.content.startswith(b"\x89PNG")
+
+
+class TestDegraded:
+    def test_health_and_predict_without_model(self, degraded_client: TestClient) -> None:
+        body = degraded_client.get("/health").json()
+        assert body["model_loaded"] is False
+        assert body["model_version"] is None
+        resp = degraded_client.post(
+            "/predict", files={"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")}
+        )
+        assert resp.status_code == 503
+
+
+class TestLocalizeSourceUri:
+    def test_foreign_mlruns_uri_rebased(self, tmp_path: Path) -> None:
+        source = "file:///home/mgaur/sahil/nuscenes-data-engine/mlruns/artifacts/1/abc/weights"
+        localized = _localize_source_uri(source, tmp_path / "mlruns")
+        assert localized == (tmp_path / "mlruns" / "artifacts" / "1" / "abc" / "weights").as_uri()
+
+    def test_existing_local_path_untouched(self, tmp_path: Path) -> None:
+        source = tmp_path.as_uri()
+        assert _localize_source_uri(source, tmp_path / "mlruns") == source
+
+    def test_non_file_uri_untouched(self, tmp_path: Path) -> None:
+        source = "s3://bucket/mlflow/artifacts/weights"
+        assert _localize_source_uri(source, tmp_path / "mlruns") == source
+
+    def test_foreign_uri_without_mlruns_untouched(self, tmp_path: Path) -> None:
+        source = "file:///nonexistent/elsewhere/weights"
+        assert _localize_source_uri(source, tmp_path / "mlruns") == source

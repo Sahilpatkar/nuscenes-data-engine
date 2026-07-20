@@ -12,8 +12,10 @@ API and monitored for drift — all tied together with CI/CD.
 
 ## Status
 
-🚧 **Scaffolded.** Directory structure, tooling, and stub modules are in place; each
-pipeline stage is a `TODO` filled in during its build phase (below).
+**Phases 1–4 built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
+tracking, condition-sliced evaluation with gated registry promotion, and the promoted
+model (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind
+a FastAPI + Streamlit demo. Phase 5 (monitoring) remains a stub.
 
 ## Toolchain
 
@@ -125,6 +127,42 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 - Orchestrated variant (Dagster):
   `uv run dagster dev -m nuscenes_data_engine.training.pipeline`.
 
+## Serving (Phase 4)
+
+The promoted model is served by a FastAPI app; a Streamlit demo calls it over HTTP
+(the demo never loads the model itself — the same topology `docker compose up` runs).
+
+```bash
+uv sync --extra serve --extra train   # torch+ultralytics are needed for inference
+
+# Run the API (loads models:/nuscenes-yolo-detector@production from mlruns/):
+make serve                            # = uv run nuscenes-data-engine serve [--port 8000]
+
+# No mlruns/ on this machine? Serve any local checkpoint instead:
+SERVING_WEIGHTS=weights/yolov8n.pt uv run nuscenes-data-engine serve
+```
+
+```bash
+curl -s localhost:8000/health
+# {"status":"ok","model_loaded":true,"model_version":"2"}
+curl -s -F file=@app/samples/day.jpg localhost:8000/predict          # detections JSON
+curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.png
+```
+
+- Knobs via `.env` (see [.env.example](.env.example)): `SERVING_IMGSZ` (960),
+  `SERVING_CONF` (0.25), `SERVING_DEVICE` (`cpu`), `SERVING_WEIGHTS` (registry bypass).
+- **Demo UI:** `uv run streamlit run app/streamlit_app.py` (set `API_URL` if the API
+  isn't on `localhost:8000`). Upload an image or pick a bundled sample.
+- **Samples:** `app/samples/` is gitignored (nuScenes imagery is non-commercially
+  licensed) — populate it per machine, e.g. on the GPU server copy a few
+  `samples/CAM_FRONT/*.jpg` frames (day/night/rain) from the dataset.
+- **Docker (infra machine):** `docker compose up -d api streamlit` builds
+  [docker/serving.Dockerfile](docker/serving.Dockerfile) and serves the API on :8000 and
+  the demo on :8501, with `./mlruns` mounted for registry access.
+- **Latency:** `uv run python -m nuscenes_data_engine.serving.benchmark
+  --image app/samples/day.jpg -n 30` — yolov8n@960 on an M-series MacBook CPU:
+  p50 30 ms / p95 32 ms (production yolov8m@960 on the infra machine: TBD).
+
 ## Build roadmap
 
 | Phase | Focus | Deliverable |
@@ -132,7 +170,7 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 | 1 ✅ | Data engineering | `make ingest` → validated Parquet dataset (204,894 imgs / 1M boxes) |
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
-| 4 | Serving | FastAPI + Streamlit demo via `docker compose up` |
+| 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 | Monitoring & CI/CD | Evidently drift reports, green CI |
 
 ## License

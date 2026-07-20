@@ -1,0 +1,18 @@
+# Keep the serving build context small: generated data, stores, and caches stay out of
+# the image — mlruns/ is mounted as a volume at runtime instead.
+.git
+.venv
+.cache
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+data/
+mlruns/
+mlartifacts/
+runs/
+weights/
+wandb/
+app/samples/
+gx/uncommitted/
+htmlcov/
