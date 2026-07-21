@@ -99,6 +99,13 @@ mypy_path = "src"
 module = ["nuscenes_data_engine.serving.app"]
 disallow_untyped_decorators = false
 
+# Same story for Dagster's @op/@job decorators and Config base class when the `train`
+# extra is absent (e.g. CI, which installs dev+data only).
+[[tool.mypy.overrides]]
+module = ["nuscenes_data_engine.training.pipeline"]
+disallow_untyped_decorators = false
+disallow_subclassing_any = false
+
 # These ship py.typed but don't cleanly export the symbols we use; skip following into
 # them so they resolve to Any rather than erroring on attr-defined.
 [[tool.mypy.overrides]]
@@ -120,6 +127,8 @@ module = [
     "streamlit.*",
     "pyquaternion.*",
     "shapely.*",
+    "wandb.*",
+    "httpx.*",
 ]
 ignore_missing_imports = true
 
