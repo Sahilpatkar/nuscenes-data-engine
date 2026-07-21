@@ -161,7 +161,7 @@ curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.p
   the demo on :8501, with `./mlruns` mounted for registry access.
 - **Latency:** `uv run python -m nuscenes_data_engine.serving.benchmark
   --image app/samples/day.jpg -n 30` — yolov8n@960 on an M-series MacBook CPU:
-  p50 30 ms / p95 32 ms (production yolov8m@960 on the infra machine: TBD).
+  p50 30 ms / p95 32 ms; the production yolov8m@960: p50 93 ms / p95 107 ms.
 
 ## Build roadmap
 
