@@ -120,6 +120,7 @@ src/nuscenes_data_engine/
   evaluation/               mAP + condition-sliced metrics
   serving/                  FastAPI app
   monitoring/               Evidently drift reports
+  data_engine/              SigLIP embeddings, LanceDB store, semantic search
 app/                        Streamlit demo UI
 tests/                      pytest suite
 docs/                       DATA.md, EVALUATION.md
@@ -209,6 +210,28 @@ The API captures `{brightness, dims, n_detections, latency}` per request into a
 gitignored JSONL (`SERVING_CAPTURE_PATH`, blank to disable). The night-vs-day demo
 (`docs/MONITORING.md`) shows the report flagging brightness + detection-count drift.
 
+## Scene search (Phase 6a)
+
+Every camera keyframe is embedded with SigLIP2 into a LanceDB store; the API serves
+text, image, and similar-frame queries over it, and the Streamlit demo gets a
+**Scene search** tab (results render from thumbnails stored alongside the vectors, so
+the demo needs no dataset access).
+
+```bash
+# on the GPU server (has the images):
+uv run nuscenes-data-engine manifest        # availability check: metadata vs filesystem
+uv run nuscenes-data-engine embed           # ~205K frames -> data/lancedb (~3 GB)
+# rsync data/lancedb/ + data/processed/availability.parquet to the infra machine, then:
+
+uv run nuscenes-data-engine search "construction zone at night" -k 5
+curl "localhost:8000/search?q=pedestrian+crossing+in+rain&k=6"
+uv run nuscenes-data-engine query "SELECT is_night, count(*) FROM samples GROUP BY 1"  # DuckDB
+```
+
+Analytics examples live in [docs/ANALYTICS.md](docs/ANALYTICS.md); the availability
+manifest (why: radar/LiDAR-sweep files are absent on the server) is documented in
+[docs/DATA.md](docs/DATA.md).
+
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
@@ -224,6 +247,10 @@ picker after the first PR run).
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
 | 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
+| 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
+| 6b | VLM auto-labeling | Structured scene labels, evaluated against ground truth |
+| 6c | Dataset chat | LLM agent: text-to-SQL (DuckDB) + vector search |
+| 6d | Active learning | Embedding-mined hard examples → measurable retrain gain |
 
 Future work: Terraform-provisioned cloud deployment of the serving stack.
 
