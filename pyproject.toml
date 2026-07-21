@@ -134,10 +134,15 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not smoke_train'"
+markers = [
+    "smoke_train: 1-epoch CPU training smoke run (dedicated CI job; excluded by default)",
+]
 filterwarnings = [
     # Third-party deprecation noise from the nuScenes devkit's matplotlib/pyparsing deps.
     "ignore::DeprecationWarning:matplotlib.*",
     "ignore:.*resetCache.*:Warning",
     "ignore:.*enablePackrat.*:Warning",
+    # Evidently correlates constant columns (width/height) -> harmless 0/0 inside numpy.
+    "ignore:invalid value encountered in divide:RuntimeWarning",
 ]
