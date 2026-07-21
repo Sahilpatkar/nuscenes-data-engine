@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     # Per-request feature capture (Phase 5 drift monitoring); empty = disabled.
     serving_capture_path: str = Field(default="data/monitoring/requests.jsonl")
 
+    # --- Semantic frame search (Phase 6a) ---
+    # The API serves /search from the LanceDB store built by `embed` (rsynced here).
+    search_lancedb_path: str = Field(default="data/lancedb")
+    search_table: str = Field(default="frames")
+    search_model_name: str = Field(default="google/siglip2-base-patch16-256")
+    search_device: str = Field(default="cpu")
+    search_top_k: int = Field(default=12)
+
 
 def get_settings() -> Settings:
     """Return a freshly-loaded :class:`Settings` instance."""

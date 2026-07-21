@@ -7,6 +7,7 @@ only the dev extra, so the whole module skips there via importorskip.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 from collections.abc import Iterator
@@ -151,6 +152,71 @@ class TestCapture:
             assert test_client.post("/predict", files=files).status_code == 200
         serving_model.reset_model_cache()
         assert not (tmp_path / "data").exists()
+
+
+def _search_row(score: float) -> dict[str, object]:
+    return {
+        "sample_data_token": "tok1",
+        "scene_name": "scene-0001",
+        "scene_description": "Sunny day",
+        "channel": "CAM_FRONT",
+        "filename": "samples/CAM_FRONT/x.jpg",
+        "timestamp": 1_000_000,
+        "location": "boston-seaport",
+        "is_night": False,
+        "is_rain": False,
+        "score": score,
+        "thumbnail": b"\xff\xd8fakejpeg",
+    }
+
+
+class _FakeSearchEngine:
+    model_name = "fake-model"
+
+    def search_text(self, query: str, k: int) -> list[dict[str, object]]:
+        return [_search_row(0.9)] * min(k, 2)
+
+    def search_image(self, data: bytes, k: int) -> list[dict[str, object]]:
+        if not data.startswith(b"\xff\xd8"):
+            raise ValueError("Not a decodable image")
+        return [_search_row(0.8)]
+
+    def search_similar(self, token: str, k: int) -> list[dict[str, object]]:
+        if token == "unknown":
+            raise KeyError(token)
+        return [_search_row(0.7)]
+
+
+class TestSearchApi:
+    def test_text_search(self, client: TestClient) -> None:
+        client.app.state.search_engine = _FakeSearchEngine()
+        body = client.get("/search", params={"q": "night construction", "k": 2}).json()
+        assert len(body["results"]) == 2
+        assert body["embedding_model"] == "fake-model"
+        assert base64.b64decode(body["results"][0]["thumbnail_b64"]).startswith(b"\xff\xd8")
+        assert body["results"][0]["score"] == 0.9
+
+    def test_image_search_and_bad_upload(self, client: TestClient) -> None:
+        client.app.state.search_engine = _FakeSearchEngine()
+        ok = client.post("/search/image", files={"file": ("q.jpg", b"\xff\xd8data", "image/jpeg")})
+        assert ok.status_code == 200
+        bad = client.post("/search/image", files={"file": ("q.jpg", b"junk", "image/jpeg")})
+        assert bad.status_code == 400
+
+    def test_similar_and_unknown_token(self, client: TestClient) -> None:
+        client.app.state.search_engine = _FakeSearchEngine()
+        assert client.get("/search/similar/tok1").status_code == 200
+        assert client.get("/search/similar/unknown").status_code == 404
+
+    def test_search_unavailable_without_store(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client.app.state.search_engine = None
+        client.app.state.settings.search_lancedb_path = str(tmp_path / "absent")
+        resp = client.get("/search", params={"q": "anything"})
+        assert resp.status_code == 503
+        health = client.get("/health").json()
+        assert health["search_ready"] is False
 
 
 class TestLocalizeSourceUri:

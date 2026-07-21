@@ -1,13 +1,17 @@
 """FastAPI application serving the current production detection model.
 
 Endpoints:
-    GET  /health             liveness + which model version is loaded.
-    POST /predict            accept an image, return detections as JSON.
-    POST /predict/annotated  accept an image, return it annotated as PNG.
+    GET  /health                    liveness + model version + search readiness.
+    POST /predict                   accept an image, return detections as JSON.
+    POST /predict/annotated         accept an image, return it annotated as PNG.
+    GET  /search?q=&k=              semantic text search over embedded frames.
+    POST /search/image              semantic search by example image.
+    GET  /search/similar/{token}    frames similar to a stored frame.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -25,7 +29,13 @@ from nuscenes_data_engine import __version__
 from nuscenes_data_engine.config import get_settings
 from nuscenes_data_engine.monitoring.features import image_brightness
 from nuscenes_data_engine.serving.model import load_production_model
-from nuscenes_data_engine.serving.schemas import Detection, HealthResponse, PredictResponse
+from nuscenes_data_engine.serving.schemas import (
+    Detection,
+    HealthResponse,
+    PredictResponse,
+    SearchResponse,
+    SearchResult,
+)
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -47,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("Model load failed; /health reports degraded, /predict returns 503")
         app.state.model, app.state.model_version = None, None
+    app.state.search_engine = None  # built lazily on the first /search call
     yield
 
 
@@ -56,10 +67,13 @@ app = FastAPI(title="nuScenes Data Engine — Detection API", version=__version_
 @app.get("/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse:
     """Liveness probe."""
+    state = request.app.state
     return HealthResponse(
         status="ok",
-        model_loaded=request.app.state.model is not None,
-        model_version=request.app.state.model_version,
+        model_loaded=state.model is not None,
+        model_version=state.model_version,
+        search_ready=state.search_engine is not None
+        or Path(state.settings.search_lancedb_path).is_dir(),
     )
 
 
@@ -131,6 +145,81 @@ async def predict(request: Request, file: UploadFile = File(...)) -> PredictResp
         image_height=img.shape[0],
         n_detections=len(detections),
     )
+
+
+def _get_search_engine(request: Request) -> Any:
+    """Build (once) and return the semantic-search engine; 503 when unavailable."""
+    if request.app.state.search_engine is None:
+        settings = request.app.state.settings
+        try:
+            from nuscenes_data_engine.data_engine.search import SearchEngine
+
+            request.app.state.search_engine = SearchEngine(
+                Path(settings.search_lancedb_path),
+                settings.search_table,
+                settings.search_model_name,
+                device=settings.search_device,
+            )
+        except (ImportError, FileNotFoundError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Search unavailable: {exc}. Build/sync data/lancedb and install "
+                "the 'engine' extra.",
+            ) from exc
+    return request.app.state.search_engine
+
+
+def _search_response(results: list[dict[str, Any]], query: str, model_name: str) -> SearchResponse:
+    return SearchResponse(
+        results=[
+            SearchResult(
+                thumbnail_b64=base64.b64encode(row["thumbnail"]).decode(),
+                **{k: v for k, v in row.items() if k not in ("thumbnail", "filename")},
+            )
+            for row in results
+        ],
+        query=query,
+        embedding_model=model_name,
+    )
+
+
+@app.get("/search", response_model=SearchResponse)
+def search(request: Request, q: str, k: int | None = None) -> SearchResponse:
+    """Semantic text search over the embedded frames."""
+    engine = _get_search_engine(request)
+    k = k or request.app.state.settings.search_top_k
+    start = time.perf_counter()
+    results = engine.search_text(q, k)
+    logger.info(
+        "search %r: %d results in %.0f ms", q, len(results), (time.perf_counter() - start) * 1000
+    )
+    return _search_response(results, q, engine.model_name)
+
+
+@app.post("/search/image", response_model=SearchResponse)
+async def search_image(
+    request: Request, file: UploadFile = File(...), k: int | None = None
+) -> SearchResponse:
+    """Semantic search by example image."""
+    engine = _get_search_engine(request)
+    k = k or request.app.state.settings.search_top_k
+    try:
+        results = engine.search_image(await file.read(), k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _search_response(results, f"image:{file.filename}", engine.model_name)
+
+
+@app.get("/search/similar/{token}", response_model=SearchResponse)
+def search_similar(request: Request, token: str, k: int | None = None) -> SearchResponse:
+    """Frames most similar to a stored frame."""
+    engine = _get_search_engine(request)
+    k = k or request.app.state.settings.search_top_k
+    try:
+        results = engine.search_similar(token, k)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _search_response(results, f"similar:{token}", engine.model_name)
 
 
 @app.post("/predict/annotated")

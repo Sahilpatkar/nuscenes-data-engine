@@ -211,6 +211,103 @@ def serve(
     uvicorn.run("nuscenes_data_engine.serving.app:app", host=host, port=port, reload=reload)
 
 
+@app.command()
+def manifest(
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    out: Path | None = typer.Option(None, "--out", help="Output parquet (default: config)."),
+) -> None:
+    """Phase 6: cross-check referenced sensor files against the filesystem."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.validation.manifest import (
+        build_manifest,
+        camera_keyframes_complete,
+        summarize_manifest,
+    )
+
+    settings = get_settings()
+    cfg = load_yaml(config).get("manifest", {})
+    out = out or Path(cfg.get("out_path", "data/processed/availability.parquet"))
+    result = build_manifest(Path(settings.nuscenes_dataroot), settings.nuscenes_version, out)
+    for row in summarize_manifest(result).to_dict("records"):
+        logger.info(
+            "%-18s keyframe=%-5s %8d referenced %8d present",
+            row["channel"],
+            row["is_key_frame"],
+            row["n_referenced"],
+            row["n_present"],
+        )
+    if not camera_keyframes_complete(result):
+        logger.error("Camera keyframes (the working set) are incomplete!")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def embed(
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the vector store."),
+) -> None:
+    """Phase 6a: embed camera keyframes into the LanceDB frame store."""
+    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+
+    summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+    logger.info("Embed summary: %s", summary)
+
+
+@app.command()
+def search(
+    query: str = typer.Argument("", help="Text query (omit when using --image/--similar)."),
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    k: int = typer.Option(5, "-k", help="Number of results."),
+    image: Path | None = typer.Option(None, "--image", help="Image file query."),
+    similar: str | None = typer.Option(None, "--similar", help="sample_data_token query."),
+) -> None:
+    """Phase 6a: semantic frame search (text, image, or similar-to-frame)."""
+    from nuscenes_data_engine.config import load_yaml
+    from nuscenes_data_engine.data_engine.search import SearchEngine
+
+    cfg = load_yaml(config)
+    engine = SearchEngine(
+        Path(cfg["lancedb"]["path"]),
+        cfg["lancedb"]["table"],
+        cfg["embedding"]["model_name"],
+        device="cpu",
+    )
+    if similar is not None:
+        results = engine.search_similar(similar, k)
+    elif image is not None:
+        results = engine.search_image(image.read_bytes(), k)
+    elif query:
+        results = engine.search_text(query, k)
+    else:
+        raise typer.BadParameter("Provide a text query, --image, or --similar.")
+    for row in results:
+        logger.info(
+            "%.3f  %s  %-14s %-24s %s",
+            row["score"],
+            row["sample_data_token"],
+            row["channel"],
+            row["scene_name"],
+            row["scene_description"][:60],
+        )
+
+
+@app.command()
+def query(
+    sql: str = typer.Argument(..., help="DuckDB SQL over samples/annotations/availability."),
+    processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+) -> None:
+    """Phase 6: ad-hoc DuckDB analytics over the processed Parquet tables."""
+    import duckdb
+
+    con = duckdb.connect()
+    for name in ("samples", "annotations", "availability"):
+        path = processed_dir / f"{name}.parquet"
+        if path.is_file():
+            con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
+    print(con.sql(sql))
+
+
 monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
 app.add_typer(monitor_app, name="monitor")
 
