@@ -71,6 +71,7 @@ services:
     volumes:
       - ./mlruns:/app/mlruns  # rw: sqlite needs journal writes even for reads
       - ./weights:/app/weights:ro  # lets SERVING_WEIGHTS=weights/<x>.pt work in-container
+      - ./data/monitoring:/app/data/monitoring  # drift-capture JSONL persists on the host
     ports:
       - "8000:8000"
     depends_on:

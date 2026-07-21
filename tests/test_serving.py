@@ -8,6 +8,7 @@ only the dev extra, so the whole module skips there via importorskip.
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -43,9 +44,18 @@ def yolov8n_weights() -> Path:
 
 
 @pytest.fixture()
-def client(yolov8n_weights: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def capture_path(tmp_path: Path) -> Path:
+    """Where the client fixture directs the per-request monitoring capture."""
+    return tmp_path / "requests.jsonl"
+
+
+@pytest.fixture()
+def client(
+    yolov8n_weights: Path, capture_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
     """API client backed by yolov8n via SERVING_WEIGHTS (env beats .env)."""
     monkeypatch.setenv("SERVING_WEIGHTS", str(yolov8n_weights))
+    monkeypatch.setenv("SERVING_CAPTURE_PATH", str(capture_path))
     serving_model.reset_model_cache()
     with TestClient(app) as test_client:  # context manager: runs the lifespan
         yield test_client
@@ -112,6 +122,35 @@ class TestDegraded:
             "/predict", files={"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")}
         )
         assert resp.status_code == 503
+
+
+class TestCapture:
+    def test_appends_one_row_per_request(self, client: TestClient, capture_path: Path) -> None:
+        files = {"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")}
+        assert client.post("/predict", files=files).status_code == 200
+        assert client.post("/predict/annotated", files=files).status_code == 200
+        rows = [json.loads(line) for line in capture_path.read_text().splitlines()]
+        assert len(rows) == 2
+        for row in rows:
+            assert row["image_width"] == 320
+            assert row["image_height"] == 240
+            assert row["brightness"] == 0.0  # black frame
+            assert row["model_version"].startswith("local:")
+            assert row["latency_ms"] >= 0
+            assert "ts" in row and "n_detections" in row
+
+    def test_empty_path_disables_capture(
+        self, yolov8n_weights: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SERVING_WEIGHTS", str(yolov8n_weights))
+        monkeypatch.setenv("SERVING_CAPTURE_PATH", "")
+        monkeypatch.chdir(tmp_path)  # any accidental default-path write would land here
+        serving_model.reset_model_cache()
+        with TestClient(app) as test_client:
+            files = {"file": ("black.jpg", _jpeg_bytes(), "image/jpeg")}
+            assert test_client.post("/predict", files=files).status_code == 200
+        serving_model.reset_model_cache()
+        assert not (tmp_path / "data").exists()
 
 
 class TestLocalizeSourceUri:

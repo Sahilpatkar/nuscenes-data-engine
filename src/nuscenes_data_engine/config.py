@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     serving_conf: float = Field(default=0.25)
     serving_device: str = Field(default="cpu")
     serving_weights: str = Field(default="")
+    # Per-request feature capture (Phase 5 drift monitoring); empty = disabled.
+    serving_capture_path: str = Field(default="data/monitoring/requests.jsonl")
 
 
 def get_settings() -> Settings:
