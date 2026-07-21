@@ -60,7 +60,9 @@ def compute_features(
         else:
             brightness.append(image_brightness(img))
     if misses and dataroot is not None:
-        logger.warning("Brightness unavailable for %d/%d images under %s", misses, len(out), dataroot)
+        logger.warning(
+            "Brightness unavailable for %d/%d images under %s", misses, len(out), dataroot
+        )
     out["brightness"] = brightness
     return out
 

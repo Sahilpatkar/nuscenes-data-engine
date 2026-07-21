@@ -63,7 +63,9 @@ def health(request: Request) -> HealthResponse:
     )
 
 
-def _capture(request: Request, img: np.ndarray[Any, Any], n_detections: int, latency_ms: float) -> None:
+def _capture(
+    request: Request, img: np.ndarray[Any, Any], n_detections: int, latency_ms: float
+) -> None:
     """Append one drift-monitoring feature row per request; never fail the request."""
     path = request.app.state.settings.serving_capture_path
     if not path:

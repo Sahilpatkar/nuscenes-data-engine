@@ -98,8 +98,15 @@ class TestFeatures:
     def test_load_serving_jsonl_renames_columns(self, tmp_path: Path) -> None:
         log = tmp_path / "requests.jsonl"
         rows = [
-            {"ts": "t", "image_width": 1600, "image_height": 900, "n_detections": 4,
-             "brightness": 101.5, "latency_ms": 90.0, "model_version": "2"}
+            {
+                "ts": "t",
+                "image_width": 1600,
+                "image_height": 900,
+                "n_detections": 4,
+                "brightness": 101.5,
+                "latency_ms": 90.0,
+                "model_version": "2",
+            }
             for _ in range(3)
         ]
         log.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -108,7 +115,9 @@ class TestFeatures:
         assert {"width", "height", "n_boxes", "brightness"} <= set(table.columns)
 
 
-def _feature_frame(rng: np.random.Generator, b_mean: float, b_std: float, lam: float) -> pd.DataFrame:
+def _feature_frame(
+    rng: np.random.Generator, b_mean: float, b_std: float, lam: float
+) -> pd.DataFrame:
     n = 300
     return pd.DataFrame(
         {

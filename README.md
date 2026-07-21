@@ -1,5 +1,7 @@
 # nuscenes-data-engine
 
+[![CI](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml)
+
 End-to-end **MLOps pipeline for autonomous-vehicle perception** on the
 [nuScenes](https://www.nuscenes.org/) dataset. Raw multimodal sensor data is
 ingested, validated, and versioned; a 2D object detector is trained, tracked, and
@@ -12,10 +14,33 @@ API and monitored for drift — all tied together with CI/CD.
 
 ## Status
 
-**Phases 1–4 built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
-tracking, condition-sliced evaluation with gated registry promotion, and the promoted
-model (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind
-a FastAPI + Streamlit demo. Phase 5 (monitoring) remains a stub.
+**All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
+tracking, condition-sliced evaluation with gated registry promotion, the promoted model
+(`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
+FastAPI + Streamlit demo, and Evidently drift monitoring over the serving inputs with a
+two-job CI (quality + CPU smoke-train).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph GPU["GPU server (compute, infra-free)"]
+        NS[(nuScenes<br/>read-only)] --> ING[ingest + validate] --> PQ[(Parquet)]
+        PQ --> TR[train] --> EV[evaluate + promote] --> ML[(mlruns/<br/>registry)]
+        PQ --> REF[monitor build-reference]
+    end
+    subgraph INFRA["Infra machine (Docker)"]
+        MLS[MLflow server + registry]
+        API[FastAPI /predict] --> CAP[(requests.jsonl)]
+        ST[Streamlit demo] --> API
+        CAP --> DRIFT[Evidently drift report]
+        REFP[(reference parquet)] --> DRIFT
+    end
+    ML -- rsync --> MLS
+    ML -- "models:/…@production" --> API
+    REF -- rsync --> REFP
+    CI[GitHub Actions:<br/>quality + smoke-train] -.-> GPU & INFRA
+```
 
 ## Toolchain
 
@@ -65,6 +90,7 @@ Common tasks via the Makefile:
 make setup      # uv sync --extra dev
 make check      # ruff + mypy + pytest
 make infra-up   # [infra machine only] start MinIO + MLflow (docker compose)
+uv run pre-commit install   # one-time: enable the ruff/format/hygiene git hooks
 ```
 
 Heavy dependencies are opt-in extras so the base install stays light:
@@ -163,6 +189,32 @@ curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.p
   --image app/samples/day.jpg -n 30` — yolov8n@960 on an M-series MacBook CPU:
   p50 30 ms / p95 32 ms; the production yolov8m@960: p50 93 ms / p95 107 ms.
 
+## Monitoring (Phase 5)
+
+Evidently drift reports over the serving inputs — brightness, resolution, and
+detection-count distributions vs a training-data reference. Full design + demo results
+in [docs/MONITORING.md](docs/MONITORING.md).
+
+```bash
+# on the GPU server (has the images) — build the reference feature table:
+uv run nuscenes-data-engine monitor build-reference --condition day
+# rsync data/processed/monitoring_reference.parquet to the infra machine, then:
+
+make monitor    # drift report from the API's per-request capture (data/monitoring/)
+uv run nuscenes-data-engine monitor report --current <features.parquet|requests.jsonl>
+# -> runs/monitoring/drift_report.html + drift_summary.json
+```
+
+The API captures `{brightness, dims, n_detections, latency}` per request into a
+gitignored JSONL (`SERVING_CAPTURE_PATH`, blank to disable). The night-vs-day demo
+(`docs/MONITORING.md`) shows the report flagging brightness + detection-count drift.
+
+### Branch protection (manual, one-time)
+
+GitHub → Settings → Branches → Add rule for `main`: require a pull request before
+merging + require status checks **quality** and **smoke-train** (they appear in the
+picker after the first PR run).
+
 ## Build roadmap
 
 | Phase | Focus | Deliverable |
@@ -171,7 +223,9 @@ curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.p
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
 | 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
-| 5 | Monitoring & CI/CD | Evidently drift reports, green CI |
+| 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
+
+Future work: Terraform-provisioned cloud deployment of the serving stack.
 
 ## License
 
