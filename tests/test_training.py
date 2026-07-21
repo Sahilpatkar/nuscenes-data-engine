@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 import yaml
 
+pytest.importorskip("nuscenes")  # data extra: the dataset builder needs the devkit splits
+
 from nuscenes_data_engine.training.dataset import (
     build_yolo_dataset,
     compute_data_version,

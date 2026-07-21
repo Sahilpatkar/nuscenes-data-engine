@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("nuscenes")  # data extra: slices imports the devkit split table
+
 from nuscenes_data_engine.evaluation.slices import _matches, assign_slices
 
 SLICE_CONFIG = {

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+
+pytest.importorskip("nuscenes")  # data extra (devkit)
+
 from nuscenes.utils.data_classes import Box
 from pyquaternion import Quaternion
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
+
+pytest.importorskip("great_expectations")  # data extra
 
 from nuscenes_data_engine.validation.expectations import validate_dataset
 
