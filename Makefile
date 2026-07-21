@@ -37,8 +37,8 @@ evaluate:  ## Phase 3: compute mAP + condition-sliced metrics.
 serve:  ## Phase 4: launch the FastAPI serving app.
 	uv run nuscenes-data-engine serve
 
-monitor:  ## Phase 5: generate Evidently drift reports.
-	uv run nuscenes-data-engine monitor
+monitor:  ## Phase 5: drift report from the serving capture log.
+	uv run nuscenes-data-engine monitor report
 
 # --- Quality gates ---
 test:  ## Run the test suite.

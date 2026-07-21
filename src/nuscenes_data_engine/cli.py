@@ -211,10 +211,93 @@ def serve(
     uvicorn.run("nuscenes_data_engine.serving.app:app", host=host, port=port, reload=reload)
 
 
-@app.command()
-def monitor() -> None:
-    """Phase 5: generate Evidently drift reports."""
-    _todo("monitor", 5)
+monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
+app.add_typer(monitor_app, name="monitor")
+
+
+@monitor_app.command("build-reference")
+def monitor_build_reference(
+    config: Path = typer.Option(Path("configs/monitoring.yaml"), "--config", "-c"),
+    out: Path | None = typer.Option(None, "--out", help="Output parquet (default: config)."),
+    condition: str = typer.Option("all", "--condition", help="all | day | night."),
+    sample_images: int | None = typer.Option(None, "--sample-images", help="Override config."),
+    no_images: bool = typer.Option(
+        False, "--no-images", help="Metadata only (no dataset access); brightness = NaN."
+    ),
+) -> None:
+    """Phase 5: build a drift-feature table from the processed dataset."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.monitoring.features import build_reference
+
+    settings = get_settings()
+    cfg = load_yaml(config).get("reference", {})
+    features = build_reference(
+        Path(settings.processed_dir),
+        None if no_images else Path(settings.nuscenes_dataroot),
+        out or Path(cfg.get("out_path", "data/processed/monitoring_reference.parquet")),
+        condition=condition,
+        sample_images=sample_images or cfg.get("sample_images", 2000),
+        seed=cfg.get("seed", 0),
+    )
+    logger.info(
+        "%d rows (%s); brightness mean %.1f",
+        len(features),
+        condition,
+        features["brightness"].mean(),
+    )
+
+
+@monitor_app.command("report")
+def monitor_report(
+    config: Path = typer.Option(Path("configs/monitoring.yaml"), "--config", "-c"),
+    reference: Path | None = typer.Option(None, "--reference", help="Reference feature parquet."),
+    current: Path | None = typer.Option(
+        None, "--current", help="Feature parquet or serving JSONL (default: config serving_log)."
+    ),
+    simulate_night: bool = typer.Option(
+        False, "--simulate-night", help="Use a night-slice of samples.parquet as current."
+    ),
+    out_dir: Path | None = typer.Option(None, "--out-dir", help="Report directory."),
+) -> None:
+    """Phase 5: generate an Evidently drift report (reference vs current)."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.monitoring.drift import (
+        build_drift_report,
+        save_drift_report,
+        summarize_drift,
+    )
+    from nuscenes_data_engine.monitoring.features import build_reference
+
+    cfg = load_yaml(config)
+    reference = reference or Path(cfg["reference"]["out_path"])
+    out_dir = out_dir or Path(cfg["report"]["out_dir"])
+    if simulate_night:
+        settings = get_settings()
+        current = out_dir / "night_current.parquet"
+        build_reference(
+            Path(settings.processed_dir), None, current, condition="night", sample_images=2000
+        )
+    current = current or Path(cfg["current"]["serving_log"])
+
+    snapshot = build_drift_report(
+        reference, current, drift_share=cfg.get("drift", {}).get("drift_share", 0.25)
+    )
+    summary = summarize_drift(snapshot)
+    html_path, _ = save_drift_report(snapshot, out_dir)
+    for column, verdict in summary["columns"].items():
+        logger.info(
+            "%-10s %s (score %.3g)",
+            column,
+            "DRIFT" if verdict.get("drift_detected") else "ok",
+            verdict.get("score", float("nan")),
+        )
+    logger.info(
+        "%s (%d/%d columns drifted) — report: %s",
+        "DATASET DRIFT DETECTED" if summary["dataset_drift"] else "No dataset drift",
+        summary["n_drifted"],
+        len(summary["columns"]),
+        html_path,
+    )
 
 
 if __name__ == "__main__":
