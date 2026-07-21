@@ -67,11 +67,16 @@ class SiglipEmbedder:
         self._processor = AutoProcessor.from_pretrained(model_name)
         self.dim = int(self._model.config.vision_config.hidden_size)
 
+    @staticmethod
+    def _tensor(feats: Any) -> Any:
+        # transformers 5.x returns a BaseModelOutputWithPooling; 4.x returns the tensor.
+        return getattr(feats, "pooler_output", feats)
+
     def embed_images(self, images: Sequence[np.ndarray[Any, Any]]) -> np.ndarray[Any, Any]:
         rgb = [np.ascontiguousarray(img[:, :, ::-1]) for img in images]  # cv2 BGR -> RGB
         inputs = self._processor(images=rgb, return_tensors="pt").to(self._device)
         with self._torch.no_grad():
-            feats = self._model.get_image_features(**inputs)
+            feats = self._tensor(self._model.get_image_features(**inputs))
         return _l2_normalize(feats.cpu().numpy())
 
     def embed_texts(self, texts: Sequence[str]) -> np.ndarray[Any, Any]:
@@ -80,5 +85,5 @@ class SiglipEmbedder:
             text=list(texts), padding="max_length", truncation=True, return_tensors="pt"
         ).to(self._device)
         with self._torch.no_grad():
-            feats = self._model.get_text_features(**inputs)
+            feats = self._tensor(self._model.get_text_features(**inputs))
         return _l2_normalize(feats.cpu().numpy())
