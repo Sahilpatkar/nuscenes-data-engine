@@ -40,6 +40,15 @@ serve:  ## Phase 4: launch the FastAPI serving app.
 monitor:  ## Phase 5: drift report from the serving capture log.
 	uv run nuscenes-data-engine monitor report
 
+manifest:  ## Phase 6: data-availability manifest (run where the dataset lives).
+	uv run nuscenes-data-engine manifest
+
+embed:  ## Phase 6a: embed camera keyframes into the LanceDB store (GPU server).
+	uv run nuscenes-data-engine embed
+
+search:  ## Phase 6a: semantic frame search, e.g. make search Q="night construction".
+	uv run nuscenes-data-engine search "$(Q)"
+
 # --- Quality gates ---
 test:  ## Run the test suite.
 	uv run pytest

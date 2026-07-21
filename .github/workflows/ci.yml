@@ -20,10 +20,10 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
-      # data extra so the ingestion/training/evaluation/validation unit tests run;
-      # train/serve extras (torch) stay out — their tests skip via importorskip.
-      - name: Install deps (base + dev + data)
-        run: uv sync --extra dev --extra data
+      # data + engine extras so the ingestion/validation/monitoring/data-engine unit
+      # tests run; train/serve extras (torch) stay out — their tests skip via importorskip.
+      - name: Install deps (base + dev + data + engine)
+        run: uv sync --extra dev --extra data --extra engine
 
       - name: Lint (ruff)
         run: uv run ruff check .
