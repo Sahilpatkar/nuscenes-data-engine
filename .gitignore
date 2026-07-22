@@ -60,3 +60,6 @@ app/samples/*
 
 # Frame-embedding vector store (Phase 6a; built on the GPU server, rsynced here)
 /data/lancedb/
+
+# Auto-labeling state: sample, batch ids, raw results, labels, eval (Phase 6b)
+/data/autolabel/

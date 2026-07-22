@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # Per-request feature capture (Phase 5 drift monitoring); empty = disabled.
     serving_capture_path: str = Field(default="data/monitoring/requests.jsonl")
 
+    # --- VLM auto-labeling (Phase 6b) ---
+    # Claude API key for the labeling batches; empty = not configured (submit aborts).
+    anthropic_api_key: str = Field(default="")
+
     # --- Semantic frame search (Phase 6a) ---
     # The API serves /search from the LanceDB store built by `embed` (rsynced here).
     search_lancedb_path: str = Field(default="data/lancedb")

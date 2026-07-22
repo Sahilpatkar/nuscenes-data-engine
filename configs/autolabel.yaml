@@ -1,0 +1,25 @@
+# Phase 6b — VLM auto-labeling config.
+
+sample:
+  size: 5000               # CAM_FRONT keyframes, stratified location x night x rain
+  opus_subset: 500         # re-labeled with the comparison model; subset of the sample
+  channel: CAM_FRONT
+  seed: 6
+  min_per_stratum: 250     # floor: small strata (e.g. night+rain, 642 frames) stay evaluable
+  opus_min_per_stratum: 25
+
+models:
+  primary: claude-haiku-4-5     # full sample
+  comparison: claude-opus-4-8   # opus_subset only
+
+batch:
+  chunk_size: 500          # ~130 MB/batch of base64 frames; API limit is 256 MB
+  max_batch_bytes: 190000000
+  max_tokens: 800
+
+state:
+  dir: data/autolabel
+
+eval:
+  visibility_min: "2"      # second variant: GT boxes with >=40% visibility only
+  out_dir: data/autolabel/eval

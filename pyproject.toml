@@ -46,6 +46,7 @@ engine = [
     "lancedb>=0.34",
     "duckdb>=1.0",
     "transformers>=4.53",
+    "anthropic>=0.66",  # Phase 6b: VLM auto-labeling via the Claude Batch API
 ]
 # Phase 4 — serving + demo UI
 serve = [
@@ -143,10 +144,11 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not smoke_train and not engine_smoke'"
+addopts = "-ra -m 'not smoke_train and not engine_smoke and not label_smoke'"
 markers = [
     "smoke_train: 1-epoch CPU training smoke run (dedicated CI job; excluded by default)",
     "engine_smoke: real-SigLIP embedding sanity run (manual, downloads the model; excluded by default)",
+    "label_smoke: single live Claude API labeling call (manual, needs ANTHROPIC_API_KEY; excluded by default)",
 ]
 filterwarnings = [
     # Third-party deprecation noise from the nuScenes devkit's matplotlib/pyparsing deps.
