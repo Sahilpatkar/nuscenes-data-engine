@@ -8,9 +8,18 @@ sample:
   min_per_stratum: 250     # floor: small strata (e.g. night+rain, 642 frames) stay evaluable
   opus_min_per_stratum: 25
 
+provider: local            # local (vLLM server, free) | anthropic (Batch API, paid)
+
 models:
-  primary: claude-haiku-4-5     # full sample
-  comparison: claude-opus-4-8   # opus_subset only
+  primary: claude-haiku-4-5     # full sample (anthropic provider)
+  comparison: claude-opus-4-8   # opus_subset only (anthropic provider)
+
+# Self-hosted VLM: an OpenAI-compatible vLLM server (see docs/AUTOLABEL_EVAL.md for
+# the serving command; needs a 24GB GPU for the 7B model unquantized).
+local:
+  base_url: http://localhost:8399/v1
+  model: Qwen/Qwen2.5-VL-7B-Instruct
+  concurrency: 8
 
 batch:
   chunk_size: 500          # ~130 MB/batch of base64 frames; API limit is 256 MB

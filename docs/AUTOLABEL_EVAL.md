@@ -84,22 +84,53 @@ objects. Counts are for this single frame only."*
 - **Haiku vs Opus:** per-attribute agreement and inter-model count MAE on the shared
   500 frames, alongside each model's own GT scores.
 
-## Runbook
+## Providers
 
-Everything below runs from this repo (the remote runner pushes your branch and runs on
-the server, which has the images; the head node is fine — the job is network-bound):
+Two interchangeable labelers behind one `BatchTransport` seam:
+
+| provider | model(s) | cost | where it runs |
+|---|---|---|---|
+| `local` (default) | Qwen2.5-VL-7B-Instruct via a self-hosted vLLM server | **$0** | a 24 GB GPU node (the 7B model doesn't fit 12 GB unquantized) |
+| `anthropic` | Haiku 4.5 full sample + Opus 4.8 subset via the Batch API | ~$15 | head node (network-bound); needs `ANTHROPIC_API_KEY` |
+
+The local transport translates the same requests (same prompt, same sanitized JSON
+schema — enforced by vLLM's structured outputs) and executes them immediately against
+the server, persisting results into the identical on-disk state, so status/collect/
+retry/eval are provider-agnostic.
+
+## Runbook — local provider (free, default)
 
 ```bash
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel sample            # deterministic; matches the table above
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel submit --dry-run  # request sizing + cost table, no API calls
-# Put the key on the server once (never in git):  ssh TRINITY 'echo "ANTHROPIC_API_KEY=sk-ant-..." >> <repo>/.env'
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel submit --yes      # PAID (~$15)
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel status            # poll; batches typically end within ~1h
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel collect           # download + validate -> labels.parquet
-GPU_NODE=TRINITY scripts/gpu-run.sh autolabel submit --retry-missing --yes   # only if some results were retryable
+# One-time on the GPU node (own venv; vLLM has no macOS wheels so it stays out of uv.lock):
+scripts/gpu-run.sh raw "cd /home/mgaur/sahil && uv venv vllm-env && VIRTUAL_ENV=vllm-env uv pip install vllm"
+
+# Serve the VLM on a free 24GB 3090 (HF cache kept inside the repo workspace):
+GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg raw \
+  "HF_HOME=/home/mgaur/sahil/nuscenes_project/.cache/huggingface CUDA_VISIBLE_DEVICES=0 \
+   /home/mgaur/sahil/vllm-env/bin/vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8399 --max-model-len 8192"
+
+GPU_NODE=trinity-2-3 scripts/gpu-run.sh autolabel sample
+GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg autolabel submit    # provider: local from config; free, no --yes
+GPU_NODE=trinity-2-3 scripts/gpu-run.sh autolabel collect        # local results persist at submit time
 rsync -a --partial --timeout=120 TRINITY:<repo>/data/autolabel/ data/autolabel/
-uv run nuscenes-data-engine autolabel eval                      # tables + eval_summary.md under data/autolabel/eval/
+uv run nuscenes-data-engine autolabel eval                       # tables + eval_summary.md
 ```
+
+## Runbook — anthropic provider (paid alternative)
+
+```bash
+GPU_NODE=TRINITY scripts/gpu-run.sh autolabel sample
+GPU_NODE=TRINITY scripts/gpu-run.sh autolabel submit --provider anthropic --dry-run
+# Put the key on the server once (never in git):  ssh TRINITY 'echo "ANTHROPIC_API_KEY=sk-ant-..." >> <repo>/.env'
+GPU_NODE=TRINITY scripts/gpu-run.sh autolabel submit --provider anthropic --yes   # PAID (~$15)
+GPU_NODE=TRINITY scripts/gpu-run.sh autolabel status --provider anthropic         # ~1h typical
+GPU_NODE=TRINITY scripts/gpu-run.sh autolabel collect --provider anthropic
+rsync -a --partial --timeout=120 TRINITY:<repo>/data/autolabel/ data/autolabel/
+uv run nuscenes-data-engine autolabel eval
+```
+
+Both providers append rows to the same `labels.parquet` keyed by (frame, model), so
+running the paid tier later simply adds Haiku/Opus columns to the comparison.
 
 ## Results
 

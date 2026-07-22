@@ -17,10 +17,12 @@ import pandas as pd
 import yaml
 
 from nuscenes_data_engine.data_engine.autolabel.batch import (
+    LocalVLMTransport,
     build_request,
     chunk_requests,
     run_collect,
     run_submit,
+    to_openai_payload,
 )
 from nuscenes_data_engine.data_engine.autolabel.evaluate import (
     eval_counts,
@@ -351,6 +353,105 @@ class TestBatchPipeline:
         # collect is idempotent
         labels_again = run_collect(autolabel_env, transport=collecting)
         assert len(labels_again) == len(labels)
+
+
+class TestLocalProvider:
+    def test_to_openai_payload_translation(self, tmp_path: Path) -> None:
+        processed = _write_dataset(tmp_path, n_scenes=1, frames_per_scene=1)
+        row = pd.read_parquet(processed / "samples.parquet").iloc[0].to_dict()
+        request = build_request(row, tmp_path, "ignored", structured_output_schema(), 800)
+        payload = to_openai_payload(request["params"], "Qwen/Qwen2.5-VL-7B-Instruct")
+        assert payload["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+        assert payload["max_tokens"] == 800
+        assert payload["messages"][0]["role"] == "system"
+        user_content = payload["messages"][1]["content"]
+        assert user_content[0]["type"] == "image_url"
+        assert user_content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert user_content[1]["type"] == "text"
+        assert payload["response_format"]["type"] == "json_schema"
+        assert payload["response_format"]["json_schema"]["schema"]["type"] == "object"
+
+    def test_local_transport_end_to_end(
+        self, autolabel_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        httpx = pytest.importorskip("httpx")
+
+        def handler(request: Any) -> Any:
+            body = json.loads(request.content)
+            token_hint = body["messages"][1]["content"][1]["text"]
+            assert token_hint  # text block present
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps(_valid_label())},
+                        }
+                    ]
+                },
+            )
+
+        real_client = httpx.Client
+
+        def patched_client(*args: Any, **kwargs: Any) -> Any:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            return real_client(**kwargs)
+
+        monkeypatch.setattr(httpx, "Client", patched_client)
+
+        state_dir = autolabel_env.parent / "autolabel"
+        cfg_text = autolabel_env.read_text().replace(
+            "models:",
+            "provider: local\nlocal:\n  base_url: http://fake:1/v1\n"
+            "  model: local-test-vlm\n  concurrency: 2\nmodels:",
+        )
+        autolabel_env.write_text(cfg_text)
+
+        summary = run_submit(autolabel_env, provider="local")
+        assert summary["submitted"] == 12  # full sample, single local model, no --yes needed
+        assert summary["estimated_cost"] == 0.0
+        state = json.loads((state_dir / "batches.json").read_text())
+        assert all(batch["status"] == "ended" for batch in state)
+        assert all(batch["model"] == "local-test-vlm" for batch in state)
+        # Results were persisted at submit time; collect needs no transport.
+        labels = run_collect(autolabel_env, provider="local")
+        local = labels[labels["model"] == "local-test-vlm"]
+        assert len(local) == 12
+        assert (local["parse_status"] == "ok").all()
+
+    def test_local_transport_server_error_is_retryable(self, tmp_path: Path) -> None:
+        httpx = pytest.importorskip("httpx")
+
+        def handler(request: Any) -> Any:
+            return httpx.Response(500, json={"error": "boom"})
+
+        transport = LocalVLMTransport("http://fake:1/v1", "m", tmp_path / "results")
+        with pytest.MonkeyPatch.context() as mp:
+            real_client = httpx.Client
+
+            def patched(*args: Any, **kwargs: Any) -> Any:
+                kwargs["transport"] = httpx.MockTransport(handler)
+                return real_client(**kwargs)
+
+            mp.setattr(httpx, "Client", patched)
+            request = {
+                "custom_id": "tok_x",
+                "params": {
+                    "model": "m",
+                    "max_tokens": 8,
+                    "system": "s",
+                    "output_config": {"format": {"schema": {}}},
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": "t"}]}],
+                },
+            }
+            batch_id = transport.submit([request])
+        status, counts = transport.status(batch_id)
+        assert status == "ended"
+        assert counts["errored"] == 1
+        record = next(transport.results(batch_id))
+        assert record["result_type"] == "errored"
+        assert record["error_type"] == "api_error"  # retryable via --retry-missing
 
 
 class TestEval:

@@ -372,17 +372,22 @@ def autolabel_submit(
         False, "--retry-missing", help="Only frames without a terminal result."
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Size and price only; no API calls."),
+    provider: str | None = typer.Option(
+        None, "--provider", help="anthropic (paid Batch API) | local (vLLM server, free)."
+    ),
 ) -> None:
-    """Phase 6b: submit labeling batches to the Claude Batch API (PAID — needs --yes)."""
+    """Phase 6b: run the labeling — Claude Batch API (paid, needs --yes) or local vLLM."""
     from nuscenes_data_engine.data_engine.autolabel.batch import run_submit
     from nuscenes_data_engine.tracking import wandb_run
 
     with wandb_run(
         "autolabel-submit",
-        config={"retry_missing": retry_missing},
+        config={"retry_missing": retry_missing, "provider": provider},
         enabled=False if dry_run else None,
     ) as run:
-        summary = run_submit(config, yes=yes, retry_missing=retry_missing, dry_run=dry_run)
+        summary = run_submit(
+            config, yes=yes, retry_missing=retry_missing, dry_run=dry_run, provider=provider
+        )
         if run is not None:
             run.log(
                 {"submitted": summary["submitted"], "estimated_cost_usd": summary["estimated_cost"]}
@@ -392,23 +397,25 @@ def autolabel_submit(
 @autolabel_app.command("status")
 def autolabel_status(
     config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="anthropic | local."),
 ) -> None:
     """Poll the processing status of submitted batches."""
     from nuscenes_data_engine.data_engine.autolabel.batch import run_status
 
-    run_status(config)
+    run_status(config, provider=provider)
 
 
 @autolabel_app.command("collect")
 def autolabel_collect(
     config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="anthropic | local."),
 ) -> None:
     """Download ended batches and rebuild the validated labels table."""
     from nuscenes_data_engine.data_engine.autolabel.batch import run_collect
     from nuscenes_data_engine.tracking import wandb_run
 
     with wandb_run("autolabel-collect") as run:
-        labels = run_collect(config)
+        labels = run_collect(config, provider=provider)
         if run is not None and not labels.empty:
             counts = labels.groupby(["model", "parse_status"]).size()
             run.log({f"{model}/{status}": int(n) for (model, status), n in counts.items()})
