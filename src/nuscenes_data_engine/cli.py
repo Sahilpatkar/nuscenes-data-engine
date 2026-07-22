@@ -173,13 +173,26 @@ def evaluate(
     register: bool = typer.Option(
         False, "--register", help="Register + promote (staging->production) in MLflow."
     ),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
     """Phase 3: compute overall + condition-sliced mAP and (optionally) promote the model."""
     from nuscenes_data_engine.evaluation.evaluate import run_evaluation
+    from nuscenes_data_engine.tracking import wandb_run
 
-    report = run_evaluation(
-        config, train_config, weights=weights, device=device, imgsz=imgsz, register=register
-    )
+    with wandb_run(
+        "evaluate",
+        config={"weights": str(weights) if weights else None, "imgsz": imgsz},
+        enabled=wandb,
+    ) as run:
+        report = run_evaluation(
+            config, train_config, weights=weights, device=device, imgsz=imgsz, register=register
+        )
+        if run is not None:
+            run.log({f"overall_{k}": v for k, v in report["overall"].items()})
+            for name, metrics in report["slices"].items():
+                tag = name.split("/")[-1]
+                run.log({f"{tag}_{k}": v for k, v in metrics.items()})
+            run.summary["promotion_gate_passed"] = report["passed"]
     o = report["overall"]
     logger.info(
         "== Overall == mAP50=%.3f mAP50-95=%.3f P=%.3f R=%.3f",
@@ -246,11 +259,29 @@ def embed(
     config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
     limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
     rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the vector store."),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
     """Phase 6a: embed camera keyframes into the LanceDB frame store."""
-    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+    import time
 
-    summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run(
+        "embed", config={"limit_scenes": limit_scenes, "rebuild": rebuild}, enabled=wandb
+    ) as run:
+        start = time.perf_counter()
+        summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+        if run is not None:
+            duration = time.perf_counter() - start
+            run.log(
+                {
+                    **{k: v for k, v in summary.items() if isinstance(v, int | float)},
+                    "duration_s": duration,
+                    "frames_per_s": summary["frames_added"] / duration if duration else 0,
+                }
+            )
+            run.config.update({"model": summary["model"]})
     logger.info("Embed summary: %s", summary)
 
 
@@ -344,8 +375,18 @@ def autolabel_submit(
 ) -> None:
     """Phase 6b: submit labeling batches to the Claude Batch API (PAID — needs --yes)."""
     from nuscenes_data_engine.data_engine.autolabel.batch import run_submit
+    from nuscenes_data_engine.tracking import wandb_run
 
-    run_submit(config, yes=yes, retry_missing=retry_missing, dry_run=dry_run)
+    with wandb_run(
+        "autolabel-submit",
+        config={"retry_missing": retry_missing},
+        enabled=False if dry_run else None,
+    ) as run:
+        summary = run_submit(config, yes=yes, retry_missing=retry_missing, dry_run=dry_run)
+        if run is not None:
+            run.log(
+                {"submitted": summary["submitted"], "estimated_cost_usd": summary["estimated_cost"]}
+            )
 
 
 @autolabel_app.command("status")
@@ -364,8 +405,13 @@ def autolabel_collect(
 ) -> None:
     """Download ended batches and rebuild the validated labels table."""
     from nuscenes_data_engine.data_engine.autolabel.batch import run_collect
+    from nuscenes_data_engine.tracking import wandb_run
 
-    run_collect(config)
+    with wandb_run("autolabel-collect") as run:
+        labels = run_collect(config)
+        if run is not None and not labels.empty:
+            counts = labels.groupby(["model", "parse_status"]).size()
+            run.log({f"{model}/{status}": int(n) for (model, status), n in counts.items()})
 
 
 @autolabel_app.command("eval")
@@ -374,8 +420,20 @@ def autolabel_eval(
 ) -> None:
     """Evaluate collected labels against nuScenes ground truth."""
     from nuscenes_data_engine.data_engine.autolabel.evaluate import run_eval
+    from nuscenes_data_engine.tracking import wandb_run
 
-    summary = run_eval(config)
+    with wandb_run("autolabel-eval") as run:
+        summary = run_eval(config)
+        if run is not None:
+            for model, metrics in summary.items():
+                if isinstance(metrics, dict):
+                    run.log(
+                        {
+                            f"{model}/{k}": v
+                            for k, v in metrics.items()
+                            if isinstance(v, int | float)
+                        }
+                    )
     logger.info("Eval summary: %s", summary)
 
 
@@ -452,6 +510,20 @@ def monitor_report(
     )
     summary = summarize_drift(snapshot)
     html_path, _ = save_drift_report(snapshot, out_dir)
+
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("monitor-drift", config={"reference": str(reference)}) as run:
+        if run is not None:
+            metrics: dict[str, float] = {
+                "dataset_drift": float(summary["dataset_drift"]),
+                "n_drifted": float(summary["n_drifted"]),
+                "share_drifted": float(summary["share_drifted"]),
+            }
+            for column, verdict in summary["columns"].items():
+                metrics[f"{column}_drift"] = float(verdict.get("drift_detected", False))
+                metrics[f"{column}_score"] = float(verdict.get("score", 0.0))
+            run.log(metrics)
     for column, verdict in summary["columns"].items():
         logger.info(
             "%-10s %s (score %.3g)",

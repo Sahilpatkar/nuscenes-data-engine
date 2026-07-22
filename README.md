@@ -156,6 +156,9 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 - **Weights & Biases** (optional, cloud): add `--wandb` and set `WANDB_API_KEY` in `.env`
   (or `uv run wandb login`). Live metrics, PR curves, and validation-prediction images
   stream to your W&B project. `WANDB_MODE=offline` logs to `./wandb` for later `wandb sync`.
+  Once configured, **every pipeline stage** logs a W&B run automatically (job types:
+  `embed`, `evaluate`, `monitor-drift`, `autolabel-*`) — opt out per run with
+  `--no-wandb`, or globally with `WANDB_MODE=disabled`.
 - Orchestrated variant (Dagster):
   `uv run dagster dev -m nuscenes_data_engine.training.pipeline`.
 
