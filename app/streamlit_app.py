@@ -1,12 +1,13 @@
-"""Streamlit demo UI (Phase 4).
+"""Streamlit demo UI: detection (Phase 4) + semantic scene search (Phase 6a).
 
-Upload an image (or pick a bundled sample from app/samples/) and view detections from
-the serving API. The app is a plain HTTP client of the FastAPI service — it never loads
-the model itself — so `docker compose up api streamlit` demonstrates the real topology.
+A plain HTTP client of the FastAPI service — it never loads models itself, so
+`docker compose up api streamlit` demonstrates the real topology. Each tab degrades
+independently when its backend piece (detector, search index) is unavailable.
 """
 
 from __future__ import annotations
 
+import base64
 import os
 from io import BytesIO
 from pathlib import Path
@@ -37,18 +38,11 @@ def draw_detections(image: Image.Image, detections: list[dict]) -> Image.Image:
     return annotated
 
 
-def main() -> None:
-    st.set_page_config(page_title="nuScenes Data Engine — Demo", page_icon="🚗")
-    st.title("nuScenes Data Engine — Detection Demo")
-
-    health = api_health()
-    if health is None:
-        st.error(f"Serving API unreachable at {API_URL} — start it with `make serve`.")
-        st.stop()
+def render_detect(health: dict) -> None:
     if not health.get("model_loaded"):
-        st.error("The API is up but no model is loaded (see the API logs).")
-        st.stop()
-    st.caption(f"Serving model version `{health['model_version']}` at {API_URL}")
+        st.warning("No detection model loaded (see the API logs) — search may still work.")
+        return
+    st.caption(f"Serving model version `{health['model_version']}`")
 
     uploaded = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
     samples = sorted(SAMPLES_DIR.glob("*.jpg"))
@@ -64,7 +58,7 @@ def main() -> None:
         name, data = picked.name, picked.read_bytes()
     else:
         st.info("Upload an image (or pick a sample) to run detection.")
-        st.stop()
+        return
 
     server_rendered = st.toggle("Server-rendered annotation", value=False)
     endpoint = "/predict/annotated" if server_rendered else "/predict"
@@ -73,7 +67,7 @@ def main() -> None:
     )
     if resp.status_code != 200:
         st.error(f"API returned {resp.status_code}: {resp.text}")
-        st.stop()
+        return
 
     if server_rendered:
         st.image(resp.content, caption=name, use_container_width=True)
@@ -88,6 +82,90 @@ def main() -> None:
             st.dataframe(pd.DataFrame(body["detections"]), use_container_width=True)
         else:
             st.info("No detections above the confidence threshold.")
+
+
+def _show_results(resp: requests.Response) -> None:
+    if resp.status_code != 200:
+        st.error(f"API returned {resp.status_code}: {resp.text}")
+        return
+    results = resp.json()["results"]
+    if not results:
+        st.info("No results.")
+        return
+    columns = st.columns(3)
+    for i, row in enumerate(results):
+        with columns[i % 3]:
+            st.image(base64.b64decode(row["thumbnail_b64"]), use_container_width=True)
+            conditions = ("night" if row["is_night"] else "day") + (
+                ", rain" if row["is_rain"] else ""
+            )
+            st.caption(
+                f"**{row['scene_name']}** · {row['channel']} · {conditions} · "
+                f"score {row['score']:.3f}\n\n{row['scene_description'][:80]}"
+            )
+            st.button(
+                "Find similar",
+                key=f"similar_{i}_{row['sample_data_token']}",
+                on_click=lambda tok=row["sample_data_token"]: st.session_state.update(
+                    similar_token=tok
+                ),
+            )
+
+
+def render_search(health: dict) -> None:
+    if not health.get("search_ready"):
+        st.warning(
+            "Search index unavailable — build it with `nuscenes-data-engine embed` "
+            "on the GPU server and rsync `data/lancedb/` here."
+        )
+        return
+
+    k = st.slider("Results", min_value=3, max_value=24, value=9, step=3)
+
+    if st.session_state.get("similar_token"):
+        token = st.session_state["similar_token"]
+        st.caption(f"Frames similar to `{token}`")
+        if st.button("Clear similar-search"):
+            st.session_state["similar_token"] = None
+            st.rerun()
+        else:
+            _show_results(requests.get(f"{API_URL}/search/similar/{token}?k={k}", timeout=60))
+            return
+
+    query = st.text_input(
+        "Describe a scene", placeholder="construction zone at night · pedestrian crossing in rain"
+    )
+    example = st.file_uploader(
+        "…or search by example image", type=["jpg", "jpeg", "png"], key="search_upload"
+    )
+    if example is not None:
+        _show_results(
+            requests.post(
+                f"{API_URL}/search/image?k={k}",
+                files={"file": (example.name, example.getvalue(), "image/jpeg")},
+                timeout=120,
+            )
+        )
+    elif query:
+        _show_results(requests.get(f"{API_URL}/search", params={"q": query, "k": k}, timeout=120))
+    else:
+        st.info("Type a scene description or upload an example image.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="nuScenes Data Engine — Demo", page_icon="🚗", layout="wide")
+    st.title("nuScenes Data Engine")
+
+    health = api_health()
+    if health is None:
+        st.error(f"Serving API unreachable at {API_URL} — start it with `make serve`.")
+        st.stop()
+
+    detect_tab, search_tab = st.tabs(["🔍 Detect", "🗂 Scene search"])
+    with detect_tab:
+        render_detect(health)
+    with search_tab:
+        render_search(health)
 
 
 if __name__ == "__main__":

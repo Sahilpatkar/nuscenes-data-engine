@@ -212,9 +212,189 @@ def serve(
 
 
 @app.command()
-def monitor() -> None:
-    """Phase 5: generate Evidently drift reports."""
-    _todo("monitor", 5)
+def manifest(
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    out: Path | None = typer.Option(None, "--out", help="Output parquet (default: config)."),
+) -> None:
+    """Phase 6: cross-check referenced sensor files against the filesystem."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.validation.manifest import (
+        build_manifest,
+        camera_keyframes_complete,
+        summarize_manifest,
+    )
+
+    settings = get_settings()
+    cfg = load_yaml(config).get("manifest", {})
+    out = out or Path(cfg.get("out_path", "data/processed/availability.parquet"))
+    result = build_manifest(Path(settings.nuscenes_dataroot), settings.nuscenes_version, out)
+    for row in summarize_manifest(result).to_dict("records"):
+        logger.info(
+            "%-18s keyframe=%-5s %8d referenced %8d present",
+            row["channel"],
+            row["is_key_frame"],
+            row["n_referenced"],
+            row["n_present"],
+        )
+    if not camera_keyframes_complete(result):
+        logger.error("Camera keyframes (the working set) are incomplete!")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def embed(
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the vector store."),
+) -> None:
+    """Phase 6a: embed camera keyframes into the LanceDB frame store."""
+    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+
+    summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+    logger.info("Embed summary: %s", summary)
+
+
+@app.command()
+def search(
+    query: str = typer.Argument("", help="Text query (omit when using --image/--similar)."),
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    k: int = typer.Option(5, "-k", help="Number of results."),
+    image: Path | None = typer.Option(None, "--image", help="Image file query."),
+    similar: str | None = typer.Option(None, "--similar", help="sample_data_token query."),
+) -> None:
+    """Phase 6a: semantic frame search (text, image, or similar-to-frame)."""
+    from nuscenes_data_engine.config import load_yaml
+    from nuscenes_data_engine.data_engine.search import SearchEngine
+
+    cfg = load_yaml(config)
+    engine = SearchEngine(
+        Path(cfg["lancedb"]["path"]),
+        cfg["lancedb"]["table"],
+        cfg["embedding"]["model_name"],
+        device="cpu",
+    )
+    if similar is not None:
+        results = engine.search_similar(similar, k)
+    elif image is not None:
+        results = engine.search_image(image.read_bytes(), k)
+    elif query:
+        results = engine.search_text(query, k)
+    else:
+        raise typer.BadParameter("Provide a text query, --image, or --similar.")
+    for row in results:
+        logger.info(
+            "%.3f  %s  %-14s %-24s %s",
+            row["score"],
+            row["sample_data_token"],
+            row["channel"],
+            row["scene_name"],
+            row["scene_description"][:60],
+        )
+
+
+@app.command()
+def query(
+    sql: str = typer.Argument(..., help="DuckDB SQL over samples/annotations/availability."),
+    processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+) -> None:
+    """Phase 6: ad-hoc DuckDB analytics over the processed Parquet tables."""
+    import duckdb
+
+    con = duckdb.connect()
+    for name in ("samples", "annotations", "availability"):
+        path = processed_dir / f"{name}.parquet"
+        if path.is_file():
+            con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
+    print(con.sql(sql))
+
+
+monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
+app.add_typer(monitor_app, name="monitor")
+
+
+@monitor_app.command("build-reference")
+def monitor_build_reference(
+    config: Path = typer.Option(Path("configs/monitoring.yaml"), "--config", "-c"),
+    out: Path | None = typer.Option(None, "--out", help="Output parquet (default: config)."),
+    condition: str = typer.Option("all", "--condition", help="all | day | night."),
+    sample_images: int | None = typer.Option(None, "--sample-images", help="Override config."),
+    no_images: bool = typer.Option(
+        False, "--no-images", help="Metadata only (no dataset access); brightness = NaN."
+    ),
+) -> None:
+    """Phase 5: build a drift-feature table from the processed dataset."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.monitoring.features import build_reference
+
+    settings = get_settings()
+    cfg = load_yaml(config).get("reference", {})
+    features = build_reference(
+        Path(settings.processed_dir),
+        None if no_images else Path(settings.nuscenes_dataroot),
+        out or Path(cfg.get("out_path", "data/processed/monitoring_reference.parquet")),
+        condition=condition,
+        sample_images=sample_images or cfg.get("sample_images", 2000),
+        seed=cfg.get("seed", 0),
+    )
+    logger.info(
+        "%d rows (%s); brightness mean %.1f",
+        len(features),
+        condition,
+        features["brightness"].mean(),
+    )
+
+
+@monitor_app.command("report")
+def monitor_report(
+    config: Path = typer.Option(Path("configs/monitoring.yaml"), "--config", "-c"),
+    reference: Path | None = typer.Option(None, "--reference", help="Reference feature parquet."),
+    current: Path | None = typer.Option(
+        None, "--current", help="Feature parquet or serving JSONL (default: config serving_log)."
+    ),
+    simulate_night: bool = typer.Option(
+        False, "--simulate-night", help="Use a night-slice of samples.parquet as current."
+    ),
+    out_dir: Path | None = typer.Option(None, "--out-dir", help="Report directory."),
+) -> None:
+    """Phase 5: generate an Evidently drift report (reference vs current)."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.monitoring.drift import (
+        build_drift_report,
+        save_drift_report,
+        summarize_drift,
+    )
+    from nuscenes_data_engine.monitoring.features import build_reference
+
+    cfg = load_yaml(config)
+    reference = reference or Path(cfg["reference"]["out_path"])
+    out_dir = out_dir or Path(cfg["report"]["out_dir"])
+    if simulate_night:
+        settings = get_settings()
+        current = out_dir / "night_current.parquet"
+        build_reference(
+            Path(settings.processed_dir), None, current, condition="night", sample_images=2000
+        )
+    current = current or Path(cfg["current"]["serving_log"])
+
+    snapshot = build_drift_report(
+        reference, current, drift_share=cfg.get("drift", {}).get("drift_share", 0.25)
+    )
+    summary = summarize_drift(snapshot)
+    html_path, _ = save_drift_report(snapshot, out_dir)
+    for column, verdict in summary["columns"].items():
+        logger.info(
+            "%-10s %s (score %.3g)",
+            column,
+            "DRIFT" if verdict.get("drift_detected") else "ok",
+            verdict.get("score", float("nan")),
+        )
+    logger.info(
+        "%s (%d/%d columns drifted) — report: %s",
+        "DATASET DRIFT DETECTED" if summary["dataset_drift"] else "No dataset drift",
+        summary["n_drifted"],
+        len(summary["columns"]),
+        html_path,
+    )
 
 
 if __name__ == "__main__":

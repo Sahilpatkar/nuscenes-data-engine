@@ -54,3 +54,9 @@ gx/uncommitted/
 # populate per machine, see README "Serving").
 app/samples/*
 !app/samples/.gitkeep
+
+# Serving-request drift capture (Phase 5)
+/data/monitoring/
+
+# Frame-embedding vector store (Phase 6a; built on the GPU server, rsynced here)
+/data/lancedb/

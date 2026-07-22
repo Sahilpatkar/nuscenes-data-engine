@@ -40,6 +40,13 @@ train = [
     "dagster-webserver>=1.7",
     "wandb>=0.17",
 ]
+# Phase 6 — data engine (embeddings, vector search, analytics). Torch-free on purpose:
+# transformers only needs torch where inference runs (the train extra provides it).
+engine = [
+    "lancedb>=0.34",
+    "duckdb>=1.0",
+    "transformers>=4.53",
+]
 # Phase 4 — serving + demo UI
 serve = [
     "fastapi>=0.111",
@@ -109,7 +116,7 @@ disallow_subclassing_any = false
 # These ship py.typed but don't cleanly export the symbols we use; skip following into
 # them so they resolve to Any rather than erroring on attr-defined.
 [[tool.mypy.overrides]]
-module = ["great_expectations.*", "ultralytics.*"]
+module = ["great_expectations.*", "ultralytics.*", "transformers.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
@@ -129,15 +136,22 @@ module = [
     "shapely.*",
     "wandb.*",
     "httpx.*",
+    "lancedb.*",
 ]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not smoke_train and not engine_smoke'"
+markers = [
+    "smoke_train: 1-epoch CPU training smoke run (dedicated CI job; excluded by default)",
+    "engine_smoke: real-SigLIP embedding sanity run (manual, downloads the model; excluded by default)",
+]
 filterwarnings = [
     # Third-party deprecation noise from the nuScenes devkit's matplotlib/pyparsing deps.
     "ignore::DeprecationWarning:matplotlib.*",
     "ignore:.*resetCache.*:Warning",
     "ignore:.*enablePackrat.*:Warning",
+    # Evidently correlates constant columns (width/height) -> harmless 0/0 inside numpy.
+    "ignore:invalid value encountered in divide:RuntimeWarning",
 ]

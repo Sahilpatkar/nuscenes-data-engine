@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2
 
 WORKDIR /app
 COPY . .
-RUN uv sync --frozen --no-dev --extra serve --extra train
+RUN uv sync --frozen --no-dev --extra serve --extra train --extra engine
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000

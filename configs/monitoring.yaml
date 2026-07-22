@@ -1,0 +1,18 @@
+# Phase 5 — drift-monitoring config.
+
+# Reference feature table, built where the images live (the GPU server) and rsynced
+# to the infra machine with the rest of data/processed/.
+reference:
+  out_path: data/processed/monitoring_reference.parquet
+  sample_images: 2000   # images sampled for brightness; null = all
+  seed: 0
+
+drift:
+  drift_share: 0.25     # 1 of the 4 feature columns drifting flags the dataset
+
+# Default "current" side of the comparison: the serving API's per-request capture.
+current:
+  serving_log: data/monitoring/requests.jsonl
+
+report:
+  out_dir: runs/monitoring

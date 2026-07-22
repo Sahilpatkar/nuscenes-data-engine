@@ -36,3 +36,29 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     model_loaded: bool = False
     model_version: str | None = None
+    search_ready: bool = False
+
+
+class SearchResult(BaseModel):
+    """One frame returned by the semantic-search endpoints."""
+
+    sample_data_token: str
+    scene_name: str
+    scene_description: str
+    channel: str
+    timestamp: int
+    location: str
+    is_night: bool
+    is_rain: bool
+    score: float = Field(description="Cosine similarity to the query (higher = closer).")
+    thumbnail_b64: str = Field(description="Base64 JPEG thumbnail of the frame.")
+
+
+class SearchResponse(BaseModel):
+    """Response body for the ``/search*`` endpoints."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    results: list[SearchResult]
+    query: str = Field(description="The text query, or a marker for image/similar queries.")
+    embedding_model: str

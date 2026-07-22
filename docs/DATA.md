@@ -98,3 +98,22 @@ git add data/processed/*.dvc && git commit -m "data: version processed dataset"
 
 Data version = the hashes in the committed `*.dvc` files; `dvc pull` restores the exact
 Parquet from MinIO for any commit. The GPU server never runs `dvc push`.
+
+## Data-availability manifest (Phase 6)
+
+The metadata references every sensor blob, but this server's copy is partial. The
+audited inventory:
+
+| Present | Missing (referenced by metadata, absent on disk) |
+|---|---|
+| All metadata JSON tables | All 5 RADAR sensors (keyframes + sweeps) |
+| All 6 cameras — keyframes **and** sweeps | LIDAR_TOP sweeps |
+| LIDAR_TOP keyframes | |
+
+`uv run nuscenes-data-engine manifest` cross-checks every `sample_data` record against
+the filesystem (one directory listing per referenced directory — minutes, not hours on
+NFS) and writes `data/processed/availability.parquet`: one row per record with
+`channel`, `modality`, `is_key_frame`, `scene_name`, and `present`. Downstream stages
+(the embedding job, future auto-labeling) filter on it instead of trusting metadata
+paths; the CLI exits non-zero if any **camera keyframe** — the working set — is
+missing.

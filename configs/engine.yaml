@@ -1,0 +1,18 @@
+# Phase 6 — data-engine config (embeddings, vector search, availability manifest).
+
+embedding:
+  model_name: google/siglip2-base-patch16-256
+  device: cuda            # cpu on machines without a GPU
+  batch_size: 64
+  thumbnail_max_px: 256
+  thumbnail_jpeg_quality: 80
+
+lancedb:
+  path: data/lancedb
+  table: frames
+
+search:
+  top_k: 12
+
+manifest:
+  out_path: data/processed/availability.parquet

@@ -1,5 +1,7 @@
 # nuscenes-data-engine
 
+[![CI](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml)
+
 End-to-end **MLOps pipeline for autonomous-vehicle perception** on the
 [nuScenes](https://www.nuscenes.org/) dataset. Raw multimodal sensor data is
 ingested, validated, and versioned; a 2D object detector is trained, tracked, and
@@ -12,10 +14,33 @@ API and monitored for drift — all tied together with CI/CD.
 
 ## Status
 
-**Phases 1–4 built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
-tracking, condition-sliced evaluation with gated registry promotion, and the promoted
-model (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind
-a FastAPI + Streamlit demo. Phase 5 (monitoring) remains a stub.
+**All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
+tracking, condition-sliced evaluation with gated registry promotion, the promoted model
+(`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
+FastAPI + Streamlit demo, and Evidently drift monitoring over the serving inputs with a
+two-job CI (quality + CPU smoke-train).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph GPU["GPU server (compute, infra-free)"]
+        NS[(nuScenes<br/>read-only)] --> ING[ingest + validate] --> PQ[(Parquet)]
+        PQ --> TR[train] --> EV[evaluate + promote] --> ML[(mlruns/<br/>registry)]
+        PQ --> REF[monitor build-reference]
+    end
+    subgraph INFRA["Infra machine (Docker)"]
+        MLS[MLflow server + registry]
+        API[FastAPI /predict] --> CAP[(requests.jsonl)]
+        ST[Streamlit demo] --> API
+        CAP --> DRIFT[Evidently drift report]
+        REFP[(reference parquet)] --> DRIFT
+    end
+    ML -- rsync --> MLS
+    ML -- "models:/…@production" --> API
+    REF -- rsync --> REFP
+    CI[GitHub Actions:<br/>quality + smoke-train] -.-> GPU & INFRA
+```
 
 ## Toolchain
 
@@ -34,6 +59,11 @@ Compute is split from ops so the GPU box never has to run infra:
 | Runs | `ingest`, `train`, `evaluate` — **infra-free**, writes plain files | MinIO, MLflow server + registry, FastAPI serving, Streamlit, Evidently, CI |
 | MLflow | logs to a local file store (`file:./mlruns`) | MLflow **server** owns the UI + model registry |
 | DVC | never pushes | `dvc add`/`push` into MinIO |
+
+**Remote execution:** run server-side stages straight from this repo — no manual
+ssh/pull — via `scripts/gpu-run.sh` / `make gpu-embed` / `make gpu-train`, and pull
+outputs back with `make sync-down`. Node inventory, GPU etiquette, and failure modes:
+[docs/GPU_SERVER.md](docs/GPU_SERVER.md).
 
 **Hand-off (rsync):** the server produces files; you sync them to the infra machine, which
 owns all versioning/serving:
@@ -65,6 +95,7 @@ Common tasks via the Makefile:
 make setup      # uv sync --extra dev
 make check      # ruff + mypy + pytest
 make infra-up   # [infra machine only] start MinIO + MLflow (docker compose)
+uv run pre-commit install   # one-time: enable the ruff/format/hygiene git hooks
 ```
 
 Heavy dependencies are opt-in extras so the base install stays light:
@@ -94,6 +125,7 @@ src/nuscenes_data_engine/
   evaluation/               mAP + condition-sliced metrics
   serving/                  FastAPI app
   monitoring/               Evidently drift reports
+  data_engine/              SigLIP embeddings, LanceDB store, semantic search
 app/                        Streamlit demo UI
 tests/                      pytest suite
 docs/                       DATA.md, EVALUATION.md
@@ -163,6 +195,54 @@ curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.p
   --image app/samples/day.jpg -n 30` — yolov8n@960 on an M-series MacBook CPU:
   p50 30 ms / p95 32 ms; the production yolov8m@960: p50 93 ms / p95 107 ms.
 
+## Monitoring (Phase 5)
+
+Evidently drift reports over the serving inputs — brightness, resolution, and
+detection-count distributions vs a training-data reference. Full design + demo results
+in [docs/MONITORING.md](docs/MONITORING.md).
+
+```bash
+# on the GPU server (has the images) — build the reference feature table:
+uv run nuscenes-data-engine monitor build-reference --condition day
+# rsync data/processed/monitoring_reference.parquet to the infra machine, then:
+
+make monitor    # drift report from the API's per-request capture (data/monitoring/)
+uv run nuscenes-data-engine monitor report --current <features.parquet|requests.jsonl>
+# -> runs/monitoring/drift_report.html + drift_summary.json
+```
+
+The API captures `{brightness, dims, n_detections, latency}` per request into a
+gitignored JSONL (`SERVING_CAPTURE_PATH`, blank to disable). The night-vs-day demo
+(`docs/MONITORING.md`) shows the report flagging brightness + detection-count drift.
+
+## Scene search (Phase 6a)
+
+Every camera keyframe is embedded with SigLIP2 into a LanceDB store; the API serves
+text, image, and similar-frame queries over it, and the Streamlit demo gets a
+**Scene search** tab (results render from thumbnails stored alongside the vectors, so
+the demo needs no dataset access).
+
+```bash
+# on the GPU server (has the images):
+uv run nuscenes-data-engine manifest        # availability check: metadata vs filesystem
+uv run nuscenes-data-engine embed           # ~205K frames -> data/lancedb (~3 GB)
+# rsync data/lancedb/ + data/processed/availability.parquet to the infra machine, then:
+
+uv run nuscenes-data-engine search "construction zone at night" -k 5
+curl "localhost:8000/search?q=pedestrian+crossing+in+rain&k=6"
+uv run nuscenes-data-engine query "SELECT is_night, count(*) FROM samples GROUP BY 1"  # DuckDB
+```
+
+Analytics examples live in [docs/ANALYTICS.md](docs/ANALYTICS.md); the availability
+manifest (why: radar/LiDAR-sweep files are absent on the server) is documented in
+[docs/DATA.md](docs/DATA.md).
+
+### Branch protection (manual, one-time)
+
+GitHub → Settings → Branches → Add rule for `main`: require a pull request before
+merging + require status checks **quality** and **smoke-train** (they appear in the
+picker after the first PR run).
+
 ## Build roadmap
 
 | Phase | Focus | Deliverable |
@@ -171,7 +251,13 @@ curl -s -F file=@app/samples/day.jpg localhost:8000/predict/annotated -o boxes.p
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
 | 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
-| 5 | Monitoring & CI/CD | Evidently drift reports, green CI |
+| 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
+| 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
+| 6b | VLM auto-labeling | Structured scene labels, evaluated against ground truth |
+| 6c | Dataset chat | LLM agent: text-to-SQL (DuckDB) + vector search |
+| 6d | Active learning | Embedding-mined hard examples → measurable retrain gain |
+
+Future work: Terraform-provisioned cloud deployment of the serving stack.
 
 ## License
 

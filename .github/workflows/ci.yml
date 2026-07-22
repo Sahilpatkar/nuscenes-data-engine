@@ -20,10 +20,10 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
-      # data extra so the ingestion/training/evaluation/validation unit tests run;
-      # train/serve extras (torch) stay out — their tests skip via importorskip.
-      - name: Install deps (base + dev + data)
-        run: uv sync --extra dev --extra data
+      # data + engine extras so the ingestion/validation/monitoring/data-engine unit
+      # tests run; train/serve extras (torch) stay out — their tests skip via importorskip.
+      - name: Install deps (base + dev + data + engine)
+        run: uv sync --extra dev --extra data --extra engine
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -34,4 +34,35 @@ jobs:
       - name: Tests (pytest)
         run: uv run pytest
 
-  # TODO(Phase 5): add a smoke-test training run on a tiny data slice.
+  smoke-train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      # uv.lock pins the CUDA torch build for linux (the GPU server); this job wants the
+      # small CPU wheel, so install torch/ultralytics outside the lock. Versions mirror
+      # uv.lock (torch 2.13.0 / ultralytics 8.4.96) — keep in sync when relocking.
+      - name: Install deps (base + dev, CPU torch outside the lock)
+        run: |
+          uv sync --extra dev
+          uv pip install --torch-backend=cpu "torch==2.13.0" "ultralytics==8.4.96"
+
+      - name: Sanity-check train stack
+        run: uv run --no-sync python -c "import torch, ultralytics; print(torch.__version__)"
+
+      - name: Cache yolov8n.pt
+        uses: actions/cache@v4
+        with:
+          path: weights/yolov8n.pt
+          key: yolov8n-pt
+
+      - name: 1-epoch CPU smoke train
+        run: uv run --no-sync pytest -m smoke_train tests/test_smoke_train.py -rA
