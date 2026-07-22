@@ -60,6 +60,11 @@ Compute is split from ops so the GPU box never has to run infra:
 | MLflow | logs to a local file store (`file:./mlruns`) | MLflow **server** owns the UI + model registry |
 | DVC | never pushes | `dvc add`/`push` into MinIO |
 
+**Remote execution:** run server-side stages straight from this repo — no manual
+ssh/pull — via `scripts/gpu-run.sh` / `make gpu-embed` / `make gpu-train`, and pull
+outputs back with `make sync-down`. Node inventory, GPU etiquette, and failure modes:
+[docs/GPU_SERVER.md](docs/GPU_SERVER.md).
+
 **Hand-off (rsync):** the server produces files; you sync them to the infra machine, which
 owns all versioning/serving:
 

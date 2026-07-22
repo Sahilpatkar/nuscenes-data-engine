@@ -5,6 +5,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup infra-up infra-down ingest validate train evaluate serve monitor \
+        manifest embed search gpu-run gpu-train gpu-embed gpu-manifest sync-down \
         test lint format typecheck check clean
 
 help:  ## Show this help.
@@ -20,6 +21,28 @@ infra-up:  ## [infra machine] Start MinIO + MLflow.
 
 infra-down:  ## [infra machine] Stop MinIO + MLflow.
 	docker compose down
+
+# --- Remote GPU-server execution (no manual ssh/pull; see docs/GPU_SERVER.md) ---
+GPU_SSH  ?= TRINITY
+GPU_NODE ?= trinity-2-18
+GPU_REPO ?= /home/mgaur/sahil/nuscenes_project
+
+gpu-run:  ## Run a CLI command on the GPU node at the current branch: make gpu-run CMD="embed --limit-scenes 5"
+	scripts/gpu-run.sh $(CMD)
+
+gpu-train:  ## Launch training on the GPU node (background; logs to gpu-run-*.log there).
+	scripts/gpu-run.sh --bg train
+
+gpu-embed:  ## Launch the full frame-embedding job on the GPU node (background).
+	scripts/gpu-run.sh --bg embed
+
+gpu-manifest:  ## Build the data-availability manifest on the server (CPU; head node is fine).
+	GPU_NODE=$(GPU_SSH) scripts/gpu-run.sh manifest
+
+sync-down:  ## Pull compute outputs off the GPU server (parquet, mlruns, lancedb).
+	rsync -a --partial --timeout=120 --exclude yolo/ $(GPU_SSH):$(GPU_REPO)/data/processed/ ./data/processed/
+	rsync -a --partial --timeout=120 $(GPU_SSH):$(GPU_REPO)/mlruns/ ./mlruns/
+	rsync -a --partial --timeout=120 $(GPU_SSH):$(GPU_REPO)/data/lancedb/ ./data/lancedb/
 
 # --- GPU-SERVER compute stages — infra-free (Phase 1+) ---
 ingest:  ## Phase 1: parse nuScenes -> Parquet + 2D projections.
