@@ -137,6 +137,7 @@ module = [
     "wandb.*",
     "httpx.*",
     "lancedb.*",
+    "torch.*",
 ]
 ignore_missing_imports = true
 
