@@ -308,6 +308,77 @@ def query(
     print(con.sql(sql))
 
 
+autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")
+app.add_typer(autolabel_app, name="autolabel")
+
+
+@autolabel_app.command("sample")
+def autolabel_sample(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Draw the stratified labeling sample (run where data/processed lives)."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.data_engine.autolabel.sampling import build_sample
+
+    cfg = load_yaml(config)
+    sample = build_sample(Path(get_settings().processed_dir), cfg.get("sample", {}))
+    out = Path(cfg.get("state", {}).get("dir", "data/autolabel")) / "sample.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sample.to_parquet(out, index=False)
+    logger.info(
+        "Sampled %d frames (%d in comparison subset) -> %s",
+        len(sample),
+        int(sample["in_opus_subset"].sum()),
+        out,
+    )
+
+
+@autolabel_app.command("submit")
+def autolabel_submit(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm the estimated spend."),
+    retry_missing: bool = typer.Option(
+        False, "--retry-missing", help="Only frames without a terminal result."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Size and price only; no API calls."),
+) -> None:
+    """Phase 6b: submit labeling batches to the Claude Batch API (PAID — needs --yes)."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_submit
+
+    run_submit(config, yes=yes, retry_missing=retry_missing, dry_run=dry_run)
+
+
+@autolabel_app.command("status")
+def autolabel_status(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Poll the processing status of submitted batches."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_status
+
+    run_status(config)
+
+
+@autolabel_app.command("collect")
+def autolabel_collect(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Download ended batches and rebuild the validated labels table."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_collect
+
+    run_collect(config)
+
+
+@autolabel_app.command("eval")
+def autolabel_eval(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Evaluate collected labels against nuScenes ground truth."""
+    from nuscenes_data_engine.data_engine.autolabel.evaluate import run_eval
+
+    summary = run_eval(config)
+    logger.info("Eval summary: %s", summary)
+
+
 monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
 app.add_typer(monitor_app, name="monitor")
 
