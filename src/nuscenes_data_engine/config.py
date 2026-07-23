@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     search_device: str = Field(default="cpu")
     search_top_k: int = Field(default=12)
 
+    # --- Dataset chat (Phase 6c) ---
+    # "local" talks to any OpenAI-compatible server (Ollama on this machine by default,
+    # vLLM elsewhere via CHAT_BASE_URL); "anthropic" uses the Claude API with the same
+    # ANTHROPIC_API_KEY as auto-labeling — the deployment story is a provider flip.
+    chat_provider: str = Field(default="local")
+    chat_base_url: str = Field(default="http://localhost:11434/v1")
+    chat_model: str = Field(default="qwen2.5:14b")
+    chat_anthropic_model: str = Field(default="claude-opus-4-8")
+    chat_log_path: str = Field(default="data/chat/log.jsonl")
+
 
 def get_settings() -> Settings:
     """Return a freshly-loaded :class:`Settings` instance."""

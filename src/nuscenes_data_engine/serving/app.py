@@ -7,6 +7,7 @@ Endpoints:
     GET  /search?q=&k=              semantic text search over embedded frames.
     POST /search/image              semantic search by example image.
     GET  /search/similar/{token}    frames similar to a stored frame.
+    POST /chat                      dataset-chat agent (text-to-SQL + vector search).
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ from nuscenes_data_engine.config import get_settings
 from nuscenes_data_engine.monitoring.features import image_brightness
 from nuscenes_data_engine.serving.model import load_production_model
 from nuscenes_data_engine.serving.schemas import (
+    ChatRequest,
+    ChatResponse,
+    ChatStep,
     Detection,
     HealthResponse,
     PredictResponse,
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("Model load failed; /health reports degraded, /predict returns 503")
         app.state.model, app.state.model_version = None, None
     app.state.search_engine = None  # built lazily on the first /search call
+    app.state.chat_catalog = None  # built lazily on the first /chat call
     yield
 
 
@@ -68,12 +73,17 @@ app = FastAPI(title="nuScenes Data Engine — Detection API", version=__version_
 def health(request: Request) -> HealthResponse:
     """Liveness probe."""
     state = request.app.state
+    settings = state.settings
     return HealthResponse(
         status="ok",
         model_loaded=state.model is not None,
         model_version=state.model_version,
         search_ready=state.search_engine is not None
-        or Path(state.settings.search_lancedb_path).is_dir(),
+        or Path(settings.search_lancedb_path).is_dir(),
+        chat_provider=settings.chat_provider,
+        chat_model=settings.chat_model
+        if settings.chat_provider == "local"
+        else settings.chat_anthropic_model,
     )
 
 
@@ -220,6 +230,76 @@ def search_similar(request: Request, token: str, k: int | None = None) -> Search
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _search_response(results, f"similar:{token}", engine.model_name)
+
+
+def _get_chat_catalog(request: Request) -> Any:
+    """Open (once) the DuckDB catalog; 503 when the processed tables are absent."""
+    if request.app.state.chat_catalog is None:
+        from nuscenes_data_engine.data_engine.chat.catalog import catalog_tables, open_catalog
+
+        settings = request.app.state.settings
+        con = open_catalog(
+            Path(settings.processed_dir),
+            labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet",
+        )
+        if not catalog_tables(con):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Chat unavailable: no Parquet tables under {settings.processed_dir}. "
+                "Mount/sync data/processed.",
+            )
+        request.app.state.chat_catalog = con
+    return request.app.state.chat_catalog
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: Request, body: ChatRequest) -> ChatResponse:
+    """Answer a dataset question via the tool-calling agent (SQL + vector search)."""
+    from nuscenes_data_engine.data_engine.chat import agent
+    from nuscenes_data_engine.data_engine.chat.transports import TransportError, make_transport
+
+    settings = request.app.state.settings
+    con = _get_chat_catalog(request)
+    try:
+        engine = _get_search_engine(request)
+    except HTTPException:
+        engine = None  # SQL-only chat still works without the LanceDB store
+    try:
+        transport = make_transport(settings)
+    except (TransportError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"Chat unavailable: {exc}") from exc
+
+    start = time.perf_counter()
+    try:
+        result = agent.answer(
+            body.message,
+            transport=transport,
+            con=con,
+            search_engine=engine,
+            history=[turn.model_dump() for turn in body.history],
+            log_path=Path(settings.chat_log_path),
+        )
+    except TransportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    logger.info(
+        "chat %r: %d steps, %d frames in %.0f ms",
+        body.message[:80],
+        len(result.steps),
+        len(result.frames),
+        (time.perf_counter() - start) * 1000,
+    )
+    return ChatResponse(
+        answer=result.answer,
+        model=result.model,
+        steps=[ChatStep(**step) for step in result.steps],
+        frames=[
+            SearchResult(
+                thumbnail_b64=base64.b64encode(frame["thumbnail"]).decode(),
+                **{k: v for k, v in frame.items() if k not in ("thumbnail", "filename")},
+            )
+            for frame in result.frames
+        ],
+    )
 
 
 @app.post("/predict/annotated")

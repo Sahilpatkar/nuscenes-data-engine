@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.logging import RichHandler
@@ -329,14 +330,68 @@ def query(
     processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
 ) -> None:
     """Phase 6: ad-hoc DuckDB analytics over the processed Parquet tables."""
-    import duckdb
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
 
-    con = duckdb.connect()
-    for name in ("samples", "annotations", "availability"):
-        path = processed_dir / f"{name}.parquet"
-        if path.is_file():
-            con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
-    print(con.sql(sql))
+    print(open_catalog(processed_dir).sql(sql))
+
+
+@app.command()
+def chat(
+    question: str = typer.Argument("", help="One-shot question (omit with --interactive)."),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="REPL mode."),
+    provider: str | None = typer.Option(None, "--provider", help="local | anthropic."),
+    model: str | None = typer.Option(None, "--model", help="Override the chat model."),
+    base_url: str | None = typer.Option(None, "--base-url", help="OpenAI-compatible server."),
+    processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+) -> None:
+    """Phase 6c: chat with the dataset (text-to-SQL + vector search agent)."""
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.chat import agent
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.transports import make_transport
+
+    if not question and not interactive:
+        raise typer.BadParameter("Provide a question or use --interactive.")
+
+    settings = get_settings()
+    transport = make_transport(settings, provider=provider, model=model, base_url=base_url)
+    con = open_catalog(
+        processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
+    )
+    try:
+        from nuscenes_data_engine.data_engine.search import SearchEngine
+
+        engine: Any | None = SearchEngine(
+            Path(settings.search_lancedb_path), settings.search_table,
+            settings.search_model_name, device=settings.search_device,
+        )
+    except (ImportError, FileNotFoundError) as exc:
+        logger.warning("Vector search unavailable (%s) — SQL-only chat.", exc)
+        engine = None
+
+    history: list[dict[str, Any]] = []
+    while True:
+        if not question:
+            question = typer.prompt("you").strip()
+            if question.lower() in ("exit", "quit", "q", ""):
+                break
+        result = agent.answer(
+            question, transport=transport, con=con, search_engine=engine,
+            history=history, log_path=Path(settings.chat_log_path),
+        )
+        for step in result.steps:
+            logger.info("  [%s] %s -> %s", step["tool"], step["input"], step["output"])
+        print(f"\n{result.answer}\n")
+        if result.frames:
+            tokens = ", ".join(frame["sample_data_token"] for frame in result.frames)
+            logger.info("Example frames: %s", tokens)
+        if not interactive:
+            break
+        history += [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": result.answer},
+        ]
+        question = ""
 
 
 autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")

@@ -66,3 +66,6 @@ app/samples/*
 
 # Active-learning experiment state: split, failures, clusters, arms, results (Phase 6d)
 /data/active_learning/
+
+# Phase 6c dataset-chat query log
+/data/chat/

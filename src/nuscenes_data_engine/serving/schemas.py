@@ -37,6 +37,8 @@ class HealthResponse(BaseModel):
     model_loaded: bool = False
     model_version: str | None = None
     search_ready: bool = False
+    chat_provider: str = ""
+    chat_model: str = ""
 
 
 class SearchResult(BaseModel):
@@ -62,3 +64,38 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
     query: str = Field(description="The text query, or a marker for image/similar queries.")
     embedding_model: str
+
+
+class ChatTurn(BaseModel):
+    """One prior conversation turn (client-held history; the server is stateless)."""
+
+    role: str = Field(description="'user' or 'assistant'.")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Request body for the ``/chat`` endpoint."""
+
+    message: str = Field(min_length=1, description="The user's question.")
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ChatStep(BaseModel):
+    """One tool invocation the agent made while answering."""
+
+    tool: str
+    input: dict[str, object] = Field(default_factory=dict)
+    output: str = Field(description="Compact human-readable outcome summary.")
+
+
+class ChatResponse(BaseModel):
+    """Response body for the ``/chat`` endpoint."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    answer: str
+    model: str = Field(description="The chat model that produced the answer.")
+    steps: list[ChatStep] = Field(default_factory=list)
+    frames: list[SearchResult] = Field(
+        default_factory=list, description="Example frames the agent attached."
+    )

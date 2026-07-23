@@ -68,11 +68,20 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-sqlite:///mlruns/mlflow.db}
       SERVING_DEVICE: ${SERVING_DEVICE:-cpu}
       SERVING_WEIGHTS: ${SERVING_WEIGHTS:-}
+      # Phase 6c dataset chat: default = Ollama on the host Mac; flip to
+      # CHAT_PROVIDER=anthropic (+ ANTHROPIC_API_KEY) for a keyed deployment.
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-local}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-http://host.docker.internal:11434/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:14b}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./mlruns:/app/mlruns  # rw: sqlite needs journal writes even for reads
       - ./weights:/app/weights:ro  # lets SERVING_WEIGHTS=weights/<x>.pt work in-container
       - ./data/monitoring:/app/data/monitoring  # drift-capture JSONL persists on the host
       - ./data/lancedb:/app/data/lancedb:ro  # frame-embedding store for /search
+      - ./data/processed:/app/data/processed:ro  # Parquet tables for /chat text-to-SQL
+      - ./data/autolabel:/app/data/autolabel:ro  # VLM labels view for /chat
+      - ./data/chat:/app/data/chat  # agent query log persists on the host
       - ./.cache:/app/.cache  # HF model cache: avoid re-downloading SigLIP per restart
     ports:
       - "8000:8000"

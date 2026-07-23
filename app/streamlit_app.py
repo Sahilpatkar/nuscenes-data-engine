@@ -1,8 +1,9 @@
-"""Streamlit demo UI: detection (Phase 4) + semantic scene search (Phase 6a).
+"""Streamlit demo UI: detection (Phase 4), scene search (6a), dataset chat (6c).
 
 A plain HTTP client of the FastAPI service — it never loads models itself, so
 `docker compose up api streamlit` demonstrates the real topology. Each tab degrades
-independently when its backend piece (detector, search index) is unavailable.
+independently when its backend piece (detector, search index, chat model) is
+unavailable.
 """
 
 from __future__ import annotations
@@ -152,6 +153,74 @@ def render_search(health: dict) -> None:
         st.info("Type a scene description or upload an example image.")
 
 
+def _render_chat_answer(body: dict) -> None:
+    """One assistant message: the answer, the agent's working, example frames."""
+    st.markdown(body["answer"])
+    if body.get("steps"):
+        with st.expander(f"Agent steps ({len(body['steps'])})"):
+            for step in body["steps"]:
+                detail = step["input"].get("sql") or step["input"].get("query") or step["input"]
+                st.markdown(f"`{step['tool']}` → {step['output']}")
+                if step["tool"] == "run_sql" and step["input"].get("sql"):
+                    st.code(step["input"]["sql"], language="sql")
+                elif detail:
+                    st.caption(str(detail))
+    if body.get("frames"):
+        columns = st.columns(min(len(body["frames"]), 4))
+        for i, frame in enumerate(body["frames"]):
+            with columns[i % len(columns)]:
+                st.image(base64.b64decode(frame["thumbnail_b64"]), use_container_width=True)
+                conditions = ("night" if frame["is_night"] else "day") + (
+                    ", rain" if frame["is_rain"] else ""
+                )
+                st.caption(f"**{frame['scene_name']}** · {frame['location']} · {conditions}")
+
+
+def render_chat(health: dict) -> None:
+    st.caption(
+        f"Agent: `{health.get('chat_model', '?')}` via `{health.get('chat_provider', '?')}` — "
+        "text-to-SQL over the dataset tables + semantic frame search. "
+        "Every query is logged to `data/chat/log.jsonl`."
+    )
+    if "chat_messages" not in st.session_state:
+        st.session_state["chat_messages"] = []
+
+    for message in st.session_state["chat_messages"]:
+        with st.chat_message(message["role"]):
+            if message["role"] == "assistant" and isinstance(message.get("body"), dict):
+                _render_chat_answer(message["body"])
+            else:
+                st.markdown(message["content"])
+
+    question = st.chat_input("How many night scenes are there per location?")
+    if not question:
+        return
+    with st.chat_message("user"):
+        st.markdown(question)
+    history = [
+        {"role": m["role"], "content": m["content"]} for m in st.session_state["chat_messages"]
+    ]
+    with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
+        try:
+            resp = requests.post(
+                f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600
+            )
+        except requests.RequestException as exc:
+            st.error(f"Chat request failed: {exc}")
+            return
+        if resp.status_code != 200:
+            detail = resp.json().get("detail", resp.text) if resp.text else resp.text
+            st.error(f"API returned {resp.status_code}: {detail}")
+            return
+        body = resp.json()
+        _render_chat_answer(body)
+
+    st.session_state["chat_messages"] += [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": body["answer"], "body": body},
+    ]
+
+
 def main() -> None:
     st.set_page_config(page_title="nuScenes Data Engine — Demo", page_icon="🚗", layout="wide")
     st.title("nuScenes Data Engine")
@@ -161,11 +230,13 @@ def main() -> None:
         st.error(f"Serving API unreachable at {API_URL} — start it with `make serve`.")
         st.stop()
 
-    detect_tab, search_tab = st.tabs(["🔍 Detect", "🗂 Scene search"])
+    detect_tab, search_tab, chat_tab = st.tabs(["🔍 Detect", "🗂 Scene search", "💬 Ask the dataset"])
     with detect_tab:
         render_detect(health)
     with search_tab:
         render_search(health)
+    with chat_tab:
+        render_chat(health)
 
 
 if __name__ == "__main__":

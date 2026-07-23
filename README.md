@@ -255,6 +255,21 @@ uv run nuscenes-data-engine autolabel submit --yes      # paid run (needs ANTHRO
 uv run nuscenes-data-engine autolabel collect && uv run nuscenes-data-engine autolabel eval
 ```
 
+## Chat with the dataset (Phase 6c)
+
+A tool-calling LLM agent answers natural-language questions by writing DuckDB SQL
+over the Parquet tables and running semantic vector search over the frame
+embeddings — returning numbers *with example frames*, every query logged. Runs $0
+on a local model (Ollama, `qwen2.5:14b`) and flips to the Claude API for
+deployment via `CHAT_PROVIDER=anthropic`. Design, SQL-safety guard, and example
+transcripts: [docs/DATASET_CHAT.md](docs/DATASET_CHAT.md).
+
+```bash
+brew install ollama && brew services start ollama && ollama pull qwen2.5:14b
+uv run nuscenes-data-engine chat "How many night scenes are there per location?"
+uv run nuscenes-data-engine chat -i     # REPL; or use the Streamlit "Ask the dataset" tab
+```
+
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
