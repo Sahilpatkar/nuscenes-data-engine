@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.config import get_settings
-from nuscenes_data_engine.training.runtime import REPO_ROOT, configure_ultralytics
+from nuscenes_data_engine.training.runtime import REPO_ROOT, RUNS_DIR, configure_ultralytics
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -152,9 +152,11 @@ def train_model(
     run_name = _run_name(weights, n_imgsz, n_epochs, run_suffix)
 
     # Ultralytics uses `project` as BOTH the on-disk output dir and the W&B project name
-    # (slashes sanitized), so use a clean relative name — the run lands in the user's
-    # `nuscenes-data-engine` W&B project and outputs under ./<project>/<run_name>.
-    project = settings.wandb_project if use_wandb else "runs"
+    # (slashes sanitized), so with W&B on it must stay a clean relative name — the run
+    # lands in the user's `nuscenes-data-engine` W&B project. Without W&B, use the
+    # absolute repo runs dir: Ultralytics >=8.4 anchors relative project paths under its
+    # own runs_dir/task, which would scatter outputs (runs/detect/runs/<name>).
+    project = settings.wandb_project if use_wandb else str(RUNS_DIR)
 
     tracking_uri = settings.mlflow_tracking_uri or tracking.get("mlflow_tracking_uri")
     _set_up_experiment(mlflow, tracking_uri, experiment)
