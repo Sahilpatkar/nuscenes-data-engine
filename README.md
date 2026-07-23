@@ -12,6 +12,9 @@ API and monitored for drift — all tied together with CI/CD.
 > is deliberately production-grade. See [nuscenes-mlops-project-plan.md](nuscenes-mlops-project-plan.md)
 > for the full design and rationale.
 
+**📖 Full project documentation — objective, architecture, decisions, results,
+model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.md)**
+
 ## Status
 
 **All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow

@@ -116,9 +116,9 @@ def schema_prompt(tables: list[str]) -> str:
         "annotations": (
             "annotations — one row per projected 2D box (~1.1M):\n"
             "  annotation_token, sample_data_token (joins samples), sample_token, channel,\n"
-            "  category_name (raw nuScenes, e.g. vehicle.car), category_group (detection\n"
-            "  taxonomy: car|truck|bus|trailer|construction_vehicle|motorcycle|bicycle|\n"
-            "  pedestrian|traffic_cone|barrier; NULL = outside taxonomy),\n"
+            "  category_name (raw nuScenes, e.g. vehicle.car), category_group (detector\n"
+            "  taxonomy: car|truck|bus|pedestrian|bicycle; NULL = outside taxonomy —\n"
+            "  use category_name for anything else, e.g. movable_object.trafficcone),\n"
             "  visibility_token ('1'..'4', 4 = fully visible), num_lidar_pts, num_radar_pts,\n"
             "  x_min, y_min, x_max, y_max, bbox_area, plus the same scene columns as samples"
         ),
