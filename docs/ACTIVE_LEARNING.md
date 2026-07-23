@@ -90,13 +90,65 @@ run when configured.
 
 ## Results
 
-_To be filled after the TRINITY runs._
-
-### Failure clusters
-
-_To be filled: cluster table + what the clusters correspond to visually._
+All three arms trained on TRINITY (RTX 3080 Ti, ~20 min/arm), evaluated on the
+identical 6,019-frame CAM_FRONT val split (602 night).
 
 ### Three-arm comparison
 
-_To be filled: report.md table + interpretation (mined vs random delta, overall and
-night)._
+| arm | train imgs | overall mAP50 | overall mAP50-95 | night mAP50 | night mAP50-95 | Δ overall | Δ night |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 7,035 | 0.4351 | 0.2477 | 0.2894 | 0.1667 | — | — |
+| mined | 8,535 | 0.4568 | 0.2637 | 0.2997 | **0.1739** | +0.0160 | +0.0072 |
+| random | 8,535 | 0.4872 | **0.2817** | 0.2711 | 0.1619 | **+0.0340** | −0.0048 |
+
+**The headline result is negative — and instructive: the random control beat
+similarity-mining on overall mAP (+0.034 vs +0.016).** Diversity explains it:
+
+- The 1,500 random frames span **501 scenes** (top-10 scenes hold 4.8% of frames);
+  the 1,500 mined frames span only **219 scenes** (top-10 hold 21.3%, one scene
+  contributes 38 frames). Embedding-similarity mining pulls near-duplicates around
+  each failure centroid, so each mined frame adds less new information.
+- The mined arm was nonetheless the only one to improve the **night** slice
+  (+0.007 vs random's −0.005) — but on a 602-frame slice this is within noise;
+  don't over-read it.
+
+### Why the mined set contains no night frames
+
+The sweep *did* show the expected quality gap (night mAP50-95 0.167 vs 0.248
+overall), but the acquisition score didn't translate it into night mining:
+
+- `failure_score = n_fn + 0.5·n_low_conf` counts **absolute** misses, so it ranks
+  crowded frames first: the top-1,000 failure frames average **9.3 GT boxes vs 4.8
+  corpus-wide**, and only 1.5% of them are night (night frames simply contain fewer
+  annotated objects).
+- Per-object FN *rates* are similar (day 30.5%, night 27.1% at conf 0.05) — the
+  night mAP gap comes mostly from confidence/localization quality, which this
+  score doesn't see.
+
+Consequently all 8 failure clusters are day-dominated (only cluster 7 has any
+night members, 16%), and the mined set is 0% night vs the pool's ~12.7%.
+
+| cluster | size | night share | mean failure score |
+|---:|---:|---:|---:|
+| 0 | 232 | 0.00 | 4.88 |
+| 1 | 141 | 0.00 | 5.20 |
+| 2 | 147 | 0.00 | 4.94 |
+| 3 | 132 | 0.00 | 4.74 |
+| 4 | 109 | 0.00 | 6.92 |
+| 5 | 38 | 0.00 | 5.16 |
+| 6 | 109 | 0.00 | 4.29 |
+| 7 | 92 | 0.16 | 4.93 |
+
+### Takeaways for the next iteration
+
+1. **Add a diversity term** — cap frames per scene (or per near-duplicate cluster)
+   during mining; the 21% top-10-scene concentration is the main reason mined lost.
+2. **Rate-based acquisition** — score `n_fn / n_gt` (or calibrated-confidence
+   error) instead of absolute counts, so sparse night/edge-case frames can rank.
+3. **Stratified quotas** — reserve part of the mining budget for underrepresented
+   slices (night, rain) regardless of failure rank.
+4. **Random is a strong baseline** — any acquisition function should be gated on
+   beating an equal-budget random control, exactly as this harness does.
+
+Runs: MLflow `nuscenes-yolo` (three `*_al-*` runs, registry untouched) and W&B
+[`al-baseline` / `al-mined` / `al-random` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
