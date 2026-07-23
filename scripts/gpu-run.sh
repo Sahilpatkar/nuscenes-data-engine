@@ -32,8 +32,9 @@ if [ "$1" = "raw" ]; then
   shift
   REMOTE_CMD="$*"
 else
-  # %q-quote each arg so multi-word queries survive the remote shell.
-  REMOTE_CMD="CUDA_VISIBLE_DEVICES=$DEVICES uv run nuscenes-data-engine$(printf ' %q' "$@")"
+  # %q-quote each arg so multi-word queries survive the remote shell. `env` (not a
+  # bare VAR=val prefix) so the command also works under `nohup` in --bg mode.
+  REMOTE_CMD="env CUDA_VISIBLE_DEVICES=$DEVICES uv run nuscenes-data-engine$(printf ' %q' "$@")"
 fi
 
 SETUP="cd $REPO && git fetch origin --quiet && git checkout --quiet $BRANCH \

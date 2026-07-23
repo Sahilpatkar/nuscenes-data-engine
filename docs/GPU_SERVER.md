@@ -83,7 +83,8 @@ GNU-rsync flags like `--info=progress2` don't exist.
 | `ingest`, `validate`, `manifest` | `TRINITY` (head) | CPU + NFS metadata scans; no GPU needed |
 | `train`, `evaluate` | GPU node | CUDA; multi-GPU via `--device 0,1` |
 | `embed` | GPU node | SigLIP over ~205K frames (~85 min on one 3080 Ti); resumable per scene — safe to kill and relaunch |
-| `search`, `query`, `monitor report` | either / this machine | need only the synced store/parquet |
+| `autolabel sample/submit/status/collect` | `TRINITY` (head) | needs the images + outbound HTTPS; network-bound (Claude Batch API) |
+| `search`, `query`, `monitor report`, `autolabel eval` | either / this machine | need only the synced store/parquet |
 | serving, Streamlit, MLflow UI, Docker | this machine only | the server never runs infra |
 
 ## Failure modes seen in practice

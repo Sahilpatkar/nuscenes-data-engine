@@ -173,13 +173,26 @@ def evaluate(
     register: bool = typer.Option(
         False, "--register", help="Register + promote (staging->production) in MLflow."
     ),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
     """Phase 3: compute overall + condition-sliced mAP and (optionally) promote the model."""
     from nuscenes_data_engine.evaluation.evaluate import run_evaluation
+    from nuscenes_data_engine.tracking import wandb_run
 
-    report = run_evaluation(
-        config, train_config, weights=weights, device=device, imgsz=imgsz, register=register
-    )
+    with wandb_run(
+        "evaluate",
+        config={"weights": str(weights) if weights else None, "imgsz": imgsz},
+        enabled=wandb,
+    ) as run:
+        report = run_evaluation(
+            config, train_config, weights=weights, device=device, imgsz=imgsz, register=register
+        )
+        if run is not None:
+            run.log({f"overall_{k}": v for k, v in report["overall"].items()})
+            for name, metrics in report["slices"].items():
+                tag = name.split("/")[-1]
+                run.log({f"{tag}_{k}": v for k, v in metrics.items()})
+            run.summary["promotion_gate_passed"] = report["passed"]
     o = report["overall"]
     logger.info(
         "== Overall == mAP50=%.3f mAP50-95=%.3f P=%.3f R=%.3f",
@@ -246,11 +259,29 @@ def embed(
     config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
     limit_scenes: int | None = typer.Option(None, "--limit-scenes", help="First N scenes only."),
     rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the vector store."),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
     """Phase 6a: embed camera keyframes into the LanceDB frame store."""
-    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+    import time
 
-    summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+    from nuscenes_data_engine.data_engine.embeddings import run_embedding
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run(
+        "embed", config={"limit_scenes": limit_scenes, "rebuild": rebuild}, enabled=wandb
+    ) as run:
+        start = time.perf_counter()
+        summary = run_embedding(config, limit_scenes=limit_scenes, rebuild=rebuild)
+        if run is not None:
+            duration = time.perf_counter() - start
+            run.log(
+                {
+                    **{k: v for k, v in summary.items() if isinstance(v, int | float)},
+                    "duration_s": duration,
+                    "frames_per_s": summary["frames_added"] / duration if duration else 0,
+                }
+            )
+            run.config.update({"model": summary["model"]})
     logger.info("Embed summary: %s", summary)
 
 
@@ -306,6 +337,111 @@ def query(
         if path.is_file():
             con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path}')")
     print(con.sql(sql))
+
+
+autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")
+app.add_typer(autolabel_app, name="autolabel")
+
+
+@autolabel_app.command("sample")
+def autolabel_sample(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Draw the stratified labeling sample (run where data/processed lives)."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.data_engine.autolabel.sampling import build_sample
+
+    cfg = load_yaml(config)
+    sample = build_sample(Path(get_settings().processed_dir), cfg.get("sample", {}))
+    out = Path(cfg.get("state", {}).get("dir", "data/autolabel")) / "sample.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sample.to_parquet(out, index=False)
+    logger.info(
+        "Sampled %d frames (%d in comparison subset) -> %s",
+        len(sample),
+        int(sample["in_opus_subset"].sum()),
+        out,
+    )
+
+
+@autolabel_app.command("submit")
+def autolabel_submit(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm the estimated spend."),
+    retry_missing: bool = typer.Option(
+        False, "--retry-missing", help="Only frames without a terminal result."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Size and price only; no API calls."),
+    provider: str | None = typer.Option(
+        None, "--provider", help="anthropic (paid Batch API) | local (vLLM server, free)."
+    ),
+) -> None:
+    """Phase 6b: run the labeling — Claude Batch API (paid, needs --yes) or local vLLM."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_submit
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run(
+        "autolabel-submit",
+        config={"retry_missing": retry_missing, "provider": provider},
+        enabled=False if dry_run else None,
+    ) as run:
+        summary = run_submit(
+            config, yes=yes, retry_missing=retry_missing, dry_run=dry_run, provider=provider
+        )
+        if run is not None:
+            run.log(
+                {"submitted": summary["submitted"], "estimated_cost_usd": summary["estimated_cost"]}
+            )
+
+
+@autolabel_app.command("status")
+def autolabel_status(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="anthropic | local."),
+) -> None:
+    """Poll the processing status of submitted batches."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_status
+
+    run_status(config, provider=provider)
+
+
+@autolabel_app.command("collect")
+def autolabel_collect(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="anthropic | local."),
+) -> None:
+    """Download ended batches and rebuild the validated labels table."""
+    from nuscenes_data_engine.data_engine.autolabel.batch import run_collect
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("autolabel-collect") as run:
+        labels = run_collect(config, provider=provider)
+        if run is not None and not labels.empty:
+            counts = labels.groupby(["model", "parse_status"]).size()
+            run.log({f"{model}/{status}": int(n) for (model, status), n in counts.items()})
+
+
+@autolabel_app.command("eval")
+def autolabel_eval(
+    config: Path = typer.Option(Path("configs/autolabel.yaml"), "--config", "-c"),
+) -> None:
+    """Evaluate collected labels against nuScenes ground truth."""
+    from nuscenes_data_engine.data_engine.autolabel.evaluate import run_eval
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("autolabel-eval") as run:
+        summary = run_eval(config)
+        if run is not None:
+            for model, metrics in summary.items():
+                if isinstance(metrics, dict):
+                    run.log(
+                        {
+                            f"{model}/{k}": v
+                            for k, v in metrics.items()
+                            if isinstance(v, int | float)
+                        }
+                    )
+    logger.info("Eval summary: %s", summary)
 
 
 monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
@@ -381,6 +517,20 @@ def monitor_report(
     )
     summary = summarize_drift(snapshot)
     html_path, _ = save_drift_report(snapshot, out_dir)
+
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("monitor-drift", config={"reference": str(reference)}) as run:
+        if run is not None:
+            metrics: dict[str, float] = {
+                "dataset_drift": float(summary["dataset_drift"]),
+                "n_drifted": float(summary["n_drifted"]),
+                "share_drifted": float(summary["share_drifted"]),
+            }
+            for column, verdict in summary["columns"].items():
+                metrics[f"{column}_drift"] = float(verdict.get("drift_detected", False))
+                metrics[f"{column}_score"] = float(verdict.get("score", 0.0))
+            run.log(metrics)
     for column, verdict in summary["columns"].items():
         logger.info(
             "%-10s %s (score %.3g)",

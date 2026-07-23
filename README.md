@@ -156,6 +156,9 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 - **Weights & Biases** (optional, cloud): add `--wandb` and set `WANDB_API_KEY` in `.env`
   (or `uv run wandb login`). Live metrics, PR curves, and validation-prediction images
   stream to your W&B project. `WANDB_MODE=offline` logs to `./wandb` for later `wandb sync`.
+  Once configured, **every pipeline stage** logs a W&B run automatically (job types:
+  `embed`, `evaluate`, `monitor-drift`, `autolabel-*`) — opt out per run with
+  `--no-wandb`, or globally with `WANDB_MODE=disabled`.
 - Orchestrated variant (Dagster):
   `uv run dagster dev -m nuscenes_data_engine.training.pipeline`.
 
@@ -237,6 +240,21 @@ Analytics examples live in [docs/ANALYTICS.md](docs/ANALYTICS.md); the availabil
 manifest (why: radar/LiDAR-sweep files are absent on the server) is documented in
 [docs/DATA.md](docs/DATA.md).
 
+## Auto-labeling (Phase 6b)
+
+A stratified 5,000-frame sample is labeled by Claude (`claude-haiku-4-5`, plus a
+500-frame `claude-opus-4-8` comparison subset) through the Batch API with structured
+outputs, then scored against nuScenes ground truth — condition flags, per-class object
+counts, and cheap-vs-frontier labeler agreement. Methodology, sampling strategy, cost
+(~$15), and the runbook: [docs/AUTOLABEL_EVAL.md](docs/AUTOLABEL_EVAL.md).
+
+```bash
+uv run nuscenes-data-engine autolabel sample            # stratified sample (deterministic)
+uv run nuscenes-data-engine autolabel submit --dry-run  # sizing + cost, no API calls
+uv run nuscenes-data-engine autolabel submit --yes      # paid run (needs ANTHROPIC_API_KEY)
+uv run nuscenes-data-engine autolabel collect && uv run nuscenes-data-engine autolabel eval
+```
+
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
@@ -253,7 +271,7 @@ picker after the first PR run).
 | 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
 | 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
-| 6b | VLM auto-labeling | Structured scene labels, evaluated against ground truth |
+| 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
 | 6c | Dataset chat | LLM agent: text-to-SQL (DuckDB) + vector search |
 | 6d | Active learning | Embedding-mined hard examples → measurable retrain gain |
 
