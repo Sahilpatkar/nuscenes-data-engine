@@ -3511,6 +3511,7 @@ engine = [
     { name = "duckdb" },
     { name = "httpx" },
     { name = "lancedb" },
+    { name = "scikit-learn" },
     { name = "transformers" },
 ]
 serve = [
@@ -3558,6 +3559,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "scikit-learn", marker = "extra == 'engine'", specifier = ">=1.4" },
     { name = "streamlit", marker = "extra == 'serve'", specifier = ">=1.36" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.2" },
     { name = "transformers", marker = "extra == 'engine'", specifier = ">=4.53" },

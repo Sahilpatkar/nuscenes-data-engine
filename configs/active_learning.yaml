@@ -1,0 +1,35 @@
+# Phase 6d — embedding-based active-learning experiment config.
+
+split:
+  baseline_frac: 0.25      # fraction of official-train scenes in the reduced baseline
+  seed: 64
+  channel: CAM_FRONT
+
+sweep:                     # baseline-detector failure sweep over the official val split
+  conf_low: 0.05           # prediction threshold (catch low-confidence hits)
+  conf_hit: 0.40           # matched below this counts as a low-confidence hit
+  iou: 0.5
+  visibility_min: "2"      # ignore GT boxes under 40% visibility when scoring failures
+  top_k_failures: 1000     # frames fed into clustering
+  batch: 64
+
+mining:
+  n_clusters: 8
+  n_mine: 1500             # frames added in the mined arm (and the random control)
+  seed: 64
+  overfetch: 4             # per-centroid candidate multiplier before dedupe
+
+train:                     # per-arm training (overlays configs/train.yaml)
+  model: yolov8n.pt
+  imgsz: 640
+  epochs: 20
+  batch: 16
+
+state:
+  dir: data/active_learning
+
+eval:
+  config: configs/eval.yaml
+
+train_base_config: configs/train.yaml
+engine_config: configs/engine.yaml   # LanceDB store (Phase 6a) used for mining

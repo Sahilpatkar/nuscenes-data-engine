@@ -63,3 +63,6 @@ app/samples/*
 
 # Auto-labeling state: sample, batch ids, raw results, labels, eval (Phase 6b)
 /data/autolabel/
+
+# Active-learning experiment state: split, failures, clusters, arms, results (Phase 6d)
+/data/active_learning/
