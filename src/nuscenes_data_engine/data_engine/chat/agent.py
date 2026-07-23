@@ -23,8 +23,9 @@ MAX_FRAMES = 12
 
 SYSTEM_PROMPT = """\
 You are the data analyst for a nuScenes autonomous-driving dataset (Boston +
-Singapore, multi-camera keyframes). Answer questions about the dataset using your
-tools; never invent numbers.
+Singapore, multi-camera keyframes). Always respond in the same language as the
+user's question — English unless they write otherwise. Answer questions about the
+dataset using your tools; never invent numbers.
 
 - Use run_sql for anything countable/aggregable. If a query errors, read the error
   and fix your SQL. Prefer one solid query over many small ones.
@@ -169,7 +170,11 @@ def _run_tool(
 ) -> dict[str, Any]:
     """Execute one tool call; frames get collected onto the result as a side effect."""
     if name == "run_sql":
-        return catalog.run_sql(con, str(args.get("sql", "")))
+        sql = str(args.get("sql", ""))
+        if "\\n" in sql and "\n" not in sql:
+            # Local models sometimes double-escape whitespace in tool-call JSON.
+            sql = sql.replace("\\n", "\n").replace("\\t", "\t")
+        return catalog.run_sql(con, sql)
     if name in ("search_frames", "show_frames"):
         if search_engine is None:
             return {"error": "Vector search is not available (LanceDB store not found)."}

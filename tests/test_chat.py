@@ -348,6 +348,23 @@ def test_agent_search_unavailable_and_bad_args(con: Any) -> None:
     assert "Unknown tool" in outputs[2]
 
 
+def test_agent_normalizes_double_escaped_sql(con: Any) -> None:
+    transport = ScriptedTransport(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _tool_call("c1", "run_sql", {"sql": "SELECT\\n count(*)\\nFROM samples"})
+                ],
+            },
+            {"role": "assistant", "content": "3"},
+        ]
+    )
+    result = agent.answer("q", transport=transport, con=con, search_engine=None)
+    assert result.steps[0]["output"] == "1 rows"
+
+
 def test_agent_max_turns(con: Any) -> None:
     looping = {
         "role": "assistant",

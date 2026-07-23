@@ -90,14 +90,53 @@ system prompt.
 questions (the project plan's "pedestrians within 5 m" example) are out of scope
 for the current schema; the agent is told to say so rather than guess.
 
-## Example questions
+## Example questions (live transcripts, qwen2.5:14b on an M4 Pro)
 
-_Transcripts to be captured after the live run — placeholders below._
+All from `data/chat/log.jsonl`; latencies include every tool round-trip.
 
-1. How many night scenes are there per location?
-2. Which class is hardest to see at night — compare average visibility day vs night.
-3. What share of frames have 20+ annotated objects, and where are they?
-4. Do the VLM labels agree with ground truth about which frames are night?
-5. Show me construction zones near traffic cones.
-6. Find foggy- or glare-looking frames the tables can't identify.
-7. Are any referenced camera files missing from disk?
+**1. "How many night scenes are there per location?"** — 10 s, one query
+(`SELECT location, count(DISTINCT scene_token) FROM samples WHERE is_night GROUP BY 1`):
+*"singapore-hollandvillage: 66 scenes, singapore-queenstown: 33 scenes. Night
+driving is only present in Singapore locations."* ✓ matches ANALYTICS.md.
+
+**2. "Which object class is hardest to see at night? Compare average visibility
+day vs night by category_group."** — 61 s. First attempt hit a Catalog Error
+(invented a CTE name), read the error, fixed itself, then answered with the real
+per-class day/night visibility averages — honestly concluding the differences are
+marginal (~3.4–3.6 on the 1–4 scale for every class).
+
+**3. "Using the labels table joined to samples, how often do the VLM labels agree
+with ground truth that a frame is night?"** — 32 s: *"agreement rate ≈ 98.5%"* —
+independently consistent with the Phase 6b evaluation (night F1 0.99, AUTOLABEL_EVAL.md).
+
+**4. "Show me a few frames of construction zones with traffic cones at night."** —
+45 s: `search_frames("construction zone traffic cones night")` + `show_frames` →
+6 example thumbnails attached in the UI/CLI.
+
+**5. "Are any referenced camera files missing from disk? (CAM channels only)"** —
+9 s: `COUNT(*) FILTER (WHERE NOT present) ... WHERE channel LIKE 'CAM%' HAVING missing > 0`
+→ 0 rows: *"no referenced CAM channel files are missing."*
+
+**6. "Find frames that look foggy, misty or have heavy lens glare."** — 37 s:
+vector search (no SQL column could answer this), 2 example frames attached.
+
+**7. "What share of camera frames have 20+ annotated objects, and where?"** — 51 s:
+self-repaired through two binder errors, produced a *related but subtly different*
+statistic (the location distribution **of** crowded boxes, not the share of frames
+that are crowded). Kept here deliberately — see limitations.
+
+### Observed local-model limitations (and what the harness does about them)
+
+- **Language drift**: qwen2.5:14b occasionally answered in Thai; pinning the reply
+  language at the top of the system prompt largely fixed it.
+- **Double-escaped SQL**: the model sometimes emits literal `\n` inside tool-call
+  JSON; the SQL tool normalizes this (it once burned the whole tool budget on
+  parse errors before the fix).
+- **Hallucinated frame tokens**: `show_frames` sometimes receives invented tokens;
+  `frames_by_tokens` silently drops unknown ones, so nothing wrong is displayed.
+- **Subtle statistical misreads** (Q7): the numbers come from real SQL, but the
+  query may answer a neighboring question. The steps expander shows the exact SQL
+  precisely so this is checkable.
+- Error self-repair works well: binder/catalog errors are fed back and usually
+  fixed in one retry. For higher reliability, `CHAT_PROVIDER=anthropic` swaps in
+  Claude with no other changes.
