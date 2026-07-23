@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.config import get_settings
-from nuscenes_data_engine.training.runtime import REPO_ROOT, configure_ultralytics
+from nuscenes_data_engine.training.runtime import REPO_ROOT, RUNS_DIR, configure_ultralytics
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -39,8 +39,9 @@ def _set_up_experiment(mlflow: Any, tracking_uri: str, experiment_name: str) -> 
     mlflow.set_experiment(experiment_name)
 
 
-def _run_name(weights: str, imgsz: int, epochs: int) -> str:
-    return f"{Path(weights).stem}_imgsz{imgsz}_e{epochs}"
+def _run_name(weights: str, imgsz: int, epochs: int, suffix: str | None = None) -> str:
+    name = f"{Path(weights).stem}_imgsz{imgsz}_e{epochs}"
+    return f"{name}_{suffix}" if suffix else name
 
 
 def _setup_wandb_env(settings: Any) -> bool:
@@ -108,6 +109,7 @@ def train_model(
     imgsz: int | None = None,
     device: str | None = None,
     wandb_enabled: bool | None = None,
+    run_suffix: str | None = None,
 ) -> dict[str, Any]:
     """Fine-tune YOLO and log the run to MLflow (and optionally W&B); return a summary.
 
@@ -121,6 +123,8 @@ def train_model(
         imgsz: Override ``config['model']['imgsz']`` (e.g. ``960``) — sweeps.
         device: Ultralytics device string (e.g. ``"0"``, ``"0,1"``, ``"cpu"``).
         wandb_enabled: Override ``config['tracking']['wandb']['enabled']``.
+        run_suffix: Distinguish runs sharing (weights, imgsz, epochs) — e.g. active
+            learning arms — which would otherwise clobber each other's output dirs.
     """
     model_cfg = config["model"]
     train_cfg = config["train"]
@@ -145,12 +149,14 @@ def train_model(
     n_batch = int(batch if batch is not None else train_cfg.get("batch", 16))
     weights = model or str(model_cfg.get("weights", "yolov8n.pt"))
     n_imgsz = int(imgsz if imgsz is not None else model_cfg.get("imgsz", 640))
-    run_name = _run_name(weights, n_imgsz, n_epochs)
+    run_name = _run_name(weights, n_imgsz, n_epochs, run_suffix)
 
     # Ultralytics uses `project` as BOTH the on-disk output dir and the W&B project name
-    # (slashes sanitized), so use a clean relative name — the run lands in the user's
-    # `nuscenes-data-engine` W&B project and outputs under ./<project>/<run_name>.
-    project = settings.wandb_project if use_wandb else "runs"
+    # (slashes sanitized), so with W&B on it must stay a clean relative name — the run
+    # lands in the user's `nuscenes-data-engine` W&B project. Without W&B, use the
+    # absolute repo runs dir: Ultralytics >=8.4 anchors relative project paths under its
+    # own runs_dir/task, which would scatter outputs (runs/detect/runs/<name>).
+    project = settings.wandb_project if use_wandb else str(RUNS_DIR)
 
     tracking_uri = settings.mlflow_tracking_uri or tracking.get("mlflow_tracking_uri")
     _set_up_experiment(mlflow, tracking_uri, experiment)

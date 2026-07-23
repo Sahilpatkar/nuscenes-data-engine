@@ -444,6 +444,103 @@ def autolabel_eval(
     logger.info("Eval summary: %s", summary)
 
 
+al_app = typer.Typer(no_args_is_help=True, help="Phase 6d: embedding-based active learning.")
+app.add_typer(al_app, name="al")
+
+
+@al_app.command("split")
+def al_split(
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+) -> None:
+    """Night-stratified baseline/pool scene split (deterministic)."""
+    from nuscenes_data_engine.active_learning.split import run_split
+
+    summary = run_split(config)
+    logger.info("Split summary: %s", summary)
+
+
+@al_app.command("sweep")
+def al_sweep(
+    weights: Path = typer.Option(..., "--weights", help="Baseline best.pt to diagnose."),
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    device: str = typer.Option("0", "--device"),
+    limit: int | None = typer.Option(None, "--limit", help="First N val frames (smoke)."),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Run the baseline detector over the val split and score per-frame failures."""
+    from nuscenes_data_engine.active_learning.sweep import run_sweep, summarize_failures
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("al-sweep", config={"weights": str(weights), "limit": limit}, enabled=wandb) as run:
+        failures = run_sweep(config, weights=weights, device=device, limit=limit)
+        if run is not None:
+            run.log(summarize_failures(failures))
+
+
+@al_app.command("mine")
+def al_mine(
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Cluster failures in embedding space and mine hard examples from the pool."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("al-mine", enabled=wandb) as run:
+        summary = run_mining(config)
+        if run is not None:
+            run.log(
+                {
+                    "n_mined": summary["n_mined"],
+                    "n_random": summary["n_random"],
+                    "mined_night_share": summary["mined_night_share"],
+                }
+            )
+
+
+@al_app.command("run")
+def al_run(
+    arm: str = typer.Option(..., "--arm", help="baseline | mined | random."),
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    device: str | None = typer.Option(None, "--device"),
+    epochs: int | None = typer.Option(None, "--epochs", help="Override (smoke runs)."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Force dataset rebuild."),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Build the arm's dataset, train, evaluate, and record results."""
+    from nuscenes_data_engine.active_learning.experiment import run_arm
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("al-run", name=f"al-{arm}", config={"arm": arm}, enabled=wandb) as run:
+        results = run_arm(
+            config,
+            arm=arm,
+            device=device,
+            epochs=epochs,
+            wandb_enabled=False,  # per-arm ultralytics W&B off; the al-run summary suffices
+            force_rebuild=rebuild,
+        )
+        if run is not None:
+            record = results[arm]
+            run.log(
+                {
+                    "n_train_images": record["n_train_images"],
+                    "overall_mAP50_95": record["overall"]["mAP50-95"],
+                    "night_mAP50_95": record["night"].get("mAP50-95", 0.0),
+                }
+            )
+
+
+@al_app.command("report")
+def al_report(
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+) -> None:
+    """Render the three-arm comparison report."""
+    from nuscenes_data_engine.active_learning.report import run_report
+
+    run_report(config)
+
+
 monitor_app = typer.Typer(no_args_is_help=True, help="Phase 5: drift monitoring.")
 app.add_typer(monitor_app, name="monitor")
 

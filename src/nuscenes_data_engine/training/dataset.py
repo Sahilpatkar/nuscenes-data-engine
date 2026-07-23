@@ -46,15 +46,25 @@ def compute_data_version(processed_dir: Path) -> str:
 
 
 def _build_key(
-    processed_dir: Path, cameras: list[str] | None, limit_scenes: int | None
+    processed_dir: Path,
+    cameras: list[str] | None,
+    limit_scenes: int | None,
+    train_frames: set[str] | None = None,
 ) -> dict[str, Any]:
     """Identity of a YOLO build — everything that determines its contents."""
-    return {
+    key = {
         "builder_version": BUILDER_VERSION,
         "data_version": compute_data_version(processed_dir),
         "cameras": sorted(cameras) if cameras else None,
         "limit_scenes": limit_scenes,
     }
+    if train_frames is not None:
+        # Added conditionally so pre-existing manifests (built without the param)
+        # keep matching and don't trigger a ~400k-file rebuild.
+        key["train_frames"] = hashlib.sha256(
+            "\n".join(sorted(train_frames)).encode()
+        ).hexdigest()[:16]
+    return key
 
 
 def _read_manifest(out_dir: Path) -> dict[str, Any] | None:
@@ -82,6 +92,7 @@ def build_yolo_dataset(
     *,
     cameras: list[str] | None = None,
     limit_scenes: int | None = None,
+    train_frames: set[str] | None = None,
     force: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Build a YOLO dataset from the processed Parquet; return (data.yaml path, stats).
@@ -97,9 +108,12 @@ def build_yolo_dataset(
         out_dir: Output dataset directory.
         cameras: Restrict to these camera channels (default: all present).
         limit_scenes: Use only the first N scenes (by name) — fast dev datasets.
+        train_frames: Restrict the TRAIN split to these sample_data_tokens (active
+            learning arms). The val split is never filtered — it must stay identical
+            across experiment arms for comparability.
         force: Rebuild even if an up-to-date dataset already exists.
     """
-    key = _build_key(processed_dir, cameras, limit_scenes)
+    key = _build_key(processed_dir, cameras, limit_scenes, train_frames)
     data_yaml = out_dir / "data.yaml"
     manifest = _read_manifest(out_dir)
     if not force and data_yaml.exists() and manifest is not None and manifest.get("key") == key:
@@ -131,6 +145,11 @@ def build_yolo_dataset(
     if limit_scenes:
         keep = sorted(samples["scene_name"].unique())[:limit_scenes]
         samples = samples[samples["scene_name"].isin(keep)]
+    if train_frames is not None:
+        samples = samples[
+            (samples["split"] != "train")
+            | samples["sample_data_token"].isin(train_frames)
+        ]
 
     kept_tokens = set(samples["sample_data_token"])
 

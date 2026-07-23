@@ -48,6 +48,7 @@ engine = [
     "transformers>=4.53",
     "anthropic>=0.66",  # Phase 6b: VLM auto-labeling via the Claude Batch API
     "httpx>=0.27",  # Phase 6b: local vLLM labeling transport (also in serve extra)
+    "scikit-learn>=1.4",  # Phase 6d: failure clustering (was only transitive before)
 ]
 # Phase 4 — serving + demo UI
 serve = [
@@ -140,6 +141,7 @@ module = [
     "httpx.*",
     "lancedb.*",
     "torch.*",
+    "sklearn.*",
 ]
 ignore_missing_imports = true
 
