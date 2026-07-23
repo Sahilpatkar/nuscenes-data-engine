@@ -158,16 +158,17 @@ def run_eval(config_path: Path, processed_dir: Path | None = None) -> dict[str, 
     fragments = ["# Auto-label evaluation summary\n"]
 
     for model, frame in by_model.items():
+        slug = str(model).replace("/", "__")  # model ids may contain slashes
         tokens = list(frame["sample_data_token"])
         flags = eval_flags(frame, sample)
-        flags.to_parquet(out_dir / f"flags_{model}.parquet", index=False)
+        flags.to_parquet(out_dir / f"flags_{slug}.parquet", index=False)
         counts_all = eval_counts(frame, gt_counts(processed / "annotations.parquet", tokens))
         counts_vis = eval_counts(
             frame, gt_counts(processed / "annotations.parquet", tokens, visibility_min)
         )
         buckets = eval_count_buckets(frame, gt_counts(processed / "annotations.parquet", tokens))
-        counts_all.to_parquet(out_dir / f"counts_all_{model}.parquet", index=False)
-        counts_vis.to_parquet(out_dir / f"counts_vis_{model}.parquet", index=False)
+        counts_all.to_parquet(out_dir / f"counts_all_{slug}.parquet", index=False)
+        counts_vis.to_parquet(out_dir / f"counts_vis_{slug}.parquet", index=False)
         overall = flags[flags["scope"] == "overall"].iloc[0]
         summary[model] = {
             "n_ok": len(frame),

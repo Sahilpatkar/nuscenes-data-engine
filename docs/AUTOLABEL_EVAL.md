@@ -132,14 +132,80 @@ uv run nuscenes-data-engine autolabel eval
 Both providers append rows to the same `labels.parquet` keyed by (frame, model), so
 running the paid tier later simply adds Haiku/Opus columns to the comparison.
 
-## Results
+## Results — Qwen2.5-VL-7B-Instruct (local, $0)
 
-> **TODO:** pending the paid labeling run (blocked on an `ANTHROPIC_API_KEY`).
-> After `autolabel eval`, paste `data/autolabel/eval/eval_summary.md` here, flip the
-> README roadmap row to ✅, and write up the findings below.
+Run: 5,000 frames on 4× RTX 3080 Ti (tensor-parallel 4, eager mode), 54 frames/min,
+~93 minutes end to end. Parse success **4,986/5,000 (99.7%)** — grammar-constrained
+decoding produced schema-valid JSON on every non-truncated response; the 14 failures
+were `max_tokens` truncations.
+
+| attribute | accuracy | F1 (positive class) |
+|---|---|---|
+| night (vs `is_night`) | **0.997** | **0.989** (dusk_dawn share 0.3%) |
+| rain (vs `is_rain`) | 0.945 | 0.865 |
+
+Counts vs GT (all 4,986 ok-parsed frames):
+
+| class | GT total | pred total | MAE | exact | ±1 | presence P / R |
+|---|---|---|---|---|---|---|
+| cars | 14,444 | 15,655 | 1.33 | 0.40 | 0.70 | 0.94 / 0.93 |
+| trucks | 2,763 | 2,404 | 0.37 | 0.70 | 0.95 | 0.75 / 0.74 |
+| buses | 707 | 526 | 0.07 | 0.93 | 1.00 | 0.84 / 0.66 |
+| trailers | 635 | 274 | 0.11 | 0.91 | 0.99 | 0.62 / 0.32 |
+| construction veh. | 450 | 341 | 0.07 | 0.94 | 0.99 | 0.65 / 0.59 |
+| motorcycles | 388 | 230 | 0.05 | 0.96 | 1.00 | 0.84 / 0.50 |
+| bicycles | 342 | 281 | 0.06 | 0.96 | 0.99 | 0.76 / 0.50 |
+| pedestrians | 6,284 | 2,853 | 0.76 | 0.64 | 0.84 | 0.97 / 0.58 |
+| traffic cones | 2,832 | 3,160 | 0.39 | 0.83 | 0.92 | 0.72 / 0.75 |
+| barriers | 4,582 | 2,280 | 0.93 | 0.73 | 0.85 | 0.45 / 0.57 |
+
+MAE by GT-count bucket (all classes pooled) — the crowding effect:
+
+| GT count | n | MAE |
+|---|---|---|
+| 0 | 38,042 | 0.08 |
+| 1–3 | 8,868 | 0.87 |
+| 4–9 | 2,494 | 2.81 |
+| 10+ | 456 | **6.67** |
+
+*Note:* the planned visibility-≥2 eval variant turned out to be identical to the
+all-boxes variant — Phase 1's projection already drops visibility-level-1 boxes, so
+`annotations.parquet` contains only levels 2–4. The GT the VLM is scored against is
+therefore already "at least partially visible" boxes.
 
 ### Findings — where the VLM is reliable, where it fails
 
-> **TODO** after the run: condition flags vs counts; small-count vs crowded frames;
-> visibility sensitivity; whether Opus beats Haiku enough to justify 5× the price;
-> implications for using LLMs as labelers in an AV data engine.
+1. **Scene-level conditions are essentially solved.** A free 7B model separates
+   night/day at F1 0.99 and detects rain at F1 0.87 (some of the residual gap is GT
+   noise: `is_rain` is a scene-level description flag, while the model sees a single
+   frame that may not look rainy). For condition-slicing, curation, and search-index
+   metadata, LLM labels are trustworthy as-is.
+2. **Counting degrades sharply with crowding.** Near-perfect on empty/low-count
+   classes (MAE 0.08 at GT=0), usable at 1–3 objects (0.87), unreliable at 10+
+   (6.7). Use VLM counts as presence/low-cardinality signals, not as measurements.
+3. **Systematic misses are interpretable.** Pedestrians are undercounted ~2.2×
+   (high precision 0.97, recall 0.58 — small/distant people missed); trailers are
+   mostly absorbed into "trucks" (recall 0.32); barriers show the worst precision
+   (0.45) — long barrier rows get counted as few objects and non-barrier
+   street furniture gets called a barrier.
+4. **Structured outputs remove the malformed-JSON problem entirely.** 99.7% parse
+   success with zero schema violations; the only failure mode left is truncation
+   (fix: `max_tokens` headroom).
+5. **Implication for the data engine:** cheap VLM labels are production-usable for
+   *scene attributes* (night/rain/hazard flags feeding search and curation) and for
+   *presence* of rare classes, but object counts should come from the detector, not
+   the VLM. A frontier-model comparison (Haiku/Opus via `--provider anthropic`)
+   remains a one-command follow-up on the same 500-frame subset.
+
+### Serving configuration that worked (12 GB cards)
+
+Four attempts documented for posterity: tp=2 OOMs (weights+vision tower don't fit
+2×12 GB with KV cache), `ninja` must be installed in the vLLM venv (torch.compile),
+and at 0.85 GPU utilization CUDA-graph capture OOMs. Final working flags:
+
+```bash
+PATH=<vllm-env>/bin:$PATH HF_HOME=<repo>/.cache/huggingface \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 \
+vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8399 --tensor-parallel-size 4 \
+  --max-model-len 4096 --gpu-memory-utilization 0.75 --enforce-eager --max-num-seqs 16
+```

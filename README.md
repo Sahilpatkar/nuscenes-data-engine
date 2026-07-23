@@ -271,7 +271,7 @@ picker after the first PR run).
 | 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
 | 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
 | 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
-| 6b 🔨 | VLM auto-labeling | Built; paid labeling run + results write-up pending API key |
+| 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
 | 6c | Dataset chat | LLM agent: text-to-SQL (DuckDB) + vector search |
 | 6d | Active learning | Embedding-mined hard examples → measurable retrain gain |
 
