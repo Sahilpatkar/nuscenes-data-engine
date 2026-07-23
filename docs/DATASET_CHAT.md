@@ -127,8 +127,11 @@ that are crowded). Kept here deliberately — see limitations.
 
 ### Observed local-model limitations (and what the harness does about them)
 
-- **Language drift**: qwen2.5:14b occasionally answered in Thai; pinning the reply
-  language at the top of the system prompt largely fixed it.
+- **Language drift**: qwen2.5:14b occasionally answers in Thai or Chinese despite
+  an English question; pinning the reply language at the top of the system prompt
+  reduced but did not eliminate it.
+- **Loose terminology**: it sometimes labels image counts as "scenes" — the SQL in
+  the steps expander is the ground truth for what was actually counted.
 - **Double-escaped SQL**: the model sometimes emits literal `\n` inside tool-call
   JSON; the SQL tool normalizes this (it once burned the whole tool budget on
   parse errors before the fix).
