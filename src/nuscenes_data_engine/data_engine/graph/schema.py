@@ -21,9 +21,13 @@ _CONSTRAINTS: tuple[tuple[str, str], ...] = (
     ("Category", "name"),
     ("Hazard", "text"),
     ("NotableCondition", "text"),
+    # Phase B geo-spatial nodes.
+    ("EgoPose", "token"),
+    ("ObjectObservation", "token"),
+    ("ObjectInstance", "token"),
 )
 
-# (label, property) — secondary index for common chat filters.
+# (label, property) — secondary range index for common chat filters.
 _INDEXES: tuple[tuple[str, str], ...] = (
     ("Frame", "channel"),
     ("Frame", "location"),
@@ -31,6 +35,15 @@ _INDEXES: tuple[tuple[str, str], ...] = (
     ("Frame", "vlm_time_of_day"),
     ("Scene", "is_night"),
     ("Scene", "location"),
+    # Phase B: the distance filter + category lookups on 3D observations.
+    ("ObjectObservation", "distance_to_ego_m"),
+    ("ObjectObservation", "category"),
+)
+
+# (label, property) — Neo4j point index for spatial ops (point.distance, within-region).
+_POINT_INDEXES: tuple[tuple[str, str], ...] = (
+    ("EgoPose", "point"),
+    ("ObjectObservation", "point"),
 )
 
 
@@ -46,6 +59,9 @@ def schema_statements() -> tuple[str, ...]:
     for label, prop in _INDEXES:
         name = f"{label.lower()}_{prop}_idx"
         stmts.append(f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{prop})")
+    for label, prop in _POINT_INDEXES:
+        name = f"{label.lower()}_{prop}_pt"
+        stmts.append(f"CREATE POINT INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{prop})")
     return tuple(stmts)
 
 

@@ -41,6 +41,13 @@ def _opt_int(value: Any) -> int | None:
     return int(value)
 
 
+def _opt_float(value: Any) -> float | None:
+    """``float(value)`` unless the cell is null (NaN/None -> None)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    return float(value)
+
+
 def _as_list(value: Any) -> list[Any]:
     """Normalize a list-typed cell to a Python list.
 
@@ -224,3 +231,64 @@ def tag_rows(labels: pd.DataFrame, column: str) -> list[dict[str, Any]]:
             if text:
                 rows.append({"token": token, "text": text})
     return rows
+
+
+# --- Phase B: geo-spatial projections (ego pose / 3D observation / instance) ---
+
+
+def ego_pose_rows(ego: pd.DataFrame) -> list[dict[str, Any]]:
+    """``EgoPose`` node per keyframe (world position, heading, speed)."""
+    return [
+        {
+            "token": str(r.ego_pose_token),
+            "sample_token": str(r.sample_token),
+            "x": float(r.x), "y": float(r.y), "z": float(r.z),
+            "heading": float(r.heading),
+            "speed_mps": _opt_float(r.speed_mps),
+            "timestamp": int(r.timestamp),
+            "location": str(r.location),
+            "is_night": bool(r.is_night),
+            "is_rain": bool(r.is_rain),
+        }
+        for r in ego.itertuples(index=False)
+    ]
+
+
+def object_observation_rows(annotations_3d: pd.DataFrame) -> list[dict[str, Any]]:
+    """``ObjectObservation`` node per 3D GT box (world geometry + ego-relative metrics)."""
+    return [
+        {
+            "token": str(r.annotation_token),
+            "sample_token": str(r.sample_token),
+            "instance_token": str(r.instance_token),
+            "category": str(r.category_name),
+            "group": group_for(str(r.category_name)),
+            "x": float(r.x), "y": float(r.y), "z": float(r.z),
+            "width": float(r.width), "length": float(r.length), "height": float(r.height),
+            "yaw": float(r.yaw),
+            "vx": _opt_float(r.vx), "vy": _opt_float(r.vy),
+            "speed_mps": _opt_float(r.speed_mps),
+            "num_lidar_pts": int(r.num_lidar_pts), "num_radar_pts": int(r.num_radar_pts),
+            "visibility": str(r.visibility_token),
+            "distance_to_ego_m": float(r.distance_to_ego_m),
+            "ego_rel_x": float(r.ego_rel_x), "ego_rel_y": float(r.ego_rel_y),
+            "location": str(r.location),
+            "is_night": bool(r.is_night),
+            "is_rain": bool(r.is_rain),
+        }
+        for r in annotations_3d.itertuples(index=False)
+    ]
+
+
+def object_instance_rows(instances: pd.DataFrame) -> list[dict[str, Any]]:
+    """``ObjectInstance`` node per tracked physical object."""
+    return [
+        {
+            "token": str(r.instance_token),
+            "category": str(r.category_name),
+            "group": group_for(str(r.category_name)),
+            "scene_token": str(r.scene_token),
+            "n_annotations": int(r.n_annotations),
+        }
+        for r in instances.itertuples(index=False)
+    ]

@@ -77,6 +77,40 @@ def run_write_batches(
     return written
 
 
+def run_write_grouped(
+    driver: Any,
+    cypher: str,
+    rows: Sequence[dict[str, Any]],
+    *,
+    group_key: str,
+    database: str,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> int:
+    """Like ``run_write_batches`` but never splits a group across batches.
+
+    Rows sharing ``group_key`` (e.g. all observations of one keyframe) are committed in the
+    same transaction, so a resumable load can treat "group is present" as "group complete".
+    ``rows`` must already be grouped (contiguous by ``group_key``).
+    """
+    if not rows:
+        return 0
+    written = 0
+    with driver.session(database=database) as session:
+        chunk: list[dict[str, Any]] = []
+        current: Any = None
+        for row in rows:
+            if chunk and row[group_key] != current and len(chunk) >= batch_size:
+                session.execute_write(lambda tx, c=chunk: tx.run(cypher, rows=c).consume())
+                written += len(chunk)
+                chunk = []
+            chunk.append(row)
+            current = row[group_key]
+        if chunk:
+            session.execute_write(lambda tx, c=chunk: tx.run(cypher, rows=c).consume())
+            written += len(chunk)
+    return written
+
+
 def run_statements(driver: Any, statements: Sequence[str], *, database: str) -> None:
     """Execute schema/DDL statements, each in its own write transaction (idempotent)."""
     with driver.session(database=database) as session:

@@ -772,6 +772,12 @@ def graph_build(
     knn_k: int | None = typer.Option(None, "--knn-k", help="SIMILAR_TO neighbours per frame."),
     channel: str | None = typer.Option(None, "--channel", help="kNN camera channel (CAM_FRONT)."),
     skip_knn: bool = typer.Option(False, "--skip-knn", help="Skip the LanceDB kNN pass."),
+    skip_geometry: bool = typer.Option(
+        False, "--skip-geometry", help="Skip the Phase B ego-pose / 3D-observation passes."
+    ),
+    limit_scenes: int | None = typer.Option(
+        None, "--limit-scenes", help="Only build the first N scenes (fast dev runs)."
+    ),
     rebuild: bool = typer.Option(False, "--rebuild", help="Delete all nodes/rels first."),
     wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
@@ -783,7 +789,8 @@ def graph_build(
     with wandb_run("graph-build", enabled=wandb) as run:
         summary = build_graph(
             get_settings(), config, edges=edges or None, knn_k=knn_k,
-            channel=channel, skip_knn=skip_knn, rebuild=rebuild,
+            channel=channel, skip_knn=skip_knn, skip_geometry=skip_geometry,
+            rebuild=rebuild, limit_scenes=limit_scenes,
         )
         if run is not None:
             run.log({k: v for k, v in summary.items() if isinstance(v, int | float)})

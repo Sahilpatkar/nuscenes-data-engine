@@ -20,7 +20,7 @@ logger = logging.getLogger("nuscenes_data_engine")
 MAX_ROWS = 50
 MAX_CELL_CHARS = 300
 
-TABLES = ("samples", "annotations", "availability")
+TABLES = ("samples", "annotations", "availability", "ego_pose", "annotations_3d", "instances")
 
 # Settings/extension escapes and file-reading table functions (word-boundary match).
 _DENIED_KEYWORDS = re.compile(
@@ -133,14 +133,43 @@ def schema_prompt(tables: list[str]) -> str:
             "  cars, trucks, buses, trailers, construction_vehicles, motorcycles,\n"
             "  bicycles, pedestrians, traffic_cones, barriers (integer counts)"
         ),
+        "ego_pose": (
+            "ego_pose — one row per keyframe: the ego vehicle's world pose (Phase B):\n"
+            "  sample_token (keyframe), scene_token, timestamp, x, y, z (map metres),\n"
+            "  heading (radians), speed_mps, location, is_night, is_rain"
+        ),
+        "annotations_3d": (
+            "annotations_3d — one row per 3D ground-truth object per keyframe (~1.2M, Phase B):\n"
+            "  annotation_token, sample_token (joins ego_pose/samples), instance_token,\n"
+            "  category_name, category_group, x, y, z (world), width, length, height, yaw,\n"
+            "  vx, vy, speed_mps, num_lidar_pts, num_radar_pts, visibility_token,\n"
+            "  distance_to_ego_m (BEV metres to ego), ego_rel_x (forward), ego_rel_y (left),\n"
+            "  location, is_night, is_rain. This is the 3D world table — use it (not the 2D\n"
+            "  `annotations`) for distance-to-ego, size, heading, velocity, tracking questions."
+        ),
+        "instances": (
+            "instances — one row per tracked physical object (Phase B):\n"
+            "  instance_token (joins annotations_3d), category_name, category_group,\n"
+            "  scene_token, n_annotations (keyframes the object is observed in)"
+        ),
     }
+    has_geometry = "annotations_3d" in tables
+    geometry_note = (
+        "Distance-to-ego IS available: annotations_3d.distance_to_ego_m (bird's-eye\n"
+        "metres), e.g. pedestrians within 5 m at night =\n"
+        "  SELECT count(*) FROM annotations_3d WHERE category_group='pedestrian'\n"
+        "    AND distance_to_ego_m < 5 AND is_night;\n"
+        if has_geometry
+        else "There is no ego-pose or object-distance data — distance questions cannot be\n"
+        "answered.\n"
+    )
     notes = (
         "Notes: is_night/is_rain are scene-level flags derived from the scene\n"
         "description. Night driving exists only in Singapore; all rain is in Boston.\n"
         "location is one of the four full names above — there is NO bare 'singapore' or\n"
         "'boston'; match a city with LIKE 'singapore%' (or IN (...)), never = 'singapore'.\n"
-        "There is no ego-pose or object-distance data — distance questions cannot be\n"
-        "answered. For multi-hop relationship / co-occurrence / similarity / temporal\n"
+        + geometry_note
+        + "For multi-hop relationship / co-occurrence / similarity / temporal\n"
         "questions, prefer the run_cypher knowledge-graph tool when it is offered.\n"
         "Example patterns:\n"
         "  SELECT category_group, count(*) FROM annotations GROUP BY 1 ORDER BY 2 DESC;\n"

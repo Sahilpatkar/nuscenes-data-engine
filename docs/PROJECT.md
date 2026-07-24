@@ -320,11 +320,12 @@ Ordered roughly by value-per-effort:
    where random regressed), spanning 473 scenes vs mined's 219. Still open: rate-based
    acquisition (`FN/n_GT` or calibrated-confidence error) and night/rain-stratified
    quotas — the harness and random-control gate already exist; only the score changes.
-2. **Ego-pose / CAN-bus ingestion (knowledge-graph Phase B)** — the Phase 6e context
-   graph (docs/GRAPH.md) is already built from existing data; persisting ego-pose + 3D
-   boxes is the remaining unlock for the distance-and-dynamics questions the project plan
-   wanted ("pedestrians within 5 m of ego at night") — for SQL analytics, the chat agent,
-   and a geo-spatial extension of the graph (`EgoPose`/`Annotation` nodes with `distance_m`).
+2. **Ego-pose / 3D geometry ingestion (Phase B) — DONE.** `ingest-geometry` now persists
+   the ego pose + all 1.17M 3D GT boxes (world position, size, heading, velocity, BEV
+   distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/
+   `instances` Parquet, DuckDB views, and Neo4j `EgoPose`/`ObjectObservation`/`ObjectInstance`
+   nodes with point indexes. The project plan's "pedestrians within 5 m of ego at night" is
+   answerable in both SQL and Cypher (see docs/GRAPH.md). Still open: CAN-bus (steering/braking).
 3. **Terraform cloud deployment** (the remaining roadmap item) — lift the compose
    stack to a cloud host; the chat agent's Anthropic flip means no GPU is needed
    for any serving-path component.

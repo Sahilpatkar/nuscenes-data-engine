@@ -117,3 +117,26 @@ NFS) and writes `data/processed/availability.parquet`: one row per record with
 (the embedding job, future auto-labeling) filter on it instead of trusting metadata
 paths; the CLI exits non-zero if any **camera keyframe** — the working set — is
 missing.
+
+## Geometry tables (Phase B)
+
+`uv run nuscenes-data-engine ingest-geometry` (runs where the devkit + dataset live;
+GT metadata only, no LiDAR blobs) writes three more Parquet tables — the ego pose and
+3D world geometry the Phase 1 pipeline projects to 2D and discards:
+
+- **`ego_pose.parquet`** — one row per keyframe (34,149): `ego_pose_token, sample_token,
+  scene_token, timestamp, x, y, z` (map metres), `heading` (rad), `speed_mps` (from
+  consecutive-keyframe pose deltas), `location, is_night, is_rain`. Reference pose per
+  keyframe = the `LIDAR_TOP` sample_data's `ego_pose`.
+- **`annotations_3d.parquet`** — one row per 3D GT box per keyframe (1,166,187):
+  `annotation_token, sample_token, instance_token, category_name, category_group, x, y, z,
+  width, length, height, yaw, vx, vy, speed_mps` (`nusc.box_velocity`), `num_lidar_pts,
+  num_radar_pts, visibility_token, distance_to_ego_m` (BEV), `ego_rel_x` (forward),
+  `ego_rel_y` (left), + scene/weather context. Distinct grain from the per-camera 2D
+  `annotations.parquet`: this is one row per physical object per keyframe.
+- **`instances.parquet`** — one row per tracked object (64,386): `instance_token,
+  category_name, category_group, scene_token, n_annotations`.
+
+These back the DuckDB `ego_pose`/`annotations_3d`/`instances` chat views and the Neo4j
+`EgoPose`/`ObjectObservation`/`ObjectInstance` nodes (see [GRAPH.md](GRAPH.md)), unlocking
+distance-to-ego, trajectory/speed, 3D-size, and cross-frame-tracking queries.

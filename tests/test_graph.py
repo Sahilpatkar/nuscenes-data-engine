@@ -103,6 +103,43 @@ def _by(rows: list[dict], *keys: str) -> list[dict]:
     return sorted(rows, key=lambda r: tuple(r[k] for k in keys))
 
 
+def _ego_poses() -> pd.DataFrame:
+    base = {"location": "boston-seaport", "is_night": False, "is_rain": False}
+    return pd.DataFrame([
+        {"ego_pose_token": "ep1", "sample_token": "sm1", "scene_token": "sA", "timestamp": 1000,
+         "x": 0.0, "y": 0.0, "z": 0.0, "heading": 0.0, "speed_mps": None, **base},
+        {"ego_pose_token": "ep2", "sample_token": "sm2", "scene_token": "sA", "timestamp": 1500,
+         "x": 5.0, "y": 0.0, "z": 0.0, "heading": 0.0, "speed_mps": 10.0, **base},
+        {"ego_pose_token": "ep3", "sample_token": "sm3", "scene_token": "sB", "timestamp": 2000,
+         "x": 0.0, "y": 0.0, "z": 0.0, "heading": 0.0, "speed_mps": None,
+         "location": "singapore-onenorth", "is_night": True, "is_rain": False},
+    ])
+
+
+def _annotations_3d() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"annotation_token": "obs1", "sample_token": "sm1", "scene_token": "sA",
+         "instance_token": "inst1", "category_name": "vehicle.car", "category_group": "car",
+         "x": 3.0, "y": 4.0, "z": 0.0, "width": 2.0, "length": 4.0, "height": 1.5, "yaw": 0.0,
+         "vx": None, "vy": None, "speed_mps": None, "num_lidar_pts": 10, "num_radar_pts": 2,
+         "visibility_token": "4", "distance_to_ego_m": 5.0, "ego_rel_x": 3.0, "ego_rel_y": 4.0,
+         "location": "boston-seaport", "is_night": False, "is_rain": False},
+        {"annotation_token": "obs2", "sample_token": "sm3", "scene_token": "sB",
+         "instance_token": "inst2", "category_name": "human.pedestrian.adult",
+         "category_group": "pedestrian", "x": 3.0, "y": 0.0, "z": 0.0, "width": 0.6,
+         "length": 0.7, "height": 1.7, "yaw": 0.0, "vx": None, "vy": None, "speed_mps": None,
+         "num_lidar_pts": 5, "num_radar_pts": 0, "visibility_token": "3",
+         "distance_to_ego_m": 3.0, "ego_rel_x": 3.0, "ego_rel_y": 0.0,
+         "location": "singapore-onenorth", "is_night": True, "is_rain": False},
+    ])
+
+
+def _instances() -> pd.DataFrame:
+    from nuscenes_data_engine.ingestion.geometry import instance_records
+
+    return pd.DataFrame(instance_records(_annotations_3d().to_dict("records")))
+
+
 # ---------------------------------------------------------------------------
 # node projections
 # ---------------------------------------------------------------------------
@@ -215,6 +252,63 @@ def test_tag_rows_explode_list_columns_for_usable_rows() -> None:
     ]
     # notable_conditions: fd1 has one, fd5 is empty, fd3 is unusable.
     assert model.tag_rows(_labels(), "notable_conditions") == [{"token": "fd1", "text": "glare"}]
+
+
+# ---------------------------------------------------------------------------
+# model.py — Phase B geometry projections (ego pose / 3D observation / instance)
+# ---------------------------------------------------------------------------
+
+
+def test_ego_pose_rows_carry_position_and_speed() -> None:
+    ego = pd.DataFrame([
+        {"ego_pose_token": "e1", "sample_token": "sm1", "scene_token": "sA", "timestamp": 1000,
+         "x": 10.0, "y": 20.0, "z": 0.5, "heading": 1.5, "speed_mps": 5.0,
+         "location": "boston-seaport", "is_night": False, "is_rain": False},
+        {"ego_pose_token": "e2", "sample_token": "sm2", "scene_token": "sA", "timestamp": 1500,
+         "x": 12.0, "y": 20.0, "z": 0.5, "heading": 1.5, "speed_mps": None,
+         "location": "boston-seaport", "is_night": False, "is_rain": False},
+    ])
+    rows = {r["token"]: r for r in model.ego_pose_rows(ego)}
+    assert rows["e1"] == {"token": "e1", "sample_token": "sm1", "x": 10.0, "y": 20.0,
+                          "z": 0.5, "heading": 1.5, "speed_mps": 5.0, "timestamp": 1000,
+                          "location": "boston-seaport", "is_night": False, "is_rain": False}
+    assert rows["e2"]["speed_mps"] is None  # first-in-scene keyframe -> null speed
+
+
+def test_object_observation_rows_carry_geometry_and_null_velocity() -> None:
+    ann = pd.DataFrame([
+        {"annotation_token": "a1", "sample_token": "sm1", "instance_token": "i1",
+         "category_name": "vehicle.car", "category_group": "car", "x": 12.0, "y": 24.0, "z": 1.0,
+         "width": 2.0, "length": 4.5, "height": 1.6, "yaw": 0.5, "vx": 1.0, "vy": 2.0,
+         "speed_mps": 2.236, "num_lidar_pts": 50, "num_radar_pts": 5, "visibility_token": "4",
+         "distance_to_ego_m": 4.47, "ego_rel_x": 3.0, "ego_rel_y": 3.3,
+         "location": "boston-seaport", "is_night": False, "is_rain": False},
+        {"annotation_token": "a2", "sample_token": "sm1", "instance_token": "i2",
+         "category_name": "human.pedestrian.adult", "category_group": "pedestrian",
+         "x": 8.0, "y": 22.0, "z": 1.0, "width": 0.6, "length": 0.7, "height": 1.7, "yaw": 0.0,
+         "vx": None, "vy": None, "speed_mps": None, "num_lidar_pts": 3, "num_radar_pts": 0,
+         "visibility_token": "2", "distance_to_ego_m": 2.83, "ego_rel_x": -2.0, "ego_rel_y": 2.0,
+         "location": "singapore-onenorth", "is_night": True, "is_rain": False},
+    ])
+    rows = {r["token"]: r for r in model.object_observation_rows(ann)}
+    assert rows["a1"]["category"] == "vehicle.car" and rows["a1"]["group"] == "car"
+    assert rows["a1"]["distance_to_ego_m"] == 4.47
+    assert rows["a1"]["ego_rel_x"] == 3.0 and rows["a1"]["ego_rel_y"] == 3.3
+    assert rows["a1"]["length"] == 4.5 and rows["a1"]["num_lidar_pts"] == 50
+    # velocity absent -> None, not NaN
+    assert rows["a2"]["vx"] is None and rows["a2"]["speed_mps"] is None
+    assert rows["a2"]["group"] == "pedestrian"
+
+
+def test_object_instance_rows_key_and_count() -> None:
+    inst = pd.DataFrame([
+        {"instance_token": "i1", "category_name": "vehicle.car", "category_group": "car",
+         "scene_token": "sA", "n_annotations": 3},
+    ])
+    assert model.object_instance_rows(inst) == [
+        {"token": "i1", "category": "vehicle.car", "group": "car",
+         "scene_token": "sA", "n_annotations": 3}
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +525,9 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
     processed.mkdir()
     _samples().to_parquet(processed / "samples.parquet")
     _annotations().to_parquet(processed / "annotations.parquet")
+    _ego_poses().to_parquet(processed / "ego_pose.parquet")
+    _annotations_3d().to_parquet(processed / "annotations_3d.parquet")
+    _instances().to_parquet(processed / "instances.parquet")
     monkeypatch.setenv("PROCESSED_DIR", str(processed))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))  # no labels.parquet -> VLM pass skipped
     settings = get_settings()
@@ -445,6 +542,8 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
         summary = builder.build_graph(settings, Path("configs/engine.yaml"), skip_knn=True)
         assert summary["scenes"] == 2 and summary["frames"] == 5
         assert summary["contains"] >= 5
+        # Phase B geometry passes ran.
+        assert summary["ego_poses"] == 3 and summary["observations"] == 2 and summary["instances"] == 2
 
         counts = {
             row["label"]: row["n"]
@@ -455,6 +554,25 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
             )
         }
         assert counts["Scene"] == 2 and counts["Frame"] == 5 and counts["Category"] >= 4
+        assert counts["EgoPose"] == 3 and counts["ObjectObservation"] == 2
+
+        # Flagship geo query: pedestrians within 5 m of ego at night -> the one at 3.0 m.
+        near = connection.read_query(
+            driver,
+            "MATCH (o:ObjectObservation)-[:OF_CATEGORY]->(:Category {group:'pedestrian'}) "
+            "WHERE o.is_night AND o.distance_to_ego_m < 5 RETURN count(o) AS n",
+            database=settings.neo4j_database,
+        )
+        assert near[0]["n"] == 1
+        # point index consistency: point.distance matches the stored BEV distance.
+        pt = connection.read_query(
+            driver,
+            "MATCH (s:Sample)-[:AT_POSE]->(e:EgoPose), (s)-[:HAS_OBJECT]->(o:ObjectObservation) "
+            "RETURN round(point.distance(e.point, o.point), 3) AS d, "
+            "round(o.distance_to_ego_m, 3) AS stored",
+            database=settings.neo4j_database,
+        )
+        assert pt and all(row["d"] == row["stored"] for row in pt)
 
         # The guarded read surface actually returns rows against a live DB (regression
         # guard for the managed-transaction / timeout wiring).

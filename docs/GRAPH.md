@@ -56,6 +56,9 @@ individual boxes.
 | Hazard | 111 | HAS_HAZARD | 1,347 |
 | Location | 4 | CO_OCCURS_WITH | 220 |
 | | | SIMILAR_TO | 341,490 (CAM_FRONT, k=10) |
+| EgoPose (6B) | 34,149 | AT_POSE | 34,149 |
+| ObjectObservation (6B) | 1,166,187 | HAS_OBJECT | 1,166,187 |
+| ObjectInstance (6B) | 64,386 | OBSERVED_AS | 1,166,187 |
 
 ## Code
 
@@ -161,16 +164,42 @@ random control. Graph-diversity selection spreads across **473 scenes (12.1% nig
 matching random's diversity (501 scenes, 12.7% night) while staying structured and
 interpretable. See `docs/ACTIVE_LEARNING.md` for the trained-arm mAP comparison.
 
-## Known limitation — Phase B (no geometry yet)
+## Geo-spatial layer (Phase B)
 
-The graph is **relational/semantic**, not geo-spatial: ingestion still discards ego-pose and
-3D box geometry (see `docs/DATASET_CHAT.md`, `chat/catalog.py`), so distance-to-ego and
-trajectory questions remain out of scope. The seam is `ingestion/parse.py` — it already
-holds the loaded devkit handle, so a parallel `flatten_geometry` emitting `ego_pose.parquet`
-+ `annotations_3d.parquet` would let the same batched-MERGE machinery add `EgoPose` nodes
-(Neo4j `point`), per-box `Annotation` nodes with `distance_m`, and
-`(Sample)-[:AT_POSE]->(EgoPose)-[:OBSERVES {distance_m}]->(Annotation)` — unlocking the
-project plan's "pedestrians within 5 m of ego at night".
+The graph is now geo-spatial as well as relational: `ingest-geometry` persists the GT
+**ego pose + all 1.17M 3D boxes** (world position, size, heading, velocity, BEV
+distance-to-ego, ego-relative coords, instance tracking), and `graph build` adds three
+node types keyed off the keyframe `Sample`:
+
+- **`EgoPose`** (34,149) `{x, y, z, point, heading, speed_mps, location, is_night, is_rain}`
+  — `(Sample)-[:AT_POSE]->(EgoPose)`; trajectory = the `NEXT` chain of ego points.
+- **`ObjectObservation`** (1,166,187) `{category, x, y, z, point, width/length/height, yaw,
+  speed_mps, distance_to_ego_m, ego_rel_x (forward), ego_rel_y (left), num_lidar_pts,
+  visibility, location, is_night, is_rain}` — `(Sample)-[:HAS_OBJECT]->(ObjectObservation)-[:OF_CATEGORY]->(Category)`.
+- **`ObjectInstance`** (64,386) `{category, n_annotations}` — one physical object tracked
+  across keyframes: `(ObjectInstance)-[:OBSERVED_AS]->(ObjectObservation)`, `-[:IN_SCENE]->(Scene)`.
+
+Point indexes on `EgoPose.point` + `ObjectObservation.point` back spatial ops; a
+`distance_to_ego_m` index backs the common proximity filter (no materialized `NEAR_EGO`
+edge). Distances are **bird's-eye** (ground-plane) metres; `point.distance()` reproduces
+the stored value.
+
+The project plan's flagship — *"pedestrians within 5 m of ego at night"* — answers
+identically (183) in SQL and Cypher:
+
+```cypher
+MATCH (o:ObjectObservation)-[:OF_CATEGORY]->(:Category {group:'pedestrian'})
+WHERE o.is_night AND o.distance_to_ego_m < 5 RETURN count(o)
+```
+```bash
+docker compose up -d neo4j
+make sync-down                                  # or: rsync the geometry parquet down
+uv run nuscenes-data-engine ingest-geometry     # on TRINITY (devkit); --limit-scenes for dev
+uv run nuscenes-data-engine graph build          # adds the geo passes; --limit-scenes / --skip-geometry
+```
+
+The observation load is idempotent and resumable (a keyframe already carrying `HAS_OBJECT`
+is skipped). Still out of scope: CAN-bus (steering/braking) dynamics.
 
 > The `graph_smoke` test builds a tiny graph end-to-end against a live Neo4j and **deletes
 > all nodes** on cleanup — run it against a throwaway/dev instance, not a graph you want to

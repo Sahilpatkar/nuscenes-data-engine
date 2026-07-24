@@ -4,7 +4,7 @@
 # server). Infra-machine targets run the local ops stack. See README "Two-machine topology".
 
 .DEFAULT_GOAL := help
-.PHONY: help setup infra-up infra-down ingest validate train evaluate serve monitor \
+.PHONY: help setup infra-up infra-down ingest ingest-geometry validate train evaluate serve monitor \
         manifest embed search graph-build gpu-run gpu-train gpu-embed gpu-manifest sync-down \
         test lint format typecheck check clean
 
@@ -47,6 +47,9 @@ sync-down:  ## Pull compute outputs off the GPU server (parquet, mlruns, lancedb
 # --- GPU-SERVER compute stages — infra-free (Phase 1+) ---
 ingest:  ## Phase 1: parse nuScenes -> Parquet + 2D projections.
 	uv run nuscenes-data-engine ingest
+
+ingest-geometry:  ## Phase B: parse ego-pose + 3D geometry -> Parquet (world pos, distance-to-ego).
+	uv run nuscenes-data-engine ingest-geometry
 
 validate:  ## Phase 1: run Great Expectations suites.
 	uv run nuscenes-data-engine validate

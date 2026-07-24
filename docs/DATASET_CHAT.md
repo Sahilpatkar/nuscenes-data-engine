@@ -91,10 +91,11 @@ gains a fourth tool, `run_cypher`, for relationship / path / co-occurrence /
 similarity / temporal-next questions that SQL joins express awkwardly (see
 [GRAPH.md](GRAPH.md)). It degrades to SQL + vector only when Neo4j is down.
 
-**Known limitation:** no ego-pose/CAN-bus data is ingested, so distance-to-ego
-questions (the project plan's "pedestrians within 5 m" example) are out of scope
-for the current schema — for SQL *and* the graph; the agent is told to say so
-rather than guess.
+**Geometry (Phase B):** ego-pose + 3D object geometry are now ingested, so
+distance-to-ego questions *are* answerable — e.g. "pedestrians within 5 m of ego at
+night" via `annotations_3d.distance_to_ego_m` in SQL or the `ObjectObservation` nodes
+in the graph (see [GRAPH.md](GRAPH.md)). CAN-bus (steering/braking) is still not
+ingested.
 
 ## Example questions (live transcripts, qwen2.5:14b on an M4 Pro)
 
