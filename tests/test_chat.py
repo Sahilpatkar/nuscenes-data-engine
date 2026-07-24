@@ -365,6 +365,24 @@ def test_agent_normalizes_double_escaped_sql(con: Any) -> None:
     assert result.steps[0]["output"] == "1 rows"
 
 
+def test_agent_breaks_repeated_tool_call_loop(con: Any) -> None:
+    engine = FakeSearchEngine()
+    repeat = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [_tool_call("c", "show_frames", {"sample_data_tokens": ["t3"]})],
+    }
+    transport = ScriptedTransport([repeat, repeat, {"role": "assistant", "content": "here they are"}])
+    result = agent.answer("q", transport=transport, con=con, search_engine=engine, max_turns=6)
+    assert result.answer == "here they are"
+    # First call attaches; the identical second call is short-circuited, not re-run.
+    assert result.steps[0]["output"] == "1 frames attached"
+    assert result.steps[1]["output"] == "repeat (skipped)"
+    # Exactly one underlying tool execution -> no duplicated frames.
+    assert [frame["sample_data_token"] for frame in result.frames] == ["t3"]
+    assert len(engine.calls) == 1
+
+
 def test_agent_max_turns(con: Any) -> None:
     looping = {
         "role": "assistant",

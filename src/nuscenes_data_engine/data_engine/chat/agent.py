@@ -153,6 +153,7 @@ def answer(
     messages.append({"role": "user", "content": question})
 
     result = ChatResult(answer="", model=transport.model)
+    seen_calls: set[str] = set()
     for _ in range(max_turns):
         reply = transport.complete(messages, tools)
         tool_calls = reply.get("tool_calls") or []
@@ -173,10 +174,20 @@ def answer(
             except (json.JSONDecodeError, ValueError) as exc:
                 args, output = {}, {"error": f"Bad tool arguments: {exc}"}
             else:
-                output = _run_tool(
-                    name, args, con, search_engine, result,
-                    graph_driver=graph_driver, graph_database=graph_database,
-                )
+                signature = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                if signature in seen_calls:
+                    # Break tool-call loops: a smaller model sometimes re-issues an
+                    # identical call instead of writing its answer (seen with show_frames).
+                    output = {
+                        "note": "You already ran this exact call and the result is "
+                        "unchanged. Write your final answer now from the results you have."
+                    }
+                else:
+                    seen_calls.add(signature)
+                    output = _run_tool(
+                        name, args, con, search_engine, result,
+                        graph_driver=graph_driver, graph_database=graph_database,
+                    )
             result.steps.append({"tool": name, "input": args, "output": _summarize(output)})
             messages.append(
                 {
@@ -249,6 +260,8 @@ def _summarize(output: dict[str, Any]) -> str:
     """Compact, human-readable step summary for the UI/log (not the model)."""
     if "error" in output:
         return f"error: {output['error']}"
+    if "note" in output:
+        return "repeat (skipped)"
     if "rows" in output:
         return f"{output['row_count']} rows" + (" (truncated)" if output["truncated"] else "")
     if "results" in output:
