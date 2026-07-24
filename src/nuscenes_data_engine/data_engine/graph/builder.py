@@ -31,7 +31,7 @@ MERGE (:Location {name: row.name})
 _SCENES = """
 UNWIND $rows AS row
 MERGE (s:Scene {token: row.token})
-  SET s.name = row.name, s.description = row.description,
+  SET s.name = row.name, s.description = row.description, s.location = row.location,
       s.is_night = row.is_night, s.is_rain = row.is_rain, s.log_token = row.log_token
 WITH s, row
 MATCH (l:Location {name: row.location})
@@ -59,7 +59,8 @@ UNWIND $rows AS row
 MERGE (f:Frame {token: row.token})
   SET f.channel = row.channel, f.filename = row.filename,
       f.width = row.width, f.height = row.height,
-      f.timestamp = row.timestamp, f.n_boxes = row.n_boxes
+      f.timestamp = row.timestamp, f.n_boxes = row.n_boxes,
+      f.location = row.location, f.is_night = row.is_night, f.is_rain = row.is_rain
 WITH f, row
 MATCH (sc:Scene {token: row.scene_token})
 MERGE (f)-[:IN_SCENE]->(sc)

@@ -137,6 +137,8 @@ def schema_prompt(tables: list[str]) -> str:
     notes = (
         "Notes: is_night/is_rain are scene-level flags derived from the scene\n"
         "description. Night driving exists only in Singapore; all rain is in Boston.\n"
+        "location is one of the four full names above — there is NO bare 'singapore' or\n"
+        "'boston'; match a city with LIKE 'singapore%' (or IN (...)), never = 'singapore'.\n"
         "There is no ego-pose or object-distance data — distance questions cannot be\n"
         "answered. For multi-hop relationship / co-occurrence / similarity / temporal\n"
         "questions, prefer the run_cypher knowledge-graph tool when it is offered.\n"

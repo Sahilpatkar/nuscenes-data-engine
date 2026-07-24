@@ -26,9 +26,11 @@ _CONSTRAINTS: tuple[tuple[str, str], ...] = (
 # (label, property) — secondary index for common chat filters.
 _INDEXES: tuple[tuple[str, str], ...] = (
     ("Frame", "channel"),
+    ("Frame", "location"),
     ("Frame", "vlm_weather"),
     ("Frame", "vlm_time_of_day"),
     ("Scene", "is_night"),
+    ("Scene", "location"),
 )
 
 

@@ -150,6 +150,9 @@ def test_frame_rows_carry_props_and_edge_keys() -> None:
         "height": 900,
         "timestamp": 1000,
         "n_boxes": 3,
+        "location": "boston-seaport",
+        "is_night": False,
+        "is_rain": False,
     }
 
 

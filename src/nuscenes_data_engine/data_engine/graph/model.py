@@ -109,7 +109,11 @@ def sample_rows(samples: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def frame_rows(samples: pd.DataFrame) -> list[dict[str, Any]]:
-    """One ``Frame`` node per (keyframe, camera) image, with edge keys for scene/sample."""
+    """One ``Frame`` node per (keyframe, camera) image, with edge keys for scene/sample.
+
+    Carries the denormalized ``location``/``is_night``/``is_rain`` context (as the SQL
+    tables do), so Cypher can filter frames directly without a Scene/Location traversal.
+    """
     return [
         {
             "token": str(r.sample_data_token),
@@ -121,6 +125,9 @@ def frame_rows(samples: pd.DataFrame) -> list[dict[str, Any]]:
             "height": int(r.height),
             "timestamp": int(r.timestamp),
             "n_boxes": int(r.n_boxes),
+            "location": str(r.location),
+            "is_night": bool(r.is_night),
+            "is_rain": bool(r.is_rain),
         }
         for r in samples.itertuples(index=False)
     ]
