@@ -25,3 +25,7 @@ output:
   parquet:
     annotations: annotations.parquet   # one row per projected 2D box
     samples: samples.parquet           # per-keyframe context (scene, weather, sensor)
+    # Phase B geometry (produced by `ingest-geometry`; GT ego-pose + 3D boxes).
+    ego_pose: ego_pose.parquet         # one row per keyframe (ego position/heading/speed)
+    annotations_3d: annotations_3d.parquet  # one row per 3D GT box (world pos, size, distance-to-ego)
+    instances: instances.parquet       # one row per tracked object (instance_token)

@@ -82,6 +82,28 @@ def ingest(
 
 
 @app.command()
+def ingest_geometry(
+    config: Path = typer.Option(
+        Path("configs/data.yaml"), "--config", "-c", help="Path to data.yaml."
+    ),
+    limit_scenes: int | None = typer.Option(
+        None, "--limit-scenes", help="Only process the first N scenes (fast dev runs)."
+    ),
+) -> None:
+    """Phase B: parse nuScenes ego-pose + 3D geometry into Parquet (world pos, distance-to-ego)."""
+    from nuscenes_data_engine.ingestion.geometry import run_geometry_ingestion
+
+    summary = run_geometry_ingestion(config, limit_scenes=limit_scenes)
+    logger.info(
+        "Done: %d ego poses, %d 3D boxes, %d instances -> %s",
+        summary["ego_poses"],
+        summary["annotations_3d"],
+        summary["instances"],
+        summary["annotations_3d_parquet"].rsplit("/", 1)[0],
+    )
+
+
+@app.command()
 def validate(
     processed_dir: Path = typer.Option(
         Path("data/processed"), "--processed-dir", help="Directory with the Parquet tables."
