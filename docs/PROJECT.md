@@ -314,10 +314,12 @@ why the Claude flip exists. Full transcripts: docs/DATASET_CHAT.md.
 
 Ordered roughly by value-per-effort:
 
-1. **Active learning round 2** — apply the 6d lessons: per-scene caps / diversity
-   term in mining, rate-based acquisition (`FN/n_GT` or calibrated-confidence
-   error), night/rain-stratified quotas. The harness and the random-control gate
-   already exist; only the acquisition function changes.
+1. **Active learning round 2** — the 6e graph-diversity arm delivered the first 6d
+   lesson (a diversity term): GDS-Louvain community sampling over the SIMILAR_TO graph
+   matched the random control's overall gain (+0.0344) *and* recovered night (+0.0036,
+   where random regressed), spanning 473 scenes vs mined's 219. Still open: rate-based
+   acquisition (`FN/n_GT` or calibrated-confidence error) and night/rain-stratified
+   quotas — the harness and random-control gate already exist; only the score changes.
 2. **Ego-pose / CAN-bus ingestion (knowledge-graph Phase B)** — the Phase 6e context
    graph (docs/GRAPH.md) is already built from existing data; persisting ego-pose + 3D
    boxes is the remaining unlock for the distance-and-dynamics questions the project plan

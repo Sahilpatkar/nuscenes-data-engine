@@ -308,7 +308,7 @@ picker after the first PR run).
 | 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md |
-| 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; adds a guarded `run_cypher` chat tool for multi-relationship questions + visual exploration — see GRAPH.md |
+| 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
 
 Future work: Terraform-provisioned cloud deployment of the serving stack; ego-pose
 ingestion for a geo-spatial extension of the knowledge graph (GRAPH.md Phase B).

@@ -55,14 +55,16 @@ individual boxes.
 | Category | 23 | HAS_CONDITION | 12,306 |
 | Hazard | 111 | HAS_HAZARD | 1,347 |
 | Location | 4 | CO_OCCURS_WITH | 220 |
-| | | SIMILAR_TO | CAM_FRONT × k |
+| | | SIMILAR_TO | 341,490 (CAM_FRONT, k=10) |
 
 ## Code
 
 - `src/nuscenes_data_engine/data_engine/graph/model.py` — pure projections (Parquet
   DataFrame → node/edge dicts); the graph's correctness is unit-tested here, no DB needed.
 - `graph/builder.py` — dependency-ordered, batched `UNWIND`-MERGE passes (idempotent).
-- `graph/knn.py` — `SIMILAR_TO` edges from the LanceDB vectors (reuses `data_engine/store.py`).
+- `graph/knn.py` — `SIMILAR_TO` edges via a vectorized in-memory kNN over the LanceDB
+  vectors (cosine = dot on the L2-normalized SigLIP vectors; ~25 s for all 34,149
+  CAM_FRONT frames), written incrementally so the pass is resumable.
 - `graph/schema.py` — constraints/indexes. `graph/connection.py` — driver + batch helpers.
 - `graph/guard.py` — the read-only Cypher guard + the agent's graph-schema prompt.
 - `graph/queries.py` — the canned query library (`graph query --canned <name>`).
@@ -75,7 +77,7 @@ brings `data/processed` + `data/lancedb` local.
 ```bash
 docker compose up -d neo4j                 # Browser at http://localhost:7474 (Bolt :7687)
 make graph-build                           # or: uv run nuscenes-data-engine graph build
-#   --skip-knn         skip the (slower) SIMILAR_TO pass
+#   --skip-knn         skip the SIMILAR_TO pass
 #   --edges similar    rebuild only one derived pass (repeatable)
 #   --rebuild          delete all nodes/rels first
 #   --knn-k 10 --channel CAM_FRONT
@@ -137,13 +139,27 @@ Errors are returned to the model as data, so it repairs its own Cypher.
 
 ## Active learning (graph diversity)
 
-The `SIMILAR_TO` + `CO_OCCURS_WITH` structure enables a graph-native acquisition strategy
-for Phase 6d: GDS community detection (Louvain) over the similarity subgraph yields
-appearance/failure clusters without KMeans, budget is allocated across communities with the
-existing `autolabel.sampling.allocate` helper, and each community contributes a
-representative frame. It plugs in as a new `arm="graph"` against the existing mined/random
-control (see `docs/ACTIVE_LEARNING.md`). *(Scaffolded as a follow-on; the chat + exploration
-paths above are the shipped core.)*
+A graph-native acquisition arm for Phase 6d: GDS **Louvain** community detection over the
+pool's `SIMILAR_TO` subgraph yields appearance communities without KMeans; the labeling
+budget is allocated across communities with the shared `autolabel.sampling.allocate`
+helper, and each community contributes its most-connected (representative) frames.
+
+```bash
+docker compose up -d neo4j && make graph-build            # needs the SIMILAR_TO edges
+uv run nuscenes-data-engine al graph-mine                 # -> data/active_learning/graph.parquet
+GPU_DEVICES=0 scripts/gpu-run.sh --bg al run --arm graph  # train + evaluate on the GPU server
+uv run nuscenes-data-engine al report                     # 4-arm comparison
+```
+
+It plugs in as a new `arm="graph"` against the existing mined/random control (same leakage
+guards, same shared val split). Graph-mining runs on the infra machine (Neo4j lives there);
+`graph.parquet` then ships to the GPU server for training, exactly like `mined.parquet`.
+
+**Why it helps:** the 6d KMeans mined arm collapsed to near-duplicates around failure
+centroids — 219 distinct scenes, **0% night** — which is why it lost to the equal-budget
+random control. Graph-diversity selection spreads across **473 scenes (12.1% night)**,
+matching random's diversity (501 scenes, 12.7% night) while staying structured and
+interpretable. See `docs/ACTIVE_LEARNING.md` for the trained-arm mAP comparison.
 
 ## Known limitation — Phase B (no geometry yet)
 

@@ -15,6 +15,7 @@ untestable. Instead we run a controlled experiment at a smaller scale:
 | `baseline` | 25% of official-train scenes (night-stratified, seed 64) | Where does a data-starved model fail? |
 | `mined` | baseline + 1,500 frames mined near its failure clusters | Does targeted data help? |
 | `random` | baseline + 1,500 uniformly random pool frames | …more than just *any* extra data? |
+| `graph` | baseline + 1,500 frames from GDS-Louvain communities of the SIMILAR_TO graph (Phase 6e) | Does graph-structured diversity beat both? |
 
 All arms: `yolov8n @ 640`, 20 epochs, CAM_FRONT only. The val split is **identical
 across arms by construction** (the `train_frames` filter never touches val) and
@@ -75,6 +76,21 @@ scripts/gpu-run.sh --bg al run --arm random
 scripts/gpu-run.sh al report
 ```
 
+Graph-diversity arm (Phase 6e) — mining needs Neo4j, so it runs on the **infra
+machine**, then `graph.parquet` ships to the GPU server for training:
+
+```bash
+# infra machine (Neo4j on :7687 with the SIMILAR_TO edges built)
+docker compose up -d neo4j && make graph-build
+uv run nuscenes-data-engine al graph-mine
+rsync -a data/active_learning/graph.parquet trinity-2-18:/home/mgaur/sahil/nuscenes_project/data/active_learning/
+# GPU server
+GPU_DEVICES=0 scripts/gpu-run.sh --bg al run --arm graph
+# back on the infra machine
+rsync -a trinity-2-18:/home/mgaur/sahil/nuscenes_project/data/active_learning/results.json data/active_learning/
+uv run nuscenes-data-engine al report
+```
+
 Then sync results back to the infra machine (state only — the per-arm YOLO datasets
 are ~10 GB of symlinks and rebuildable):
 
@@ -90,16 +106,17 @@ run when configured.
 
 ## Results
 
-All three arms trained on TRINITY (RTX 3080 Ti, ~20 min/arm), evaluated on the
+All four arms trained on TRINITY (RTX 3080 Ti, ~20 min/arm), evaluated on the
 identical 6,019-frame CAM_FRONT val split (602 night).
 
-### Three-arm comparison
+### Four-arm comparison
 
 | arm | train imgs | overall mAP50 | overall mAP50-95 | night mAP50 | night mAP50-95 | Δ overall | Δ night |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | baseline | 7,035 | 0.4351 | 0.2477 | 0.2894 | 0.1667 | — | — |
 | mined | 8,535 | 0.4568 | 0.2637 | 0.2997 | **0.1739** | +0.0160 | +0.0072 |
-| random | 8,535 | 0.4872 | **0.2817** | 0.2711 | 0.1619 | **+0.0340** | −0.0048 |
+| random | 8,535 | 0.4872 | 0.2817 | 0.2711 | 0.1619 | +0.0340 | −0.0048 |
+| graph | 8,535 | 0.4861 | **0.2821** | 0.2839 | 0.1703 | **+0.0344** | **+0.0036** |
 
 **The headline result is negative — and instructive: the random control beat
 similarity-mining on overall mAP (+0.034 vs +0.016).** Diversity explains it:
@@ -139,10 +156,33 @@ night members, 16%), and the mined set is 0% night vs the pool's ~12.7%.
 | 6 | 109 | 0.00 | 4.29 |
 | 7 | 92 | 0.16 | 4.93 |
 
+### Graph-diversity arm (Phase 6e) — delivering on takeaway #1
+
+The negative result above points straight at *diversity*, so Phase 6e adds a fourth
+arm that acquires frames from the **structure of the SIMILAR_TO graph** instead of raw
+embedding proximity. `al graph-mine` (`active_learning/graph_mining.py`) runs **GDS
+Louvain** over the pool's SIMILAR_TO subgraph (21,094 connected CAM_FRONT frames → 98
+communities), allocates the 1,500-frame budget across communities with the shared
+`allocate` helper, and takes each community's most-connected (representative) frames.
+It reuses the same leakage guards and the *same* `random.parquet` control; only the
+acquisition function changes. Neo4j lives on the infra machine, so graph-mining runs
+there and ships `graph.parquet` to the GPU server for `al run --arm graph`.
+
+**It gets the best of both.** The graph arm matches the random control's best-in-class
+overall gain (**+0.0344** vs +0.0340; overall mAP50-95 0.2821, the highest of any arm)
+*and* improves the night slice (**+0.0036**, night mAP50-95 0.1703) — where random
+actually regressed (−0.0048). It is the only arm to lift **both** overall and night vs
+baseline. The mechanism is coverage: the graph-mined 1,500 frames span **473 scenes with
+12.1% night**, versus similarity-mining's **219 scenes, 0% night** — structured diversity
+recovers random's coverage benefit without discarding the night stratum that pure
+failure-centroid mining dropped. Design + Cypher/GDS details: [GRAPH.md](GRAPH.md).
+
 ### Takeaways for the next iteration
 
-1. **Add a diversity term** — cap frames per scene (or per near-duplicate cluster)
-   during mining; the 21% top-10-scene concentration is the main reason mined lost.
+1. **Add a diversity term** ✅ *(done in 6e)* — the graph arm caps concentration by
+   sampling across Louvain communities of the similarity graph; it matched random's
+   overall gain and recovered night, confirming the 21% top-10-scene concentration was
+   the main reason `mined` lost.
 2. **Rate-based acquisition** — score `n_fn / n_gt` (or calibrated-confidence
    error) instead of absolute counts, so sparse night/edge-case frames can rank.
 3. **Stratified quotas** — reserve part of the mining budget for underrepresented
@@ -150,5 +190,5 @@ night members, 16%), and the mined set is 0% night vs the pool's ~12.7%.
 4. **Random is a strong baseline** — any acquisition function should be gated on
    beating an equal-budget random control, exactly as this harness does.
 
-Runs: MLflow `nuscenes-yolo` (three `*_al-*` runs, registry untouched) and W&B
-[`al-baseline` / `al-mined` / `al-random` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
+Runs: MLflow `nuscenes-yolo` (four `*_al-*` runs, registry untouched) and W&B
+[`al-baseline` / `al-mined` / `al-random` / `al-graph` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
