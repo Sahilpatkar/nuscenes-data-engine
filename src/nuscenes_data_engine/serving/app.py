@@ -63,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.model, app.state.model_version = None, None
     app.state.search_engine = None  # built lazily on the first /search call
     app.state.chat_catalog = None  # built lazily on the first /chat call
+    app.state.graph = None  # knowledge-graph driver; built lazily, False once unreachable
     yield
 
 
@@ -252,9 +253,28 @@ def _get_chat_catalog(request: Request) -> Any:
     return request.app.state.chat_catalog
 
 
+def _get_graph_driver(request: Request) -> Any:
+    """Open (once) the Neo4j driver; cache ``False`` if unreachable so chat degrades.
+
+    Chat stays fully functional on SQL + vector search when the graph is down — the
+    ``run_cypher`` tool is simply not offered.
+    """
+    state = request.app.state
+    if state.graph is None:  # not yet attempted this process
+        try:
+            from nuscenes_data_engine.data_engine.graph import connection
+
+            state.graph = connection.get_driver(state.settings)
+            logger.info("Knowledge graph connected — chat gains the run_cypher tool.")
+        except Exception as exc:  # not installed / unreachable -> SQL+vector only
+            logger.info("Knowledge graph unavailable (%s) — SQL+vector chat only.", exc)
+            state.graph = False
+    return state.graph or None
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    """Answer a dataset question via the tool-calling agent (SQL + vector search)."""
+    """Answer a dataset question via the tool-calling agent (SQL + vector + graph)."""
     from nuscenes_data_engine.data_engine.chat import agent
     from nuscenes_data_engine.data_engine.chat.transports import TransportError, make_transport
 
@@ -278,6 +298,8 @@ def chat(request: Request, body: ChatRequest) -> ChatResponse:
             search_engine=engine,
             history=[turn.model_dump() for turn in body.history],
             log_path=Path(settings.chat_log_path),
+            graph_driver=_get_graph_driver(request),
+            graph_database=settings.neo4j_database,
         )
     except TransportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

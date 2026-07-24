@@ -5,7 +5,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup infra-up infra-down ingest validate train evaluate serve monitor \
-        manifest embed search gpu-run gpu-train gpu-embed gpu-manifest sync-down \
+        manifest embed search graph-build gpu-run gpu-train gpu-embed gpu-manifest sync-down \
         test lint format typecheck check clean
 
 help:  ## Show this help.
@@ -71,6 +71,9 @@ embed:  ## Phase 6a: embed camera keyframes into the LanceDB store (GPU server).
 
 search:  ## Phase 6a: semantic frame search, e.g. make search Q="night construction".
 	uv run nuscenes-data-engine search "$(Q)"
+
+graph-build:  ## Phase 6e: build the Neo4j knowledge graph (infra machine; needs `docker compose up -d neo4j`).
+	uv run nuscenes-data-engine graph build
 
 # --- Quality gates ---
 test:  ## Run the test suite.

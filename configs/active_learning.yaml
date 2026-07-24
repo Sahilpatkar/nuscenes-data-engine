@@ -19,6 +19,10 @@ mining:
   seed: 64
   overfetch: 4             # per-centroid candidate multiplier before dedupe
 
+graph_mining:              # Phase 6e arm: GDS Louvain over the pool's SIMILAR_TO graph
+  n_mine: 1500             # match the mined/random arms for a fair comparison
+  floor: 1                 # min frames per community (guarantees diversity coverage)
+
 train:                     # per-arm training (overlays configs/train.yaml)
   model: yolov8n.pt
   imgsz: 640

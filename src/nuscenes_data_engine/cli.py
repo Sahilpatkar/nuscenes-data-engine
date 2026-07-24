@@ -369,29 +369,41 @@ def chat(
         logger.warning("Vector search unavailable (%s) — SQL-only chat.", exc)
         engine = None
 
+    from nuscenes_data_engine.data_engine.graph import connection as graph_connection
+
+    try:
+        graph_driver: Any | None = graph_connection.get_driver(settings)
+    except Exception as exc:  # not installed / unreachable -> SQL+vector chat only
+        logger.info("Knowledge graph unavailable (%s) — SQL+vector chat only.", exc)
+        graph_driver = None
+
     history: list[dict[str, Any]] = []
-    while True:
-        if not question:
-            question = typer.prompt("you").strip()
-            if question.lower() in ("exit", "quit", "q", ""):
+    try:
+        while True:
+            if not question:
+                question = typer.prompt("you").strip()
+                if question.lower() in ("exit", "quit", "q", ""):
+                    break
+            result = agent.answer(
+                question, transport=transport, con=con, search_engine=engine,
+                history=history, log_path=Path(settings.chat_log_path),
+                graph_driver=graph_driver, graph_database=settings.neo4j_database,
+            )
+            for step in result.steps:
+                logger.info("  [%s] %s -> %s", step["tool"], step["input"], step["output"])
+            print(f"\n{result.answer}\n")
+            if result.frames:
+                tokens = ", ".join(frame["sample_data_token"] for frame in result.frames)
+                logger.info("Example frames: %s", tokens)
+            if not interactive:
                 break
-        result = agent.answer(
-            question, transport=transport, con=con, search_engine=engine,
-            history=history, log_path=Path(settings.chat_log_path),
-        )
-        for step in result.steps:
-            logger.info("  [%s] %s -> %s", step["tool"], step["input"], step["output"])
-        print(f"\n{result.answer}\n")
-        if result.frames:
-            tokens = ", ".join(frame["sample_data_token"] for frame in result.frames)
-            logger.info("Example frames: %s", tokens)
-        if not interactive:
-            break
-        history += [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": result.answer},
-        ]
-        question = ""
+            history += [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": result.answer},
+            ]
+            question = ""
+    finally:
+        graph_connection.close(graph_driver)
 
 
 autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")
@@ -553,9 +565,25 @@ def al_mine(
             )
 
 
+@al_app.command("graph-mine")
+def al_graph_mine(
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Phase 6e arm: GDS-community-detect the pool's SIMILAR_TO graph (needs Neo4j)."""
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("al-graph-mine", enabled=wandb) as run:
+        summary = run_graph_mining(config)
+        if run is not None:
+            run.log({k: v for k, v in summary.items() if isinstance(v, int | float)})
+    logger.info("Graph-mine summary: %s", summary)
+
+
 @al_app.command("run")
 def al_run(
-    arm: str = typer.Option(..., "--arm", help="baseline | mined | random."),
+    arm: str = typer.Option(..., "--arm", help="baseline | mined | random | graph."),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
     device: str | None = typer.Option(None, "--device"),
     epochs: int | None = typer.Option(None, "--epochs", help="Override (smoke runs)."),
@@ -697,6 +725,98 @@ def monitor_report(
         len(summary["columns"]),
         html_path,
     )
+
+
+graph_app = typer.Typer(no_args_is_help=True, help="Phase 6e: Neo4j knowledge graph.")
+app.add_typer(graph_app, name="graph")
+
+
+def _echo_rows(out: dict[str, Any]) -> None:
+    """Print a guarded-query result (columns + rows) as a simple table."""
+    columns = out.get("columns", [])
+    print(" | ".join(str(c) for c in columns))
+    for row in out.get("rows", []):
+        print(" | ".join("" if v is None else str(v) for v in row))
+    if out.get("truncated"):
+        logger.info("(truncated)")
+
+
+@graph_app.command("build")
+def graph_build(
+    config: Path = typer.Option(Path("configs/engine.yaml"), "--config", "-c"),
+    edges: list[str] = typer.Option(
+        None, "--edges", help="Restrict derived edge passes (contains|co_occurs|vlm|similar); repeatable."
+    ),
+    knn_k: int | None = typer.Option(None, "--knn-k", help="SIMILAR_TO neighbours per frame."),
+    channel: str | None = typer.Option(None, "--channel", help="kNN camera channel (CAM_FRONT)."),
+    skip_knn: bool = typer.Option(False, "--skip-knn", help="Skip the LanceDB kNN pass."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Delete all nodes/rels first."),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Build the knowledge graph from processed Parquet + LanceDB."""
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.graph.builder import build_graph
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run("graph-build", enabled=wandb) as run:
+        summary = build_graph(
+            get_settings(), config, edges=edges or None, knn_k=knn_k,
+            channel=channel, skip_knn=skip_knn, rebuild=rebuild,
+        )
+        if run is not None:
+            run.log({k: v for k, v in summary.items() if isinstance(v, int | float)})
+    logger.info("Graph build: %s", summary)
+
+
+@graph_app.command("query")
+def graph_query(
+    cypher: str = typer.Argument("", help="Read-only Cypher (omit with --canned)."),
+    canned: str | None = typer.Option(None, "--canned", help="Named query from the library."),
+    params: str = typer.Option("{}", "--params", help="JSON parameters for the query."),
+) -> None:
+    """Run one guarded read-only Cypher query and print the rows."""
+    import json
+
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.graph import connection, guard, queries
+
+    if canned is not None:
+        if canned not in queries.CANNED:
+            raise typer.BadParameter(
+                f"Unknown canned query '{canned}'. Available: {', '.join(sorted(queries.CANNED))}"
+            )
+        _desc, cypher = queries.CANNED[canned]
+    if not cypher:
+        raise typer.BadParameter("Provide a Cypher query or --canned <name>.")
+
+    settings = get_settings()
+    driver = connection.get_driver(settings)
+    try:
+        out = guard.run_cypher(
+            driver, cypher, json.loads(params), database=settings.neo4j_database
+        )
+    finally:
+        connection.close(driver)
+    if "error" in out:
+        logger.error(out["error"])
+        raise typer.Exit(code=1)
+    _echo_rows(out)
+
+
+@graph_app.command("stats")
+def graph_stats() -> None:
+    """Print node and relationship counts."""
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.graph import connection, guard, queries
+
+    settings = get_settings()
+    driver = connection.get_driver(settings)
+    try:
+        for name in ("stats", "rel_stats"):
+            _desc, cypher = queries.CANNED[name]
+            _echo_rows(guard.run_cypher(driver, cypher, database=settings.neo4j_database))
+    finally:
+        connection.close(driver)
 
 
 if __name__ == "__main__":

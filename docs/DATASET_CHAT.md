@@ -86,9 +86,15 @@ answer's steps in an expander.
 labels from Phase 6b) — schemas in [ANALYTICS.md](ANALYTICS.md) and in the agent's
 system prompt.
 
+**Multi-hop questions:** when the Phase 6e knowledge graph is reachable, the agent
+gains a fourth tool, `run_cypher`, for relationship / path / co-occurrence /
+similarity / temporal-next questions that SQL joins express awkwardly (see
+[GRAPH.md](GRAPH.md)). It degrades to SQL + vector only when Neo4j is down.
+
 **Known limitation:** no ego-pose/CAN-bus data is ingested, so distance-to-ego
 questions (the project plan's "pedestrians within 5 m" example) are out of scope
-for the current schema; the agent is told to say so rather than guess.
+for the current schema — for SQL *and* the graph; the agent is told to say so
+rather than guess.
 
 ## Example questions (live transcripts, qwen2.5:14b on an M4 Pro)
 

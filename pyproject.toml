@@ -49,6 +49,7 @@ engine = [
     "anthropic>=0.66",  # Phase 6b: VLM auto-labeling via the Claude Batch API
     "httpx>=0.27",  # Phase 6b: local vLLM labeling transport (also in serve extra)
     "scikit-learn>=1.4",  # Phase 6d: failure clustering (was only transitive before)
+    "neo4j>=5.20",  # Phase 6e: knowledge-graph driver (pure-Python; APOC/GDS are Docker plugins)
 ]
 # Phase 4 — serving + demo UI
 serve = [
@@ -142,16 +143,19 @@ module = [
     "lancedb.*",
     "torch.*",
     "sklearn.*",
+    "neo4j.*",
+    "testcontainers.*",
 ]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not smoke_train and not engine_smoke and not label_smoke'"
+addopts = "-ra -m 'not smoke_train and not engine_smoke and not label_smoke and not graph_smoke'"
 markers = [
     "smoke_train: 1-epoch CPU training smoke run (dedicated CI job; excluded by default)",
     "engine_smoke: real-SigLIP embedding sanity run (manual, downloads the model; excluded by default)",
     "label_smoke: single live Claude API labeling call (manual, needs ANTHROPIC_API_KEY; excluded by default)",
+    "graph_smoke: end-to-end graph build against an ephemeral Neo4j (manual; excluded by default)",
 ]
 filterwarnings = [
     # Third-party deprecation noise from the nuScenes devkit's matplotlib/pyparsing deps.

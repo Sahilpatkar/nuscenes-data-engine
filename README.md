@@ -273,6 +273,22 @@ uv run nuscenes-data-engine chat "How many night scenes are there per location?"
 uv run nuscenes-data-engine chat -i     # REPL; or use the Streamlit "Ask the dataset" tab
 ```
 
+## Knowledge graph (Phase 6e)
+
+A Neo4j **context graph** built from the same processed Parquet + LanceDB vectors
+(no re-ingestion): scenes, keyframes, frames, categories, locations, and VLM
+hazards, joined by `CONTAINS` / `CO_OCCURS_WITH` / `SIMILAR_TO` / temporal `NEXT`
+edges. It powers **multi-relationship** questions that are awkward as SQL joins,
+visual exploration in Neo4j Browser, and graph-diversity active learning. When
+reachable, the chat agent gains a guarded read-only `run_cypher` tool (and degrades
+to SQL + vector when it isn't). Design + Cypher guard: [docs/GRAPH.md](docs/GRAPH.md).
+
+```bash
+docker compose up -d neo4j     # Browser at http://localhost:7474 (Bolt :7687)
+make graph-build               # build from data/processed + data/lancedb
+uv run nuscenes-data-engine graph query --canned top_co_occurrence
+```
+
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
@@ -292,8 +308,10 @@ picker after the first PR run).
 | 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md |
+| 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; adds a guarded `run_cypher` chat tool for multi-relationship questions + visual exploration — see GRAPH.md |
 
-Future work: Terraform-provisioned cloud deployment of the serving stack.
+Future work: Terraform-provisioned cloud deployment of the serving stack; ego-pose
+ingestion for a geo-spatial extension of the knowledge graph (GRAPH.md Phase B).
 
 ## License
 

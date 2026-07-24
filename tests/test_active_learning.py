@@ -11,10 +11,33 @@ import pandas as pd
 import pytest
 import yaml
 
+from nuscenes_data_engine.active_learning.graph_mining import select_representatives
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
 from nuscenes_data_engine.active_learning.report import render_report
 from nuscenes_data_engine.active_learning.sweep import summarize_failures
 from nuscenes_data_engine.training.train import _run_name
+
+# ---------------------------------------------------------------------------
+# graph_mining.py — Phase 6e graph-diversity selection (pure; no Neo4j)
+# ---------------------------------------------------------------------------
+
+
+def test_select_representatives_spreads_budget_and_ranks_by_degree() -> None:
+    communities = {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1, "f": 2}
+    degrees = {"a": 3.0, "b": 1.0, "c": 2.0, "d": 5.0, "e": 1.0, "f": 9.0}
+    # budget 4, floor 1 -> allocate(sizes {0:3,1:2,2:1}) = {0:2, 1:1, 2:1};
+    # within each community the top-degree frames are taken (ties by token).
+    selected = select_representatives(communities, degrees, n_mine=4, floor=1)
+    assert selected == ["a", "c", "d", "f"]
+
+
+def test_select_representatives_is_deterministic_and_bounded() -> None:
+    communities = {f"t{i}": i % 3 for i in range(30)}
+    degrees = {f"t{i}": float(i) for i in range(30)}
+    first = select_representatives(communities, degrees, n_mine=9, floor=1)
+    assert first == select_representatives(communities, degrees, n_mine=9, floor=1)
+    assert len(first) == 9 and len(set(first)) == 9  # no duplicates
+
 
 # ---------------------------------------------------------------------------
 # matching.py — pure numpy, runs in torch-free CI

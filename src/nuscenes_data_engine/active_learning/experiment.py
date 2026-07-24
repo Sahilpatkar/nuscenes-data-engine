@@ -20,7 +20,7 @@ from nuscenes_data_engine.config import get_settings, load_yaml
 
 logger = logging.getLogger("nuscenes_data_engine")
 
-ARMS = ("baseline", "mined", "random")
+ARMS = ("baseline", "mined", "random", "graph")
 
 
 def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any], arm: str) -> set[str]:
@@ -34,7 +34,11 @@ def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any]
     )
     if arm == "baseline":
         return baseline
-    extra_file = {"mined": "mined.parquet", "random": "random.parquet"}[arm]
+    extra_file = {
+        "mined": "mined.parquet",
+        "random": "random.parquet",
+        "graph": "graph.parquet",
+    }[arm]
     extra = set(pd.read_parquet(state_dir / extra_file)["sample_data_token"])
     return baseline | extra
 

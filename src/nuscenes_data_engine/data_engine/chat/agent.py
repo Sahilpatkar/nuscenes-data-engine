@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.data_engine.chat import catalog
+from nuscenes_data_engine.data_engine.graph import guard as graph_guard
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -37,7 +38,7 @@ dataset using your tools; never invent numbers.
 - Answer concisely with the actual numbers; note assumptions or data limitations.
 
 {schema}
-"""
+{graph_schema}"""
 
 TOOL_SPECS: list[dict[str, Any]] = [
     {
@@ -86,6 +87,25 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
 ]
 
+# Offered only when a graph driver is available (composed per call in ``answer``).
+GRAPH_TOOL_SPEC: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_cypher",
+        "description": "Run one read-only Cypher query over the knowledge graph. Use it "
+        "for relationship / path / co-occurrence / similarity / temporal-next questions "
+        "that SQL joins express awkwardly. Results are capped.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cypher": {"type": "string", "description": "A single read-only Cypher query."},
+                "params": {"type": "object", "description": "Optional query parameters."},
+            },
+            "required": ["cypher"],
+        },
+    },
+}
+
 
 @dataclass
 class ChatResult:
@@ -116,17 +136,25 @@ def answer(
     history: list[dict[str, Any]] | None = None,
     max_turns: int = MAX_TURNS,
     log_path: Path | None = None,
+    graph_driver: Any | None = None,
+    graph_database: str = "neo4j",
 ) -> ChatResult:
     """Run the tool loop for one question and return the answer + working."""
     started = time.time()
-    system = SYSTEM_PROMPT.format(schema=catalog.schema_prompt(catalog.catalog_tables(con)))
+    graph_schema = (
+        graph_guard.graph_schema_prompt() + "\n" if graph_driver is not None else ""
+    )
+    system = SYSTEM_PROMPT.format(
+        schema=catalog.schema_prompt(catalog.catalog_tables(con)), graph_schema=graph_schema
+    )
+    tools = TOOL_SPECS + ([GRAPH_TOOL_SPEC] if graph_driver is not None else [])
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     messages += list(history or [])
     messages.append({"role": "user", "content": question})
 
     result = ChatResult(answer="", model=transport.model)
     for _ in range(max_turns):
-        reply = transport.complete(messages, TOOL_SPECS)
+        reply = transport.complete(messages, tools)
         tool_calls = reply.get("tool_calls") or []
         messages.append(
             {"role": "assistant", "content": reply.get("content"), "tool_calls": tool_calls}
@@ -145,7 +173,10 @@ def answer(
             except (json.JSONDecodeError, ValueError) as exc:
                 args, output = {}, {"error": f"Bad tool arguments: {exc}"}
             else:
-                output = _run_tool(name, args, con, search_engine, result)
+                output = _run_tool(
+                    name, args, con, search_engine, result,
+                    graph_driver=graph_driver, graph_database=graph_database,
+                )
             result.steps.append({"tool": name, "input": args, "output": _summarize(output)})
             messages.append(
                 {
@@ -167,6 +198,9 @@ def _run_tool(
     con: Any,
     search_engine: Any | None,
     result: ChatResult,
+    *,
+    graph_driver: Any | None = None,
+    graph_database: str = "neo4j",
 ) -> dict[str, Any]:
     """Execute one tool call; frames get collected onto the result as a side effect."""
     if name == "run_sql":
@@ -175,6 +209,16 @@ def _run_tool(
             # Local models sometimes double-escape whitespace in tool-call JSON.
             sql = sql.replace("\\n", "\n").replace("\\t", "\t")
         return catalog.run_sql(con, sql)
+    if name == "run_cypher":
+        if graph_driver is None:
+            return {"error": "Knowledge graph is not available."}
+        params = args.get("params")
+        return graph_guard.run_cypher(
+            graph_driver,
+            str(args.get("cypher", "")),
+            params if isinstance(params, dict) else None,
+            database=graph_database,
+        )
     if name in ("search_frames", "show_frames"):
         if search_engine is None:
             return {"error": "Vector search is not available (LanceDB store not found)."}

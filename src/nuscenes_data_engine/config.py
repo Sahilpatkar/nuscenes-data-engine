@@ -89,6 +89,20 @@ class Settings(BaseSettings):
     chat_anthropic_model: str = Field(default="claude-opus-4-8")
     chat_log_path: str = Field(default="data/chat/log.jsonl")
 
+    # --- Knowledge graph (Phase 6e / Neo4j) ---
+    # The graph is built from the processed Parquet + LanceDB store on the infra machine
+    # and queried over Bolt. In-container the api reaches the graph at bolt://neo4j:7687;
+    # the builder CLI reaches the compose Neo4j at bolt://localhost:7687. Chat degrades to
+    # SQL-only when the graph is unreachable, so these are optional at runtime.
+    neo4j_uri: str = Field(default="bolt://localhost:7687")
+    neo4j_user: str = Field(default="neo4j")
+    neo4j_password: str = Field(default="neo4jpassword")
+    neo4j_database: str = Field(default="neo4j")
+    # SIMILAR_TO edges are built from the LanceDB vectors of one camera channel (the
+    # embedded/labeled working set), k nearest neighbours per frame.
+    graph_knn_channel: str = Field(default="CAM_FRONT")
+    graph_knn_k: int = Field(default=10)
+
 
 def get_settings() -> Settings:
     """Return a freshly-loaded :class:`Settings` instance."""

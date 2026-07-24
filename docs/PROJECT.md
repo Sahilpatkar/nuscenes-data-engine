@@ -318,9 +318,11 @@ Ordered roughly by value-per-effort:
    term in mining, rate-based acquisition (`FN/n_GT` or calibrated-confidence
    error), night/rain-stratified quotas. The harness and the random-control gate
    already exist; only the acquisition function changes.
-2. **Ego-pose / CAN-bus ingestion** — unlocks the distance-and-dynamics questions
-   the project plan wanted ("pedestrians within 5 m of ego at night") for both
-   SQL analytics and the chat agent, plus speed/braking context for slicing.
+2. **Ego-pose / CAN-bus ingestion (knowledge-graph Phase B)** — the Phase 6e context
+   graph (docs/GRAPH.md) is already built from existing data; persisting ego-pose + 3D
+   boxes is the remaining unlock for the distance-and-dynamics questions the project plan
+   wanted ("pedestrians within 5 m of ego at night") — for SQL analytics, the chat agent,
+   and a geo-spatial extension of the graph (`EgoPose`/`Annotation` nodes with `distance_m`).
 3. **Terraform cloud deployment** (the remaining roadmap item) — lift the compose
    stack to a cloud host; the chat agent's Anthropic flip means no GPU is needed
    for any serving-path component.
@@ -352,4 +354,5 @@ Ordered roughly by value-per-effort:
 | [AUTOLABEL_EVAL.md](AUTOLABEL_EVAL.md) | 6b methodology, sampling, results, cost |
 | [DATASET_CHAT.md](DATASET_CHAT.md) | 6c architecture, SQL guard, transcripts |
 | [ACTIVE_LEARNING.md](ACTIVE_LEARNING.md) | 6d experiment design + results |
+| [GRAPH.md](GRAPH.md) | 6e Neo4j context graph, `run_cypher`, Cypher guard |
 | [PHASE4_PLAN.md](PHASE4_PLAN.md) | Serving design notes |
