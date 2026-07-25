@@ -73,11 +73,15 @@ def apply_schema(driver: Any, *, database: str) -> None:
 def drop_all(driver: Any, *, database: str) -> None:
     """Delete all nodes/relationships for a ``--rebuild`` (constraints/indexes kept).
 
-    Uses ``CALL { ... } IN TRANSACTIONS`` so a full-graph delete doesn't blow the heap;
-    that construct requires an auto-commit transaction.
+    Uses ``apoc.periodic.iterate`` (batched, memory-managed, its own transactions) — the
+    plain ``... IN TRANSACTIONS`` form blows the 2G community instance's transaction memory
+    pool DETACH-deleting 1.2M richly-connected ObjectObservation nodes.
     """
     connection.run_autocommit(
         driver,
-        "MATCH (n) CALL { WITH n DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS",
+        "CALL apoc.periodic.iterate("
+        "'MATCH (n) RETURN id(n) AS id', "
+        "'MATCH (n) WHERE id(n) = id DETACH DELETE n', "
+        "{batchSize: 2000, parallel: false})",
         database=database,
     )

@@ -537,6 +537,15 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
     except Exception as exc:  # no compose Neo4j running -> not a failure, just skipped
         pytest.skip(f"Neo4j not reachable: {exc}")
 
+    # This test drop_all's for exact-count assertions, so it must run on a throwaway/empty
+    # instance — never nuke a populated dev graph.
+    node_count = connection.read_query(
+        driver, "MATCH (n) RETURN count(n) AS n", database=settings.neo4j_database
+    )[0]["n"]
+    if node_count:
+        connection.close(driver)
+        pytest.skip(f"graph_smoke needs an empty Neo4j (found {node_count} nodes); use a throwaway instance")
+
     try:
         schema.drop_all(driver, database=settings.neo4j_database)
         summary = builder.build_graph(settings, Path("configs/engine.yaml"), skip_knn=True)
