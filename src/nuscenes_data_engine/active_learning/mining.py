@@ -10,6 +10,7 @@ Leakage guards assert that no mined/random frame is a baseline or val frame.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,22 @@ from nuscenes_data_engine.data_engine import store
 from nuscenes_data_engine.data_engine.autolabel.sampling import allocate
 
 logger = logging.getLogger("nuscenes_data_engine")
+
+VALID_SCORING = ("absolute", "smoothed_rate")
+
+
+def score_failures(failures: pd.DataFrame, scoring: str) -> pd.Series:
+    """Acquisition ranking: round-1 absolute score or the round-2 smoothed failure rate."""
+    if scoring == "absolute":
+        return failures["failure_score"].astype(float)
+    if scoring == "smoothed_rate":
+        return (failures["n_fn"] + 0.5 * failures["n_low_conf"]) / (failures["n_gt"] + 0.5)
+    raise ValueError(f"Unknown scoring {scoring!r} (expected one of {VALID_SCORING})")
+
+
+def quota_shortfall(records: Iterable[dict[str, Any]], flag: str, floor: int) -> int:
+    """Frames still needed to meet a stratum floor; overlap counts toward every flag."""
+    return max(floor - sum(1 for record in records if record.get(flag)), 0)
 
 
 def read_vectors(tbl: Any, tokens: list[str], chunk: int = 500) -> pd.DataFrame:

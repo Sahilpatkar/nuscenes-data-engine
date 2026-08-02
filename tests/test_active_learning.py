@@ -13,6 +13,7 @@ import yaml
 
 from nuscenes_data_engine.active_learning.graph_mining import select_representatives
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
+from nuscenes_data_engine.active_learning.mining import quota_shortfall, score_failures
 from nuscenes_data_engine.active_learning.report import render_report
 from nuscenes_data_engine.active_learning.sweep import summarize_failures
 from nuscenes_data_engine.training.train import _run_name
@@ -123,6 +124,52 @@ def test_summarize_failures_day_night() -> None:
     assert stats["mean_failure_score_day"] == pytest.approx(1.5)
     assert stats["mean_failure_score_night"] == pytest.approx(6.0)
     assert stats["total_fn"] == 8.0
+
+
+# ---------------------------------------------------------------------------
+# mining.py scoring — round 2 acquisition scores (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_score_failures_absolute_matches_round1() -> None:
+    failures = pd.DataFrame(
+        {"n_gt": [5, 2], "n_fn": [3, 1], "n_low_conf": [2, 0], "failure_score": [4.0, 1.0]}
+    )
+    assert score_failures(failures, "absolute").tolist() == [4.0, 1.0]
+
+
+def test_score_failures_smoothed_rate_reranks_sparse_frames() -> None:
+    # Crowded day frame vs sparse frame: absolute ranks the crowd, rate the miss-rate.
+    failures = pd.DataFrame(
+        {"n_gt": [20, 1, 0], "n_fn": [4, 1, 0], "n_low_conf": [2, 0, 0],
+         "failure_score": [5.0, 1.0, 0.0]}
+    )
+    rate = score_failures(failures, "smoothed_rate")
+    assert rate.iloc[0] == pytest.approx(5.0 / 20.5)
+    assert rate.iloc[1] == pytest.approx(1.0 / 1.5)
+    assert rate.iloc[2] == 0.0  # n_gt = 0 is safe (0/0.5)
+    absolute = score_failures(failures, "absolute")
+    assert absolute.idxmax() == 0 and rate.idxmax() == 1  # the ranking flips
+
+
+def test_score_failures_smoothing_breaks_total_miss_ties() -> None:
+    # Without smoothing, 1-of-1 and 3-of-3 total misses both score rate 1.0;
+    # k=0.5 ranks the bigger-evidence frame first.
+    failures = pd.DataFrame(
+        {"n_gt": [1, 3], "n_fn": [1, 3], "n_low_conf": [0, 0], "failure_score": [1.0, 3.0]}
+    )
+    rate = score_failures(failures, "smoothed_rate")
+    assert rate.iloc[1] > rate.iloc[0]  # 3/3.5 > 1/1.5
+    assert rate.iloc[0] == pytest.approx(1.0 / 1.5)
+    assert rate.iloc[1] == pytest.approx(3.0 / 3.5)
+
+
+def test_score_failures_unknown_scoring_raises() -> None:
+    failures = pd.DataFrame(
+        {"n_gt": [1], "n_fn": [1], "n_low_conf": [0], "failure_score": [1.0]}
+    )
+    with pytest.raises(ValueError, match="Unknown scoring"):
+        score_failures(failures, "bogus")
 
 
 # ---------------------------------------------------------------------------
