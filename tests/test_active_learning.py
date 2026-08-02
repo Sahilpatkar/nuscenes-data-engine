@@ -494,6 +494,93 @@ def test_run_mining_selects_pool_frames(mining_setup: Path, tmp_path: Path) -> N
     ].tolist()
 
 
+def test_run_mining_rate_arm_artifacts(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    state = tmp_path / "state"
+    summary = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+
+    assert summary["arm"] == "rate" and summary["scoring"] == "smoothed_rate"
+    assert (state / "rate.parquet").is_file()
+    assert (state / "clusters_rate.parquet").is_file()
+    assert (state / "cluster_summary_rate.json").is_file()
+    assert not (state / "random.parquet").is_file()  # control: only the mined arm writes it
+    assert not (state / "mined.parquet").is_file()
+
+    rate = pd.read_parquet(state / "rate.parquet")
+    assert len(rate) == 6 == summary["n_mined"]
+    assert rate["sample_data_token"].is_unique
+    pool_tokens = {f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)}
+    assert set(rate["sample_data_token"]) <= pool_tokens
+    assert {"is_night", "is_rain", "scene_name"} <= set(rate.columns)
+
+    # Seeded determinism.
+    rerun = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+    assert rerun["n_mined"] == 6
+    assert pd.read_parquet(state / "rate.parquet")["sample_data_token"].tolist() == rate[
+        "sample_data_token"
+    ].tolist()
+
+
+def test_run_mining_strat_arm_meets_floors(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    summary = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+    strat = pd.read_parquet(tmp_path / "state" / "strat.parquet")
+    assert len(strat) == 6 == summary["n_mined"]
+    assert int(strat["is_night"].sum()) >= 2
+    assert int(strat["is_rain"].sum()) >= 2
+    assert summary["mined_night_share"] >= 2 / 6
+    assert summary["mined_rain_share"] >= 2 / 6
+    assert summary["n_scenes"] == pd.read_parquet(
+        tmp_path / "state" / "strat.parquet"
+    )["scene_name"].nunique()
+
+
+def test_run_mining_dry_stratum_backfills_from_samples(
+    mining_setup: Path, tmp_path: Path
+) -> None:
+    """pool-4 is rain in samples but absent from the store: a big rain floor forces backfill."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["n_mine"] = 12
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 10}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+    strat = pd.read_parquet(tmp_path / "state" / "strat.parquet")
+    assert len(strat) == 12
+    assert int(strat["is_rain"].sum()) >= 10
+    backfilled = strat[strat["cluster"] == -1]
+    # The store holds only 8 rain frames (pool-2/3); the rest must come from samples.
+    assert not backfilled.empty
+    assert set(backfilled["scene_name"]) <= {"pool-4"}
+
+
+def test_run_mining_quota_validation(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 99}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="exceeds n_mine"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+
+    cfg["mining"]["n_mine"] = 20
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 13}  # rain stratum has 12 frames
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="exceeds the stratum pool"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+
+
+def test_run_mining_unknown_arm_raises(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    with pytest.raises(ValueError, match="Unknown mining arm"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="bogus")
+
+
 # ---------------------------------------------------------------------------
 # experiment.py — arm token resolution, config overlay, results merge
 # ---------------------------------------------------------------------------
