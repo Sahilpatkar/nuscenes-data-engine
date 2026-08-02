@@ -72,6 +72,25 @@ class SearchEngine:
             raise KeyError(f"Unknown frame token: {token}")
         return self._results(store.search_frames(self._table, vec, k, exclude_token=token))
 
+    def frames_by_tokens(self, tokens: list[str]) -> list[dict[str, Any]]:
+        """Metadata + thumbnails for specific frames (no similarity involved; score=1).
+
+        Unknown tokens are silently dropped; tokens containing quotes are ignored
+        rather than escaped (they cannot occur in real nuScenes tokens).
+        """
+        safe = [token for token in tokens if token and "'" not in token]
+        if not safe:
+            return []
+        quoted = ", ".join(f"'{token}'" for token in safe)
+        frames = (
+            self._table.search()
+            .where(f"sample_data_token IN ({quoted})")
+            .limit(len(safe))
+            .to_pandas()
+        )
+        frames = frames.assign(score=1.0)
+        return self._results(frames)
+
     @staticmethod
     def _results(frames: pd.DataFrame) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = frames[_RESULT_COLUMNS].to_dict("records")

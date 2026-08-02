@@ -3416,6 +3416,18 @@ wheels = [
 ]
 
 [[package]]
+name = "neo4j"
+version = "6.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/f4/aaa4ac19adae4b01bc742b63afd2672a77e7351566f02721e713e4b863ee/neo4j-6.2.0.tar.gz", hash = "sha256:e1e246b65b572bd8ea97f9e0e721b7d40a5ce53e53d0007c29aef63e4f9124d9", size = 241459, upload-time = "2026-05-04T07:35:41.428Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/cf/1c3795866cefaac6e648d4e98c373cafd97810f6e317c307371007ab4abb/neo4j-6.2.0-py3-none-any.whl", hash = "sha256:b87abdd13a5cc2e3bd51026926c2f20ac38fa3febe98c340520dce19e97388d0", size = 327824, upload-time = "2026-05-04T07:35:39.604Z" },
+]
+
+[[package]]
 name = "networkx"
 version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3511,6 +3523,7 @@ engine = [
     { name = "duckdb" },
     { name = "httpx" },
     { name = "lancedb" },
+    { name = "neo4j" },
     { name = "scikit-learn" },
     { name = "transformers" },
 ]
@@ -3545,6 +3558,7 @@ requires-dist = [
     { name = "lancedb", marker = "extra == 'engine'", specifier = ">=0.34" },
     { name = "mlflow", marker = "extra == 'train'", specifier = ">=2.12" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "neo4j", marker = "extra == 'engine'", specifier = ">=5.20" },
     { name = "numpy", specifier = ">=1.26,<2" },
     { name = "nuscenes-devkit", marker = "extra == 'data'", specifier = ">=1.1.11" },
     { name = "opencv-python", specifier = ">=4.9" },

@@ -20,7 +20,7 @@ def render_report(results: dict[str, Any], clusters: pd.DataFrame | None) -> str
     baseline = results.get("baseline", {})
     base_overall = baseline.get("overall", {}).get("mAP50-95")
     base_night = baseline.get("night", {}).get("mAP50-95")
-    for arm in ("baseline", "mined", "random"):
+    for arm in ("baseline", "mined", "random", "graph"):
         record = results.get(arm)
         if record is None:
             continue

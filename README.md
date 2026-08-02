@@ -12,6 +12,9 @@ API and monitored for drift — all tied together with CI/CD.
 > is deliberately production-grade. See [nuscenes-mlops-project-plan.md](nuscenes-mlops-project-plan.md)
 > for the full design and rationale.
 
+**📖 Full project documentation — objective, architecture, decisions, results,
+model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.md)**
+
 ## Status
 
 **All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
@@ -255,6 +258,37 @@ uv run nuscenes-data-engine autolabel submit --yes      # paid run (needs ANTHRO
 uv run nuscenes-data-engine autolabel collect && uv run nuscenes-data-engine autolabel eval
 ```
 
+## Chat with the dataset (Phase 6c)
+
+A tool-calling LLM agent answers natural-language questions by writing DuckDB SQL
+over the Parquet tables and running semantic vector search over the frame
+embeddings — returning numbers *with example frames*, every query logged. Runs $0
+on a local model (Ollama, `qwen2.5:14b`) and flips to the Claude API for
+deployment via `CHAT_PROVIDER=anthropic`. Design, SQL-safety guard, and example
+transcripts: [docs/DATASET_CHAT.md](docs/DATASET_CHAT.md).
+
+```bash
+brew install ollama && brew services start ollama && ollama pull qwen2.5:14b
+uv run nuscenes-data-engine chat "How many night scenes are there per location?"
+uv run nuscenes-data-engine chat -i     # REPL; or use the Streamlit "Ask the dataset" tab
+```
+
+## Knowledge graph (Phase 6e)
+
+A Neo4j **context graph** built from the same processed Parquet + LanceDB vectors
+(no re-ingestion): scenes, keyframes, frames, categories, locations, and VLM
+hazards, joined by `CONTAINS` / `CO_OCCURS_WITH` / `SIMILAR_TO` / temporal `NEXT`
+edges. It powers **multi-relationship** questions that are awkward as SQL joins,
+visual exploration in Neo4j Browser, and graph-diversity active learning. When
+reachable, the chat agent gains a guarded read-only `run_cypher` tool (and degrades
+to SQL + vector when it isn't). Design + Cypher guard: [docs/GRAPH.md](docs/GRAPH.md).
+
+```bash
+docker compose up -d neo4j     # Browser at http://localhost:7474 (Bolt :7687)
+make graph-build               # build from data/processed + data/lancedb
+uv run nuscenes-data-engine graph query --canned top_co_occurrence
+```
+
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
@@ -272,10 +306,12 @@ picker after the first PR run).
 | 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
 | 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
 | 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
-| 6c | Dataset chat | LLM agent: text-to-SQL (DuckDB) + vector search |
+| 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md |
+| 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
 
-Future work: Terraform-provisioned cloud deployment of the serving stack.
+Future work: Terraform-provisioned cloud deployment of the serving stack; ego-pose
+ingestion for a geo-spatial extension of the knowledge graph (GRAPH.md Phase B).
 
 ## License
 

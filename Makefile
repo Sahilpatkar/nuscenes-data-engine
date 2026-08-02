@@ -4,8 +4,8 @@
 # server). Infra-machine targets run the local ops stack. See README "Two-machine topology".
 
 .DEFAULT_GOAL := help
-.PHONY: help setup infra-up infra-down ingest validate train evaluate serve monitor \
-        manifest embed search gpu-run gpu-train gpu-embed gpu-manifest sync-down \
+.PHONY: help setup infra-up infra-down ingest ingest-geometry validate train evaluate serve monitor \
+        manifest embed search graph-build gpu-run gpu-train gpu-embed gpu-manifest sync-down \
         test lint format typecheck check clean
 
 help:  ## Show this help.
@@ -48,6 +48,9 @@ sync-down:  ## Pull compute outputs off the GPU server (parquet, mlruns, lancedb
 ingest:  ## Phase 1: parse nuScenes -> Parquet + 2D projections.
 	uv run nuscenes-data-engine ingest
 
+ingest-geometry:  ## Phase B: parse ego-pose + 3D geometry -> Parquet (world pos, distance-to-ego).
+	uv run nuscenes-data-engine ingest-geometry
+
 validate:  ## Phase 1: run Great Expectations suites.
 	uv run nuscenes-data-engine validate
 
@@ -71,6 +74,9 @@ embed:  ## Phase 6a: embed camera keyframes into the LanceDB store (GPU server).
 
 search:  ## Phase 6a: semantic frame search, e.g. make search Q="night construction".
 	uv run nuscenes-data-engine search "$(Q)"
+
+graph-build:  ## Phase 6e: build the Neo4j knowledge graph (infra machine; needs `docker compose up -d neo4j`).
+	uv run nuscenes-data-engine graph build
 
 # --- Quality gates ---
 test:  ## Run the test suite.
