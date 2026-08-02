@@ -199,9 +199,12 @@ def test_run_name_suffix() -> None:
 
 
 def _write_samples(
-    processed_dir: Path, scenes: dict[str, bool], frames_per_scene: int = 3
+    processed_dir: Path,
+    scenes: dict[str, bool],
+    frames_per_scene: int = 3,
+    rain_scenes: frozenset[str] | set[str] = frozenset(),
 ) -> None:
-    """samples.parquet with the given {scene_name: is_night} for CAM_FRONT (+ noise channel)."""
+    """samples.parquet with {scene_name: is_night} (+ rain flags) for CAM_FRONT (+ noise channel)."""
     rows = []
     for scene, is_night in scenes.items():
         for i in range(frames_per_scene):
@@ -213,6 +216,7 @@ def _write_samples(
                         "channel": channel,
                         "filename": f"samples/{channel}/{scene}-{i}.jpg",
                         "is_night": is_night,
+                        "is_rain": scene in rain_scenes,
                     }
                 )
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -351,14 +355,16 @@ def mining_setup(tmp_path: Path) -> Path:
         "pool-1": True,
         "pool-2": False,
         "pool-3": True,
+        "pool-4": False,
         "val-0": False,
         "val-1": True,
     }
-    _write_samples(processed, scenes, frames_per_scene=4)
+    _write_samples(processed, scenes, frames_per_scene=4,
+                   rain_scenes={"pool-2", "pool-3", "pool-4"})
     pd.DataFrame(
         {
             "scene_name": list(scenes),
-            "role": ["baseline"] * 2 + ["pool"] * 4 + ["val"] * 2,
+            "role": ["baseline"] * 2 + ["pool"] * 5 + ["val"] * 2,
             "is_night": list(scenes.values()),
             "n_frames": 4,
         }
@@ -385,8 +391,9 @@ def mining_setup(tmp_path: Path) -> Path:
     pd.DataFrame(failure_rows).to_parquet(state / "failures.parquet", index=False)
 
     # Pool + baseline frames in the store: pool-0/2 near axis 0, pool-1/3 near axis 1.
+    # pool-4 is deliberately absent from the store (exercises quota backfill).
     for scene, is_night in scenes.items():
-        if scene.startswith("val"):
+        if scene.startswith("val") or scene == "pool-4":
             continue
         axis = 1 if is_night else 0
         for i in range(4):
@@ -408,7 +415,7 @@ def mining_setup(tmp_path: Path) -> Path:
                 "timestamp": 0,
                 "location": "x",
                 "is_night": scene in ("pool-1", "pool-3", "val-1"),
-                "is_rain": False,
+                "is_rain": scene in ("pool-2", "pool-3"),
                 "n_boxes": 1,
                 "thumbnail": b"",
             }
@@ -425,7 +432,24 @@ def mining_setup(tmp_path: Path) -> Path:
             {
                 "split": {"channel": "CAM_FRONT"},
                 "sweep": {"top_k_failures": 8},
-                "mining": {"n_clusters": 2, "n_mine": 6, "seed": 64, "overfetch": 2},
+                "mining": {
+                    "n_clusters": 2,
+                    "n_mine": 6,
+                    "seed": 64,
+                    "overfetch": 2,
+                    "arms": {
+                        "mined": {"scoring": "absolute"},
+                        "rate": {"scoring": "smoothed_rate"},
+                        "strat": {
+                            "scoring": "absolute",
+                            "quotas": {"is_night": 2, "is_rain": 2},
+                        },
+                        "rate_strat": {
+                            "scoring": "smoothed_rate",
+                            "quotas": {"is_night": 2, "is_rain": 2},
+                        },
+                    },
+                },
                 "state": {"dir": str(state)},
                 "engine_config": str(tmp_path / "engine.yaml"),
             }
@@ -449,7 +473,7 @@ def test_run_mining_selects_pool_frames(mining_setup: Path, tmp_path: Path) -> N
     assert mined["sample_data_token"].is_unique
 
     pool_tokens = {
-        f"pool-{s}-CAM_FRONT-{i}" for s in range(4) for i in range(4)
+        f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)
     }
     assert set(mined["sample_data_token"]) <= pool_tokens  # never baseline or val
     assert set(random["sample_data_token"]) <= pool_tokens
