@@ -647,6 +647,29 @@ def test_resolve_arm_frames(tmp_path: Path) -> None:
     assert mined == baseline | set(mined_tokens)
 
 
+def test_resolve_arm_frames_round2_arms(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import ARMS, resolve_arm_frames
+
+    assert set(ARMS) >= {"rate", "strat", "rate_strat"}
+
+    _write_samples(tmp_path / "processed", {"bl-0": False, "pool-0": False})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"scene_name": ["bl-0", "pool-0"], "role": ["baseline", "pool"]}
+    ).to_parquet(state / "split.parquet", index=False)
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    baseline = {f"bl-0-CAM_FRONT-{i}" for i in range(3)}
+    for arm in ("rate", "strat", "rate_strat"):
+        extra = [f"pool-0-CAM_FRONT-{i}" for i in (0, 1)]
+        pd.DataFrame({"sample_data_token": extra}).to_parquet(
+            state / f"{arm}.parquet", index=False
+        )
+        resolved = resolve_arm_frames(state, tmp_path / "processed", cfg, arm)
+        assert resolved == baseline | set(extra)
+
+
 def test_overlay_train_config(tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.experiment import overlay_train_config
 

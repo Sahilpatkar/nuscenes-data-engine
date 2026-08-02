@@ -1,9 +1,10 @@
 """Experiment arms: build the arm's dataset, train, evaluate, record results.
 
-Arms: ``baseline`` (25% train scenes), ``mined`` (baseline + mined frames),
-``random`` (baseline + equal-sized random control). Each arm gets its own YOLO
-dataset dir and run-name suffix; the val split is identical across arms by
-construction and asserted at result-merge time.
+Arms: ``baseline`` (25% train scenes) plus baseline-and-extra-frames arms —
+``mined``/``random``/``graph`` from round 1 and ``rate``/``strat``/``rate_strat``
+from round 2 (see docs/superpowers/specs/2026-08-02-al-round-2-design.md). Each arm
+gets its own YOLO dataset dir and run-name suffix; the val split is identical
+across arms by construction and asserted at result-merge time.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from nuscenes_data_engine.config import get_settings, load_yaml
 
 logger = logging.getLogger("nuscenes_data_engine")
 
-ARMS = ("baseline", "mined", "random", "graph")
+ARMS = ("baseline", "mined", "random", "graph", "rate", "strat", "rate_strat")
 
 
 def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any], arm: str) -> set[str]:
@@ -38,6 +39,9 @@ def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any]
         "mined": "mined.parquet",
         "random": "random.parquet",
         "graph": "graph.parquet",
+        "rate": "rate.parquet",
+        "strat": "strat.parquet",
+        "rate_strat": "rate_strat.parquet",
     }[arm]
     extra = set(pd.read_parquet(state_dir / extra_file)["sample_data_token"])
     return baseline | extra
