@@ -62,16 +62,20 @@ def mine_candidates(
     pool_scenes: list[str],
     channel: str,
     k: int,
+    extra_filter: str | None = None,
 ) -> pd.DataFrame:
     """Nearest pool frames to one failure-cluster centroid (prefiltered vector search)."""
     scene_list = ", ".join(f"'{scene}'" for scene in pool_scenes)
+    where = f"channel = '{channel}' AND scene_name IN ({scene_list})"
+    if extra_filter is not None:
+        where += f" AND {extra_filter}"
     normalized = centroid / max(float(np.linalg.norm(centroid)), 1e-12)
     return (
         tbl.search(normalized.tolist())
         .metric("cosine")
-        .where(f"channel = '{channel}' AND scene_name IN ({scene_list})", prefilter=True)
+        .where(where, prefilter=True)
         .limit(k)
-        .select(["sample_data_token", "scene_name", "is_night", "_distance"])
+        .select(["sample_data_token", "scene_name", "is_night", "is_rain", "_distance"])
         .to_pandas()
     )
 

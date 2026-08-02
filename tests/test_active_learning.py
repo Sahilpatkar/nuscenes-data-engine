@@ -172,6 +172,17 @@ def test_score_failures_unknown_scoring_raises() -> None:
         score_failures(failures, "bogus")
 
 
+def test_quota_shortfall_counts_overlap_toward_both_flags() -> None:
+    records = [
+        {"is_night": True, "is_rain": True},
+        {"is_night": True, "is_rain": False},
+    ]
+    assert quota_shortfall(records, "is_night", 2) == 0
+    assert quota_shortfall(records, "is_rain", 2) == 1
+    assert quota_shortfall([], "is_night", 3) == 3
+    assert quota_shortfall(records, "is_night", 1) == 0  # never negative
+
+
 # ---------------------------------------------------------------------------
 # train.py run naming
 # ---------------------------------------------------------------------------
