@@ -2,15 +2,24 @@
 
 ## The rule
 
-**Only `/home/mgaur/sahil/` (and everything beneath it) is writable.**
-**Everything outside `/home/mgaur/sahil/` is READ-ONLY. No exceptions.**
+The writable root depends on which machine the session runs on:
 
-This applies to every tool, every command, and every session.
+- **TRINITY (GPU server, Linux):** only `/home/mgaur/sahil/` (and everything beneath
+  it) is writable.
+- **Infra Mac (macOS, `sahilpatkar`):** only this repo checkout —
+  `/Users/sahilpatkar/Curosr_repos/nuscenes-data-engine/` — is writable.
 
-## What "read-only outside `/home/mgaur/sahil/`" means
+**Everything outside the machine's writable root is READ-ONLY. No exceptions.**
+This applies to every tool, every command, and every session (including subagents:
+a session running inside a writable root above is authorized to write there).
+
+*(This per-machine scoping was added 2026-08-02 with the user's explicit approval,
+replacing the original TRINITY-only rule that predated Mac-side sessions.)*
+
+## What "read-only outside the writable root" means
 
 Outside the writable root, you may **read, list, inspect, and analyze** — nothing else.
-The following are **forbidden** anywhere outside `/home/mgaur/sahil/`:
+The following are **forbidden** anywhere outside the writable root:
 
 - Creating, writing, editing, appending, or truncating files
 - Deleting, moving, renaming, or copying *into* those locations
@@ -23,9 +32,9 @@ Reading is always fine: `cat`, `ls`, `head`, `find`, `Read`, `Grep`, opening dat
 
 ## Specifically for this project
 
-- **nuScenes data at `/data/ggare/datasets/nuscenes/` is READ-ONLY.** Never write,
-  move, delete, re-encode, or reorganize it. All derived/processed data is written
-  **inside** the repo (e.g. `data/processed/`).
+- **nuScenes data is READ-ONLY on every machine** (TRINITY: `/data/ggare/datasets/nuscenes/`).
+  Never write, move, delete, re-encode, or reorganize it. All derived/processed data is
+  written **inside** the repo (e.g. `data/processed/`).
 - Harness-designated locations are the only allowed writes outside the root, and only
   for their intended purpose: the **scratchpad** directory (throwaway temp files) and
   the Claude Code **memory store**. Never use either as a way around this rule for
