@@ -662,7 +662,7 @@ def test_resolve_arm_frames_round2_arms(tmp_path: Path) -> None:
     cfg = {"split": {"channel": "CAM_FRONT"}}
     baseline = {f"bl-0-CAM_FRONT-{i}" for i in range(3)}
     for arm in ("rate", "strat", "rate_strat"):
-        extra = [f"pool-0-CAM_FRONT-{i}" for i in (0, 1)]
+        extra = [f"pool-0-{arm}-CAM_FRONT-{i}" for i in (0, 1)]
         pd.DataFrame({"sample_data_token": extra}).to_parquet(
             state / f"{arm}.parquet", index=False
         )
