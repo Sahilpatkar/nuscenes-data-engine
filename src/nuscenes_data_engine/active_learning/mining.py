@@ -7,9 +7,10 @@ train-scene pool, and per-cluster quotas proportional to cluster size select exa
 the ranking score (absolute round-1 ``failure_score`` or a smoothed failure rate)
 and optional night/rain quota floors filled by stratum-prefiltered passes with
 seeded random backfill. A seeded uniform draw from the same pool forms the random
-control (written only by the ``mined`` arm — the round-1 control is never
-regenerated). Leakage guards assert that no mined/random frame is a baseline or
-val frame.
+control, written once (only when absent) by the ``mined`` arm — the round-1
+control is never regenerated on a rerun. The mined-set guards (exact size, pool
+containment, no baseline overlap, quota floors) are explicit checks so they
+survive ``python -O``; the random control is pool-bounded by construction.
 """
 
 from __future__ import annotations
@@ -150,6 +151,9 @@ def run_mining(
     arm_cfg = arms_cfg[arm] or {}
     scoring = arm_cfg.get("scoring", "absolute")
     quotas_cfg = {flag: int(floor) for flag, floor in (arm_cfg.get("quotas") or {}).items()}
+    for flag in quotas_cfg:
+        if flag not in ("is_night", "is_rain"):
+            raise ValueError(f"Unknown quota flag {flag!r} (expected is_night or is_rain)")
 
     channel = cfg.get("split", {}).get("channel", "CAM_FRONT")
     state_dir = Path(cfg.get("state", {}).get("dir", "data/active_learning"))
@@ -251,6 +255,11 @@ def run_mining(
                 mined[str(token)] = _pool_record(str(token), pool_meta)
             logger.info("Quota %s: random-backfilled %d stratum frames", flag, short)
 
+    if len(mined) > n_mine:
+        raise ValueError(
+            f"quota floors jointly selected {len(mined)} frames > n_mine={n_mine}"
+        )
+
     # Unconstrained fill to exactly n_mine (the round-1 flow).
     remaining = max(n_mine - len(mined), 0)
     spare = _centroid_pass(
@@ -268,14 +277,20 @@ def run_mining(
 
     mined_df = pd.DataFrame(list(mined.values())).head(n_mine)
     mined_tokens = set(mined_df["sample_data_token"])
-    assert len(mined_df) == n_mine, f"selected {len(mined_df)} != n_mine {n_mine}"
-    assert mined_tokens <= pool_frames, "mined frames must come from the pool"
-    assert not (mined_tokens & baseline_frames), "mined frames overlap the baseline"
+    if len(mined_df) != n_mine:
+        raise ValueError(f"selected {len(mined_df)} != n_mine {n_mine}")
+    if not (mined_tokens <= pool_frames):
+        raise ValueError("mined frames must come from the pool")
+    if mined_tokens & baseline_frames:
+        raise ValueError("mined frames overlap the baseline")
     for flag, floor in quotas_cfg.items():
         n_flag = int(mined_df[flag].sum())
-        assert n_flag >= floor, f"quota {flag}: selected {n_flag} < floor {floor}"
+        if n_flag < floor:
+            raise ValueError(f"quota {flag}: selected {n_flag} < floor {floor}")
 
     out_name = "mined.parquet" if arm == "mined" else f"{arm}.parquet"
+    # Row order is quota-passes-first then the unconstrained fill; treat this file as a
+    # set, not a ranking.
     mined_df.to_parquet(state_dir / out_name, index=False)
 
     summary: dict[str, Any] = {
@@ -288,10 +303,13 @@ def run_mining(
         "clusters": cluster_rows,
     }
     if arm == "mined":
-        random_tokens = rng.choice(sorted(pool_frames), size=n_mine, replace=False)
-        random_df = pd.DataFrame({"sample_data_token": random_tokens})
-        random_df.to_parquet(state_dir / "random.parquet", index=False)
-        summary["n_random"] = len(random_df)
+        random_path = state_dir / "random.parquet"
+        if not random_path.is_file():
+            random_tokens = rng.choice(sorted(pool_frames), size=n_mine, replace=False)
+            pd.DataFrame({"sample_data_token": random_tokens}).to_parquet(
+                random_path, index=False
+            )
+        summary["n_random"] = len(pd.read_parquet(random_path))
     logger.info(
         "Arm %s: mined %d frames (night %.2f, rain %.2f, %d scenes)",
         arm, len(mined_df), summary["mined_night_share"], summary["mined_rain_share"],

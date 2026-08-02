@@ -442,11 +442,11 @@ def mining_setup(tmp_path: Path) -> Path:
                         "rate": {"scoring": "smoothed_rate"},
                         "strat": {
                             "scoring": "absolute",
-                            "quotas": {"is_night": 2, "is_rain": 2},
+                            "quotas": {"is_night": 4, "is_rain": 2},
                         },
                         "rate_strat": {
                             "scoring": "smoothed_rate",
-                            "quotas": {"is_night": 2, "is_rain": 2},
+                            "quotas": {"is_night": 4, "is_rain": 2},
                         },
                     },
                 },
@@ -522,15 +522,43 @@ def test_run_mining_rate_arm_artifacts(mining_setup: Path, tmp_path: Path) -> No
     ].tolist()
 
 
+def test_run_mining_rate_scoring_changes_selection(mining_setup: Path, tmp_path: Path) -> None:
+    """With top_k < n_failures, absolute and rate rank different frames -> different mining."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    state = tmp_path / "state"
+    failures = pd.read_parquet(state / "failures.parquet")
+    # Day frames become sparse total-misses: rate 2/2.5 = 0.8 beats night 4/5.5 = 0.73,
+    # while absolute still ranks night (4.0) over day (2.0).
+    failures.loc[
+        ~failures["is_night"], ["n_gt", "n_fn", "n_low_conf", "failure_score"]
+    ] = [2, 1, 2, 2.0]
+    failures.to_parquet(state / "failures.parquet", index=False)
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["sweep"]["top_k_failures"] = 4
+    mining_setup.write_text(yaml.safe_dump(cfg))
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="mined")
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+
+    night_pool = {f"pool-{s}-CAM_FRONT-{i}" for s in (1, 3) for i in range(4)}
+    day_pool = {f"pool-{s}-CAM_FRONT-{i}" for s in (0, 2) for i in range(4)}
+    mined = set(pd.read_parquet(state / "mined.parquet")["sample_data_token"])
+    rate = set(pd.read_parquet(state / "rate.parquet")["sample_data_token"])
+    assert mined <= night_pool  # absolute top-4 = crowded night failures -> night centroids
+    assert rate <= day_pool  # rate top-4 = sparse day failures -> day centroids
+    assert not (mined & rate)
+
+
 def test_run_mining_strat_arm_meets_floors(mining_setup: Path, tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.mining import run_mining
 
     summary = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
     strat = pd.read_parquet(tmp_path / "state" / "strat.parquet")
     assert len(strat) == 6 == summary["n_mined"]
-    assert int(strat["is_night"].sum()) >= 2
+    assert int(strat["is_night"].sum()) >= 4
     assert int(strat["is_rain"].sum()) >= 2
-    assert summary["mined_night_share"] >= 2 / 6
+    assert summary["mined_night_share"] >= 4 / 6
     assert summary["mined_rain_share"] >= 2 / 6
     assert summary["n_scenes"] == pd.read_parquet(
         tmp_path / "state" / "strat.parquet"
