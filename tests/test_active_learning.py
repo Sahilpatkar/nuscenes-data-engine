@@ -550,6 +550,18 @@ def test_run_mining_rate_scoring_changes_selection(mining_setup: Path, tmp_path:
     assert not (mined & rate)
 
 
+def test_run_mining_stale_control_size_raises(mining_setup: Path, tmp_path: Path) -> None:
+    """A pre-existing control whose size mismatches n_mine must fail loudly, not silently."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed")  # writes the 6-frame control
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["n_mine"] = 12
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="random control"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed")
+
+
 def test_run_mining_strat_arm_meets_floors(mining_setup: Path, tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.mining import run_mining
 

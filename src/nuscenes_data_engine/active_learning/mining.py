@@ -309,7 +309,13 @@ def run_mining(
             pd.DataFrame({"sample_data_token": random_tokens}).to_parquet(
                 random_path, index=False
             )
-        summary["n_random"] = len(pd.read_parquet(random_path))
+        random_df = pd.read_parquet(random_path)
+        if len(random_df) != n_mine:
+            raise ValueError(
+                f"existing random control has {len(random_df)} frames but n_mine={n_mine}; "
+                "delete it deliberately to regenerate a matched-budget control"
+            )
+        summary["n_random"] = len(random_df)
     logger.info(
         "Arm %s: mined %d frames (night %.2f, rain %.2f, %d scenes)",
         arm, len(mined_df), summary["mined_night_share"], summary["mined_rain_share"],
