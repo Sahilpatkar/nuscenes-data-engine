@@ -87,7 +87,10 @@ def render_report(
         pd.DataFrame(rows).to_markdown(index=False),
     ]
     if clusters is not None and not clusters.empty:
-        fragments += ["\n\n## Failure clusters\n", clusters.round(3).to_markdown(index=False)]
+        fragments += [
+            "\n\n## Failure clusters (absolute scoring — round-1 `mined`)\n",
+            clusters.round(3).to_markdown(index=False),
+        ]
     return "\n".join(fragments) + "\n"
 
 

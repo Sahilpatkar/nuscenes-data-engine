@@ -149,7 +149,9 @@ def run_mining(
     if arm not in arms_cfg:
         raise ValueError(f"Unknown mining arm {arm!r} (expected one of {sorted(arms_cfg)})")
     arm_cfg = arms_cfg[arm] or {}
-    scoring = arm_cfg.get("scoring", "absolute")
+    scoring = arm_cfg.get("scoring")
+    if scoring is None:
+        raise ValueError(f"Mining arm {arm!r} has no 'scoring' configured")
     quotas_cfg = {flag: int(floor) for flag, floor in (arm_cfg.get("quotas") or {}).items()}
     for flag in quotas_cfg:
         if flag not in ("is_night", "is_rain"):
@@ -231,6 +233,9 @@ def run_mining(
     logger.info("Cluster diagnostics:\n%s", clusters.round(3).to_string(index=False))
 
     sizes = {row["cluster"]: max(int(row["size"]), 1) for row in cluster_rows}
+    # NOTE: quota/leftover backfill may consume rng draws before the random-control
+    # draw below — the control is write-once, so an existing random.parquet is never
+    # affected, but a from-scratch rebuild with backfill active would differ from round 1.
     rng = np.random.default_rng(seed)
     mined: dict[str, dict[str, Any]] = {}
 

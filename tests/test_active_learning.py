@@ -621,6 +621,16 @@ def test_run_mining_unknown_arm_raises(mining_setup: Path, tmp_path: Path) -> No
         run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="bogus")
 
 
+def test_run_mining_missing_scoring_raises(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["arms"]["rate"] = None  # stray-colon yaml: `rate:` with no body
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="no 'scoring' configured"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+
+
 # ---------------------------------------------------------------------------
 # experiment.py — arm token resolution, config overlay, results merge
 # ---------------------------------------------------------------------------
