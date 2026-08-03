@@ -233,9 +233,8 @@ how much night it can pull. `rate_strat`'s night frames, by contrast, spread acr
 all 8 clusters via the quota passes.
 
 Scene diversity stays near round-1 `mined` levels (all three are centroid-mining
-arms); whether the night
-boost outweighs the diversity gap vs `random`/`graph` is exactly what training will
-measure. Reruns reproduce identical frame sets; only stored float32 `_distance`
+arms); whether the night boost could outweigh the diversity gap vs
+`random`/`graph` was the open question — answered below: it could not. Reruns reproduce identical frame sets; only stored float32 `_distance`
 values jitter by machine epsilon (BLAS thread ordering), so parquet bytes differ
 while every token, flag, and metric is reproducible.
 
@@ -253,9 +252,51 @@ scripts/gpu-run.sh --bg al run --arm rate_strat
 scripts/gpu-run.sh al report
 ```
 
-Results: pending the TRINITY training runs.
+### Round 2 results
+
+All three arms trained on TRINITY (RTX 3080 Ti, ~20 min/arm, 2026-08-03), same
+6,019-frame CAM_FRONT val split as round 1 (602 night; treat night deltas with the
+usual small-slice humility):
+
+| arm | overall mAP50 | overall mAP50-95 | night mAP50 | night mAP50-95 | Δ overall | Δ night |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 0.4351 | 0.2477 | 0.2894 | 0.1667 | — | — |
+| `rate` | 0.4602 | 0.2653 | **0.3076** | 0.1724 | +0.0176 | +0.0057 |
+| `strat` | 0.4564 | 0.2588 | 0.2692 | 0.1581 | +0.0111 | **−0.0086** |
+| `rate_strat` | 0.4727 | 0.2716 | 0.3013 | 0.1736 | +0.0239 | +0.0069 |
+| round-1 `random` (the gate) | 0.4872 | 0.2817 | 0.2711 | 0.1619 | +0.0340 | −0.0048 |
+| round-1 `graph` (the champion) | 0.4861 | 0.2821 | 0.2839 | 0.1703 | +0.0344 | +0.0036 |
+
+Verdict against the three hypotheses:
+
+- **H1 (rate scoring) — a wash on aggregate, a real night signal underneath.**
+  `rate` edges round-1 `mined` overall (+0.0176 vs +0.0160) and posts the **best
+  night mAP50 of all seven arms** (0.3076), but its night mAP50-95 (+0.0057) trails
+  `mined`'s (+0.0072). Rate scoring finds night failures the absolute score is
+  blind to — it just can't convert them into a large aggregate win at this budget.
+- **H2 (quotas alone) — refuted.** `strat` is the worst round-2 arm overall
+  (+0.0111) and the worst night arm of all seven (−0.0086, below baseline).
+  Forcing 375 night frames chosen by similarity to *day-dominated* failure
+  centroids adds near-duplicate, low-information night frames — composition
+  targets don't help when the acquisition signal can't see night failures.
+- **H3 (composition) — confirmed.** `rate_strat` beats both its components on
+  overall (+0.0239 > +0.0176 > +0.0111) and nearly matches `mined`'s night
+  (+0.0069 vs +0.0072): the rate score creates a genuine night failure signal and
+  the floors amplify it. It joins `mined` and `graph` as the only arms lifting
+  **both** overall and night.
+- **The gate holds: nobody beats random (+0.0340) or graph (+0.0344) overall.**
+  All three round-2 arms are centroid-similarity miners spanning 214–253 scenes vs
+  random/graph's ~500 — round 1's diversity lesson survives a better score and
+  explicit composition floors. The scene-spread column above tracks Δ overall
+  almost monotonically across all seven arms.
+
+Takeaway for round 3: the two proven ingredients live in different arms —
+**graph-structured diversity** (round 1's `graph`) and a **night-aware rate
+score** (`rate_strat`). The natural next experiment selects *diverse
+representatives weighted by rate score within stratified quotas* — e.g.
+Louvain-community sampling where each community's budget is proportional to its
+summed smoothed-rate failure mass, with the night floor retained.
 
 Runs: MLflow `nuscenes-yolo` (one `*_al-*` run per trained arm, registry
 untouched) and W&B
-[`al-baseline` / `al-mined` / `al-random` / `al-graph` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine)
-(round 2 adds `al-mine-<arm>` mining runs; training runs follow).
+[`al-baseline` / `al-mined` / `al-random` / `al-graph` / `al-rate` / `al-strat` / `al-rate_strat` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
