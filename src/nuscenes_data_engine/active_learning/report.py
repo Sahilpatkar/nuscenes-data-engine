@@ -9,12 +9,10 @@ from typing import Any
 
 import pandas as pd
 
+from nuscenes_data_engine.active_learning.experiment import ARMS as ARM_ORDER
 from nuscenes_data_engine.config import load_yaml
 
 logger = logging.getLogger("nuscenes_data_engine")
-
-
-ARM_ORDER = ("baseline", "mined", "random", "graph", "rate", "strat", "rate_strat")
 
 
 def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str, Any]]:
@@ -32,6 +30,12 @@ def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str,
             continue
         tokens = pd.read_parquet(path, columns=["sample_data_token"])["sample_data_token"]
         rows = samples.reindex(tokens).dropna(subset=["scene_name"])
+        if len(rows) < len(tokens):
+            logger.warning(
+                "Arm %s: only %d/%d mined tokens matched samples.parquet; "
+                "composition shares cover the matched subset",
+                arm, len(rows), len(tokens),
+            )
         if rows.empty:
             continue
         composition[arm] = {
