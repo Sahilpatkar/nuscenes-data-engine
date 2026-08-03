@@ -15,9 +15,14 @@ sweep:                     # baseline-detector failure sweep over the official v
 
 mining:
   n_clusters: 8
-  n_mine: 1500             # frames added in the mined arm (and the random control)
+  n_mine: 1500             # frames added per arm (and the random control)
   seed: 64
   overfetch: 4             # per-centroid candidate multiplier before dedupe
+  arms:                    # round 2: scoring x quota-floor ablation (see the 2026-08-02 spec)
+    mined:      {scoring: absolute}
+    rate:       {scoring: smoothed_rate}   # (n_fn + 0.5*n_low_conf) / (n_gt + 0.5)
+    strat:      {scoring: absolute,      quotas: {is_night: 375, is_rain: 300}}
+    rate_strat: {scoring: smoothed_rate, quotas: {is_night: 375, is_rain: 300}}
 
 graph_mining:              # Phase 6e arm: GDS Louvain over the pool's SIMILAR_TO graph
   n_mine: 1500             # match the mined/random arms for a fair comparison

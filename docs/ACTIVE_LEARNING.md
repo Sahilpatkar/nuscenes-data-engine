@@ -19,7 +19,7 @@ untestable. Instead we run a controlled experiment at a smaller scale:
 
 All arms: `yolov8n @ 640`, 20 epochs, CAM_FRONT only. The val split is **identical
 across arms by construction** (the `train_frames` filter never touches val) and
-asserted at result-merge time — the three mAP numbers are directly comparable.
+asserted at result-merge time — the per-arm mAP numbers are directly comparable.
 
 ## The loop
 
@@ -31,14 +31,17 @@ asserted at result-merge time — the three mAP numbers are directly comparable.
    val split (6,019 CAM_FRONT frames) at conf 0.05 and match predictions to GT
    (IoU ≥ 0.5, greedy per class). Per-frame
    `failure_score = false_negatives + 0.5 · low_confidence_hits` → `failures.parquet`.
-4. **`al mine`** — top-1,000 failure frames → SigLIP vectors → KMeans (k = 8) →
+4. **`al mine --arm <mined|rate|strat|rate_strat>`** — (round 2 adds per-arm
+   scoring/quotas; see the Round 2 section) top-1,000 failure frames → SigLIP
+   vectors → KMeans (k = 8) →
    per-cluster diagnostics (size, night share, mean failure score) → each centroid
    queries LanceDB **prefiltered to pool scenes**, quotas proportional to cluster
-   size, dedupe/backfill to exactly 1,500 → `mined.parquet` + seeded
-   `random.parquet` control.
+   size, dedupe/backfill to exactly 1,500 → `<arm>.parquet` (the `mined` arm also
+   seeds the write-once `random.parquet` control).
 5. **`al run --arm mined`**, **`al run --arm random`** — retrain + evaluate each.
-6. **`al report`** — three-arm comparison table (overall + night mAP, deltas vs
-   baseline) + cluster table → `data/active_learning/report.md`.
+6. **`al report`** — arm-comparison table (every arm present in `results.json`)
+   (overall + night mAP, deltas vs baseline) + cluster table →
+   `data/active_learning/report.md`.
 
 ### Deployment-proxy caveat
 
@@ -190,5 +193,69 @@ failure-centroid mining dropped. Design + Cypher/GDS details: [GRAPH.md](GRAPH.m
 4. **Random is a strong baseline** — any acquisition function should be gated on
    beating an equal-budget random control, exactly as this harness does.
 
-Runs: MLflow `nuscenes-yolo` (four `*_al-*` runs, registry untouched) and W&B
-[`al-baseline` / `al-mined` / `al-random` / `al-graph` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
+## Round 2 — rate-based scores + stratified quotas
+
+Delivers takeaways #2 and #3 as a **2×2 ablation** against round 1's `mined` arm
+(absolute score, no quotas). Only the acquisition function changes — same baseline,
+sweep output, random control, training config, and val split. Design:
+[the 2026-08-02 spec](superpowers/specs/2026-08-02-al-round-2-design.md).
+
+| arm | acquisition score | quota floors (of 1,500) |
+|---|---|---|
+| `rate` | smoothed rate `(n_fn + 0.5·n_low_conf)/(n_gt + 0.5)` | none |
+| `strat` | absolute (round 1) | night ≥ 375 (25%), rain ≥ 300 (20%) |
+| `rate_strat` | smoothed rate | night ≥ 375, rain ≥ 300 |
+
+Why: the round-1 score ranked crowded day frames (top-1,000 night share **1.5%**);
+the smoothed rate restores night to **8.7%** (one all-night failure cluster of 87)
+and removes the 331-frame tie at rate 1.0, while the floors test whether an explicit
+boost (2× the pool's 12% night) moves night mAP where parity representation didn't.
+Quota passes run night-then-rain with stratum-prefiltered centroid search and seeded
+random backfill; night∧rain frames count toward both floors. The round-1 control is
+write-protected: `run_mining` never regenerates an existing `random.parquet` and
+fails loudly if its size no longer matches `n_mine`.
+
+Mined-set composition (full pool, this repo's LanceDB store):
+
+| arm | night share | rain share | scenes | top-10-scene concentration |
+|---|---:|---:|---:|---:|
+| `rate` | 0.232 | 0.199 | 214 | 18.9% |
+| `strat` | 0.270 | 0.307 | 253 | 18.1% |
+| `rate_strat` | 0.366 | 0.275 | 224 | 16.6% |
+| round-1 `mined` | 0.000 | 0.403 | 219 | 21.3% |
+| round-1 `random` | 0.127 | 0.191 | 501 | 4.8% |
+
+The rate score alone (no quota) already lifts the mined set from 0% to 23% night —
+but note the size of that lift is overfetch-bound: all 348 night frames come from
+the single all-night failure cluster (87 members × overfetch 4 candidates, every
+one mined), so the score creates the night cluster while the `overfetch` knob caps
+how much night it can pull. `rate_strat`'s night frames, by contrast, spread across
+all 8 clusters via the quota passes.
+
+Scene diversity stays near round-1 `mined` levels (all three are centroid-mining
+arms); whether the night
+boost outweighs the diversity gap vs `random`/`graph` is exactly what training will
+measure. Reruns reproduce identical frame sets; only stored float32 `_distance`
+values jitter by machine epsilon (BLAS thread ordering), so parquet bytes differ
+while every token, flag, and metric is reproducible.
+
+```bash
+# mining (infra machine or TRINITY — needs the LanceDB store + round-1 state)
+uv run nuscenes-data-engine al mine --arm rate
+uv run nuscenes-data-engine al mine --arm strat
+uv run nuscenes-data-engine al mine --arm rate_strat
+# if mined on the infra machine, ship the token sets to TRINITY first
+rsync -a data/active_learning/{rate,strat,rate_strat}.parquet trinity-2-18:/home/mgaur/sahil/nuscenes_project/data/active_learning/
+# training + report (TRINITY)
+scripts/gpu-run.sh --bg al run --arm rate
+scripts/gpu-run.sh --bg al run --arm strat
+scripts/gpu-run.sh --bg al run --arm rate_strat
+scripts/gpu-run.sh al report
+```
+
+Results: pending the TRINITY training runs.
+
+Runs: MLflow `nuscenes-yolo` (one `*_al-*` run per trained arm, registry
+untouched) and W&B
+[`al-baseline` / `al-mined` / `al-random` / `al-graph` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine)
+(round 2 adds `al-mine-<arm>` mining runs; training runs follow).

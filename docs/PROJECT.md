@@ -317,9 +317,13 @@ Ordered roughly by value-per-effort:
 1. **Active learning round 2** — the 6e graph-diversity arm delivered the first 6d
    lesson (a diversity term): GDS-Louvain community sampling over the SIMILAR_TO graph
    matched the random control's overall gain (+0.0344) *and* recovered night (+0.0036,
-   where random regressed), spanning 473 scenes vs mined's 219. Still open: rate-based
-   acquisition (`FN/n_GT` or calibrated-confidence error) and night/rain-stratified
+   where random regressed), spanning 473 scenes vs mined's 219. Was open (built in
+   round 2): rate-based acquisition and night/rain-stratified
    quotas — the harness and random-control gate already exist; only the score changes.
+   *Round 2 is implemented and mined (arms `rate`, `strat`, `rate_strat` — smoothed-rate
+   scoring and night 25% / rain 20% floors, spec `2026-08-02-al-round-2-design.md`):
+   the rate score alone lifts the mined set to 23% night (round 1: 0%), and the quota
+   arms clear their floors (36.6% night on `rate_strat`); TRINITY training runs pending.*
 2. **Ego-pose / 3D geometry ingestion (Phase B) — DONE.** `ingest-geometry` now persists
    the ego pose + all 1.17M 3D GT boxes (world position, size, heading, velocity, BEV
    distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/

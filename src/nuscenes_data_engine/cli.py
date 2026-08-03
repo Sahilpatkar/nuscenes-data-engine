@@ -533,7 +533,9 @@ def autolabel_eval(
     logger.info("Eval summary: %s", summary)
 
 
-al_app = typer.Typer(no_args_is_help=True, help="Phase 6d: embedding-based active learning.")
+al_app = typer.Typer(
+    no_args_is_help=True, help="Phase 6d/round 2: embedding-based active learning."
+)
 app.add_typer(al_app, name="al")
 
 
@@ -568,6 +570,7 @@ def al_sweep(
 
 @al_app.command("mine")
 def al_mine(
+    arm: str = typer.Option("mined", "--arm", help="mined | rate | strat | rate_strat."),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
     wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
@@ -575,14 +578,15 @@ def al_mine(
     from nuscenes_data_engine.active_learning.mining import run_mining
     from nuscenes_data_engine.tracking import wandb_run
 
-    with wandb_run("al-mine", enabled=wandb) as run:
-        summary = run_mining(config)
+    with wandb_run("al-mine", name=f"al-mine-{arm}", config={"arm": arm}, enabled=wandb) as run:
+        summary = run_mining(config, arm=arm)
         if run is not None:
+            # bool is an int subclass — exclude it so future flag fields aren't logged as 0/1
             run.log(
                 {
-                    "n_mined": summary["n_mined"],
-                    "n_random": summary["n_random"],
-                    "mined_night_share": summary["mined_night_share"],
+                    k: v
+                    for k, v in summary.items()
+                    if isinstance(v, int | float) and not isinstance(v, bool)
                 }
             )
 
@@ -605,7 +609,9 @@ def al_graph_mine(
 
 @al_app.command("run")
 def al_run(
-    arm: str = typer.Option(..., "--arm", help="baseline | mined | random | graph."),
+    arm: str = typer.Option(
+        ..., "--arm", help="baseline | mined | random | graph | rate | strat | rate_strat."
+    ),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
     device: str | None = typer.Option(None, "--device"),
     epochs: int | None = typer.Option(None, "--epochs", help="Override (smoke runs)."),
@@ -640,7 +646,7 @@ def al_run(
 def al_report(
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
 ) -> None:
-    """Render the three-arm comparison report."""
+    """Render the arm comparison report."""
     from nuscenes_data_engine.active_learning.report import run_report
 
     run_report(config)

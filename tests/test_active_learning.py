@@ -13,6 +13,7 @@ import yaml
 
 from nuscenes_data_engine.active_learning.graph_mining import select_representatives
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
+from nuscenes_data_engine.active_learning.mining import quota_shortfall, score_failures
 from nuscenes_data_engine.active_learning.report import render_report
 from nuscenes_data_engine.active_learning.sweep import summarize_failures
 from nuscenes_data_engine.training.train import _run_name
@@ -126,6 +127,63 @@ def test_summarize_failures_day_night() -> None:
 
 
 # ---------------------------------------------------------------------------
+# mining.py scoring — round 2 acquisition scores (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_score_failures_absolute_matches_round1() -> None:
+    failures = pd.DataFrame(
+        {"n_gt": [5, 2], "n_fn": [3, 1], "n_low_conf": [2, 0], "failure_score": [4.0, 1.0]}
+    )
+    assert score_failures(failures, "absolute").tolist() == [4.0, 1.0]
+
+
+def test_score_failures_smoothed_rate_reranks_sparse_frames() -> None:
+    # Crowded day frame vs sparse frame: absolute ranks the crowd, rate the miss-rate.
+    failures = pd.DataFrame(
+        {"n_gt": [20, 1, 0], "n_fn": [4, 1, 0], "n_low_conf": [2, 0, 0],
+         "failure_score": [5.0, 1.0, 0.0]}
+    )
+    rate = score_failures(failures, "smoothed_rate")
+    assert rate.iloc[0] == pytest.approx(5.0 / 20.5)
+    assert rate.iloc[1] == pytest.approx(1.0 / 1.5)
+    assert rate.iloc[2] == 0.0  # n_gt = 0 is safe (0/0.5)
+    absolute = score_failures(failures, "absolute")
+    assert absolute.idxmax() == 0 and rate.idxmax() == 1  # the ranking flips
+
+
+def test_score_failures_smoothing_breaks_total_miss_ties() -> None:
+    # Without smoothing, 1-of-1 and 3-of-3 total misses both score rate 1.0;
+    # k=0.5 ranks the bigger-evidence frame first.
+    failures = pd.DataFrame(
+        {"n_gt": [1, 3], "n_fn": [1, 3], "n_low_conf": [0, 0], "failure_score": [1.0, 3.0]}
+    )
+    rate = score_failures(failures, "smoothed_rate")
+    assert rate.iloc[1] > rate.iloc[0]  # 3/3.5 > 1/1.5
+    assert rate.iloc[0] == pytest.approx(1.0 / 1.5)
+    assert rate.iloc[1] == pytest.approx(3.0 / 3.5)
+
+
+def test_score_failures_unknown_scoring_raises() -> None:
+    failures = pd.DataFrame(
+        {"n_gt": [1], "n_fn": [1], "n_low_conf": [0], "failure_score": [1.0]}
+    )
+    with pytest.raises(ValueError, match="Unknown scoring"):
+        score_failures(failures, "bogus")
+
+
+def test_quota_shortfall_counts_overlap_toward_both_flags() -> None:
+    records = [
+        {"is_night": True, "is_rain": True},
+        {"is_night": True, "is_rain": False},
+    ]
+    assert quota_shortfall(records, "is_night", 2) == 0
+    assert quota_shortfall(records, "is_rain", 2) == 1
+    assert quota_shortfall([], "is_night", 3) == 3
+    assert quota_shortfall(records, "is_night", 1) == 0  # never negative
+
+
+# ---------------------------------------------------------------------------
 # train.py run naming
 # ---------------------------------------------------------------------------
 
@@ -141,9 +199,12 @@ def test_run_name_suffix() -> None:
 
 
 def _write_samples(
-    processed_dir: Path, scenes: dict[str, bool], frames_per_scene: int = 3
+    processed_dir: Path,
+    scenes: dict[str, bool],
+    frames_per_scene: int = 3,
+    rain_scenes: frozenset[str] | set[str] = frozenset(),
 ) -> None:
-    """samples.parquet with the given {scene_name: is_night} for CAM_FRONT (+ noise channel)."""
+    """samples.parquet with {scene_name: is_night} (+ rain flags) for CAM_FRONT (+ noise channel)."""
     rows = []
     for scene, is_night in scenes.items():
         for i in range(frames_per_scene):
@@ -155,6 +216,7 @@ def _write_samples(
                         "channel": channel,
                         "filename": f"samples/{channel}/{scene}-{i}.jpg",
                         "is_night": is_night,
+                        "is_rain": scene in rain_scenes,
                     }
                 )
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -293,14 +355,16 @@ def mining_setup(tmp_path: Path) -> Path:
         "pool-1": True,
         "pool-2": False,
         "pool-3": True,
+        "pool-4": False,
         "val-0": False,
         "val-1": True,
     }
-    _write_samples(processed, scenes, frames_per_scene=4)
+    _write_samples(processed, scenes, frames_per_scene=4,
+                   rain_scenes={"pool-2", "pool-3", "pool-4"})
     pd.DataFrame(
         {
             "scene_name": list(scenes),
-            "role": ["baseline"] * 2 + ["pool"] * 4 + ["val"] * 2,
+            "role": ["baseline"] * 2 + ["pool"] * 5 + ["val"] * 2,
             "is_night": list(scenes.values()),
             "n_frames": 4,
         }
@@ -327,8 +391,9 @@ def mining_setup(tmp_path: Path) -> Path:
     pd.DataFrame(failure_rows).to_parquet(state / "failures.parquet", index=False)
 
     # Pool + baseline frames in the store: pool-0/2 near axis 0, pool-1/3 near axis 1.
+    # pool-4 is deliberately absent from the store (exercises quota backfill).
     for scene, is_night in scenes.items():
-        if scene.startswith("val"):
+        if scene.startswith("val") or scene == "pool-4":
             continue
         axis = 1 if is_night else 0
         for i in range(4):
@@ -350,7 +415,7 @@ def mining_setup(tmp_path: Path) -> Path:
                 "timestamp": 0,
                 "location": "x",
                 "is_night": scene in ("pool-1", "pool-3", "val-1"),
-                "is_rain": False,
+                "is_rain": scene in ("pool-2", "pool-3"),
                 "n_boxes": 1,
                 "thumbnail": b"",
             }
@@ -367,7 +432,24 @@ def mining_setup(tmp_path: Path) -> Path:
             {
                 "split": {"channel": "CAM_FRONT"},
                 "sweep": {"top_k_failures": 8},
-                "mining": {"n_clusters": 2, "n_mine": 6, "seed": 64, "overfetch": 2},
+                "mining": {
+                    "n_clusters": 2,
+                    "n_mine": 6,
+                    "seed": 64,
+                    "overfetch": 2,
+                    "arms": {
+                        "mined": {"scoring": "absolute"},
+                        "rate": {"scoring": "smoothed_rate"},
+                        "strat": {
+                            "scoring": "absolute",
+                            "quotas": {"is_night": 4, "is_rain": 2},
+                        },
+                        "rate_strat": {
+                            "scoring": "smoothed_rate",
+                            "quotas": {"is_night": 4, "is_rain": 2},
+                        },
+                    },
+                },
                 "state": {"dir": str(state)},
                 "engine_config": str(tmp_path / "engine.yaml"),
             }
@@ -391,7 +473,7 @@ def test_run_mining_selects_pool_frames(mining_setup: Path, tmp_path: Path) -> N
     assert mined["sample_data_token"].is_unique
 
     pool_tokens = {
-        f"pool-{s}-CAM_FRONT-{i}" for s in range(4) for i in range(4)
+        f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)
     }
     assert set(mined["sample_data_token"]) <= pool_tokens  # never baseline or val
     assert set(random["sample_data_token"]) <= pool_tokens
@@ -410,6 +492,143 @@ def test_run_mining_selects_pool_frames(mining_setup: Path, tmp_path: Path) -> N
     assert pd.read_parquet(state / "random.parquet")["sample_data_token"].tolist() == random[
         "sample_data_token"
     ].tolist()
+
+
+def test_run_mining_rate_arm_artifacts(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    state = tmp_path / "state"
+    summary = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+
+    assert summary["arm"] == "rate" and summary["scoring"] == "smoothed_rate"
+    assert (state / "rate.parquet").is_file()
+    assert (state / "clusters_rate.parquet").is_file()
+    assert (state / "cluster_summary_rate.json").is_file()
+    assert not (state / "random.parquet").is_file()  # control: only the mined arm writes it
+    assert not (state / "mined.parquet").is_file()
+
+    rate = pd.read_parquet(state / "rate.parquet")
+    assert len(rate) == 6 == summary["n_mined"]
+    assert rate["sample_data_token"].is_unique
+    pool_tokens = {f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)}
+    assert set(rate["sample_data_token"]) <= pool_tokens
+    assert {"is_night", "is_rain", "scene_name"} <= set(rate.columns)
+
+    # Seeded determinism.
+    rerun = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+    assert rerun["n_mined"] == 6
+    assert pd.read_parquet(state / "rate.parquet")["sample_data_token"].tolist() == rate[
+        "sample_data_token"
+    ].tolist()
+
+
+def test_run_mining_rate_scoring_changes_selection(mining_setup: Path, tmp_path: Path) -> None:
+    """With top_k < n_failures, absolute and rate rank different frames -> different mining."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    state = tmp_path / "state"
+    failures = pd.read_parquet(state / "failures.parquet")
+    # Day frames become sparse total-misses: rate 2/2.5 = 0.8 beats night 4/5.5 = 0.73,
+    # while absolute still ranks night (4.0) over day (2.0).
+    failures.loc[
+        ~failures["is_night"], ["n_gt", "n_fn", "n_low_conf", "failure_score"]
+    ] = [2, 1, 2, 2.0]
+    failures.to_parquet(state / "failures.parquet", index=False)
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["sweep"]["top_k_failures"] = 4
+    mining_setup.write_text(yaml.safe_dump(cfg))
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="mined")
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
+
+    night_pool = {f"pool-{s}-CAM_FRONT-{i}" for s in (1, 3) for i in range(4)}
+    day_pool = {f"pool-{s}-CAM_FRONT-{i}" for s in (0, 2) for i in range(4)}
+    mined = set(pd.read_parquet(state / "mined.parquet")["sample_data_token"])
+    rate = set(pd.read_parquet(state / "rate.parquet")["sample_data_token"])
+    assert mined <= night_pool  # absolute top-4 = crowded night failures -> night centroids
+    assert rate <= day_pool  # rate top-4 = sparse day failures -> day centroids
+    assert not (mined & rate)
+
+
+def test_run_mining_stale_control_size_raises(mining_setup: Path, tmp_path: Path) -> None:
+    """A pre-existing control whose size mismatches n_mine must fail loudly, not silently."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed")  # writes the 6-frame control
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["n_mine"] = 12
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="random control"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed")
+
+
+def test_run_mining_strat_arm_meets_floors(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    summary = run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+    strat = pd.read_parquet(tmp_path / "state" / "strat.parquet")
+    assert len(strat) == 6 == summary["n_mined"]
+    assert int(strat["is_night"].sum()) >= 4
+    assert int(strat["is_rain"].sum()) >= 2
+    assert summary["mined_night_share"] >= 4 / 6
+    assert summary["mined_rain_share"] >= 2 / 6
+    assert summary["n_scenes"] == pd.read_parquet(
+        tmp_path / "state" / "strat.parquet"
+    )["scene_name"].nunique()
+
+
+def test_run_mining_dry_stratum_backfills_from_samples(
+    mining_setup: Path, tmp_path: Path
+) -> None:
+    """pool-4 is rain in samples but absent from the store: a big rain floor forces backfill."""
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["n_mine"] = 12
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 10}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+
+    run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+    strat = pd.read_parquet(tmp_path / "state" / "strat.parquet")
+    assert len(strat) == 12
+    assert int(strat["is_rain"].sum()) >= 10
+    backfilled = strat[strat["cluster"] == -1]
+    # The store holds only 8 rain frames (pool-2/3); the rest must come from samples.
+    assert not backfilled.empty
+    assert set(backfilled["scene_name"]) <= {"pool-4"}
+
+
+def test_run_mining_quota_validation(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 99}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="exceeds n_mine"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+
+    cfg["mining"]["n_mine"] = 20
+    cfg["mining"]["arms"]["strat"]["quotas"] = {"is_rain": 13}  # rain stratum has 12 frames
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="exceeds the stratum pool"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="strat")
+
+
+def test_run_mining_unknown_arm_raises(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    with pytest.raises(ValueError, match="Unknown mining arm"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="bogus")
+
+
+def test_run_mining_missing_scoring_raises(mining_setup: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.mining import run_mining
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["mining"]["arms"]["rate"] = None  # stray-colon yaml: `rate:` with no body
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="no 'scoring' configured"):
+        run_mining(mining_setup, processed_dir=tmp_path / "processed", arm="rate")
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +655,29 @@ def test_resolve_arm_frames(tmp_path: Path) -> None:
     assert baseline == {f"bl-0-CAM_FRONT-{i}" for i in range(3)}
     mined = resolve_arm_frames(state, tmp_path / "processed", cfg, "mined")
     assert mined == baseline | set(mined_tokens)
+
+
+def test_resolve_arm_frames_round2_arms(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import ARMS, resolve_arm_frames
+
+    assert set(ARMS) >= {"rate", "strat", "rate_strat"}
+
+    _write_samples(tmp_path / "processed", {"bl-0": False, "pool-0": False})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"scene_name": ["bl-0", "pool-0"], "role": ["baseline", "pool"]}
+    ).to_parquet(state / "split.parquet", index=False)
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    baseline = {f"bl-0-CAM_FRONT-{i}" for i in range(3)}
+    for arm in ("rate", "strat", "rate_strat"):
+        extra = [f"pool-0-{arm}-CAM_FRONT-{i}" for i in (0, 1)]
+        pd.DataFrame({"sample_data_token": extra}).to_parquet(
+            state / f"{arm}.parquet", index=False
+        )
+        resolved = resolve_arm_frames(state, tmp_path / "processed", cfg, arm)
+        assert resolved == baseline | set(extra)
 
 
 def test_overlay_train_config(tmp_path: Path) -> None:
@@ -510,6 +752,44 @@ def test_render_report_deltas() -> None:
     # Baseline row carries no delta.
     baseline_row = next(line for line in markdown.splitlines() if "baseline" in line)
     assert baseline_row.count("nan") == 0
+
+
+def test_render_report_round2_arms_and_composition() -> None:
+    results = _fake_results()
+    results["rate_strat"] = {
+        "n_train_images": 8500,
+        "overall": {"mAP50": 0.66, "mAP50-95": 0.46},
+        "night": {"mAP50": 0.55, "mAP50-95": 0.35},
+    }
+    composition = {
+        "mined": {"n_scenes": 219, "night_share": 0.0, "rain_share": 0.104},
+        "rate_strat": {"n_scenes": 400, "night_share": 0.25, "rain_share": 0.2},
+    }
+    markdown = render_report(results, None, composition)
+    assert "| rate_strat" in markdown
+    assert "n_scenes" in markdown and "219" in markdown and "0.25" in markdown
+    # Arms without composition data get blank cells, not NaN.
+    random_row = next(line for line in markdown.splitlines() if "| random" in line)
+    assert "nan" not in random_row
+
+
+def test_arm_composition_reads_state(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
+    processed = tmp_path / "processed"
+    _write_samples(processed, {"s0": False, "s1": True}, rain_scenes={"s1"})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"sample_data_token": ["s0-CAM_FRONT-0", "s1-CAM_FRONT-0", "s1-CAM_FRONT-1"]}
+    ).to_parquet(state / "rate.parquet", index=False)
+
+    composition = arm_composition(state, processed)
+    assert composition == {
+        "rate": {"n_scenes": 2, "night_share": round(2 / 3, 3), "rain_share": round(2 / 3, 3)}
+    }
+    # Missing samples.parquet -> empty dict (CI machines have no data/).
+    assert arm_composition(state, tmp_path / "missing") == {}
 
 
 def test_run_report_writes_markdown(tmp_path: Path) -> None:
