@@ -533,7 +533,9 @@ def autolabel_eval(
     logger.info("Eval summary: %s", summary)
 
 
-al_app = typer.Typer(no_args_is_help=True, help="Phase 6d: embedding-based active learning.")
+al_app = typer.Typer(
+    no_args_is_help=True, help="Phase 6d/round 2: embedding-based active learning."
+)
 app.add_typer(al_app, name="al")
 
 
@@ -579,7 +581,14 @@ def al_mine(
     with wandb_run("al-mine", name=f"al-mine-{arm}", config={"arm": arm}, enabled=wandb) as run:
         summary = run_mining(config, arm=arm)
         if run is not None:
-            run.log({k: v for k, v in summary.items() if isinstance(v, int | float)})
+            # bool is an int subclass — exclude it so future flag fields aren't logged as 0/1
+            run.log(
+                {
+                    k: v
+                    for k, v in summary.items()
+                    if isinstance(v, int | float) and not isinstance(v, bool)
+                }
+            )
 
 
 @al_app.command("graph-mine")
