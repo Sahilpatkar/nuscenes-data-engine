@@ -744,6 +744,44 @@ def test_render_report_deltas() -> None:
     assert baseline_row.count("nan") == 0
 
 
+def test_render_report_round2_arms_and_composition() -> None:
+    results = _fake_results()
+    results["rate_strat"] = {
+        "n_train_images": 8500,
+        "overall": {"mAP50": 0.66, "mAP50-95": 0.46},
+        "night": {"mAP50": 0.55, "mAP50-95": 0.35},
+    }
+    composition = {
+        "mined": {"n_scenes": 219, "night_share": 0.0, "rain_share": 0.104},
+        "rate_strat": {"n_scenes": 400, "night_share": 0.25, "rain_share": 0.2},
+    }
+    markdown = render_report(results, None, composition)
+    assert "| rate_strat" in markdown
+    assert "n_scenes" in markdown and "219" in markdown and "0.25" in markdown
+    # Arms without composition data get blank cells, not NaN.
+    random_row = next(line for line in markdown.splitlines() if "| random" in line)
+    assert "nan" not in random_row
+
+
+def test_arm_composition_reads_state(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
+    processed = tmp_path / "processed"
+    _write_samples(processed, {"s0": False, "s1": True}, rain_scenes={"s1"})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"sample_data_token": ["s0-CAM_FRONT-0", "s1-CAM_FRONT-0", "s1-CAM_FRONT-1"]}
+    ).to_parquet(state / "rate.parquet", index=False)
+
+    composition = arm_composition(state, processed)
+    assert composition == {
+        "rate": {"n_scenes": 2, "night_share": round(2 / 3, 3), "rain_share": round(2 / 3, 3)}
+    }
+    # Missing samples.parquet -> empty dict (CI machines have no data/).
+    assert arm_composition(state, tmp_path / "missing") == {}
+
+
 def test_run_report_writes_markdown(tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.report import run_report
 
