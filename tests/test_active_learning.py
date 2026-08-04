@@ -204,6 +204,90 @@ def test_route_failure_mass_routes_rate_score_to_communities(
     assert set(masses) <= {0, 1}
 
 
+@pytest.fixture()
+def fake_louvain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bypass Neo4j: communities from scene naming, degree from frame index."""
+    from nuscenes_data_engine.active_learning import graph_mining
+
+    def _fake(driver: Any, pool_tokens: list[str], database: str) -> tuple[dict[str, int], dict[str, float]]:
+        communities = {
+            t: (1 if t.split("-")[1] in ("1", "3") else 0)
+            for t in pool_tokens
+            if not t.startswith("pool-4")  # pool-4 is "disconnected" (off-store)
+        }
+        degrees = {t: float(t[-1]) for t in communities}
+        return communities, degrees
+
+    monkeypatch.setattr(graph_mining, "_louvain_communities", _fake)
+    monkeypatch.setattr(graph_mining.connection, "get_driver", lambda settings: None)
+    monkeypatch.setattr(graph_mining.connection, "close", lambda driver: None)
+
+
+def test_run_graph_mining_rate_arm(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    state = tmp_path / "state"
+    summary = run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+    assert summary["arm"] == "graph_rate" and summary["weighting"] == "rate_mass"
+    assert (state / "graph_rate.parquet").is_file()
+    assert (state / "communities_graph_rate.json").is_file()
+    assert not (state / "graph.parquet").is_file()  # legacy arm's artifact untouched
+
+    frames = pd.read_parquet(state / "graph_rate.parquet")
+    assert len(frames) == 6 == summary["n_mined"]
+    assert frames["sample_data_token"].is_unique
+    pool_tokens = {f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)}
+    assert set(frames["sample_data_token"]) <= pool_tokens
+    # Every community represented (floor 1): both fake communities appear.
+    got_communities = {
+        1 if t.split("-")[1] in ("1", "3") else 0 for t in frames["sample_data_token"]
+    }
+    assert got_communities == {0, 1}
+
+
+def test_run_graph_mining_night_arm_meets_floor(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    summary = run_graph_mining(
+        mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate_night"
+    )
+    frames = pd.read_parquet(tmp_path / "state" / "graph_rate_night.parquet")
+    night_scenes = {"pool-1", "pool-3"}
+    n_night = sum(1 for t in frames["sample_data_token"] if f"{t.split('-CAM')[0]}" in night_scenes)
+    assert len(frames) == 6
+    assert n_night >= 2
+    assert summary["mined_night_share"] >= 2 / 6
+
+
+def test_run_graph_mining_arm_validation(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    with pytest.raises(ValueError, match="Unknown graph-mining arm"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="bogus")
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["graph_mining"]["arms"]["graph_rate"] = None
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="no 'weighting' configured"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+
+    cfg["graph_mining"]["arms"]["graph_rate"] = {"weighting": "sideways"}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="Unknown weighting"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+
+    cfg["graph_mining"]["arms"]["graph_rate"] = {"weighting": "rate_mass", "quotas": {"is_rain": 2}}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="Unknown quota flag"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+
+
 # ---------------------------------------------------------------------------
 # matching.py — pure numpy, runs in torch-free CI
 # ---------------------------------------------------------------------------
@@ -611,6 +695,19 @@ def mining_setup(tmp_path: Path) -> Path:
                         "rate_strat": {
                             "scoring": "smoothed_rate",
                             "quotas": {"is_night": 4, "is_rain": 2},
+                        },
+                    },
+                },
+                "graph_mining": {
+                    "n_mine": 6,
+                    "floor": 1,
+                    "route_k": 3,
+                    "arms": {
+                        "graph": {"weighting": "size"},
+                        "graph_rate": {"weighting": "rate_mass"},
+                        "graph_rate_night": {
+                            "weighting": "rate_mass",
+                            "quotas": {"is_night": 2},
                         },
                     },
                 },

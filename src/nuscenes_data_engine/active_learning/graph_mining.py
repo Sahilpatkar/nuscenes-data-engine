@@ -6,7 +6,11 @@ vectors. GDS Louvain over the *pool's* similarity subgraph yields appearance com
 the labeling budget is allocated across communities with the same ``allocate`` helper the
 stratified sampler uses, and each community contributes its most-connected (representative)
 frames. Selection is graph-native and A/B'd against the mined/random arms on the shared
-val split — the acquisition function changes, the random-control gate does not.
+val split — the acquisition function changes, the random-control gate does not. Round 3
+parameterizes the arm (``graph_mining.arms``): ``size`` weighting reproduces the round-1
+selection; ``rate_mass`` allocates budget ∝ embedding-routed smoothed-rate failure mass with
+a per-community floor and an optional night quota (spec
+docs/superpowers/specs/2026-08-04-al-round-3-design.md).
 
 The GDS steps run on the infra machine (where Neo4j lives); the resulting ``graph.parquet``
 feeds ``al run --arm graph`` on the GPU server, exactly like ``mined.parquet``.
@@ -279,9 +283,16 @@ def _louvain_communities(
     return communities, degrees
 
 
-def run_graph_mining(config_path: Path, processed_dir: Path | None = None) -> dict[str, Any]:
-    """Community-detect the pool's similarity graph and write ``graph.parquet``."""
+DEFAULT_GRAPH_ARMS: dict[str, dict[str, Any]] = {"graph": {"weighting": "size"}}
+VALID_WEIGHTING = ("size", "rate_mass")
+
+
+def run_graph_mining(
+    config_path: Path, processed_dir: Path | None = None, arm: str = "graph"
+) -> dict[str, Any]:
+    """Community-detect the pool's similarity graph and write the arm's token set."""
     from nuscenes_data_engine.active_learning.split import frames_for_scenes
+    from nuscenes_data_engine.data_engine import store
 
     cfg = load_yaml(config_path)
     settings = get_settings()
@@ -289,8 +300,26 @@ def run_graph_mining(config_path: Path, processed_dir: Path | None = None) -> di
     state_dir = Path(cfg.get("state", {}).get("dir", "data/active_learning"))
     processed = processed_dir or Path("data/processed")
     graph_cfg = cfg.get("graph_mining", {})
+    arms_cfg = {**DEFAULT_GRAPH_ARMS, **graph_cfg.get("arms", {})}
+    if arm not in arms_cfg:
+        raise ValueError(f"Unknown graph-mining arm {arm!r} (expected one of {sorted(arms_cfg)})")
+    arm_cfg = arms_cfg[arm] or {}
+    weighting = arm_cfg.get("weighting")
+    if weighting is None:
+        raise ValueError(f"Graph-mining arm {arm!r} has no 'weighting' configured")
+    if weighting not in VALID_WEIGHTING:
+        raise ValueError(f"Unknown weighting {weighting!r} (expected one of {VALID_WEIGHTING})")
+    quotas_cfg = {flag: int(v) for flag, v in (arm_cfg.get("quotas") or {}).items()}
+    for flag in quotas_cfg:
+        if flag != "is_night":
+            raise ValueError(f"Unknown quota flag {flag!r} (round 3 supports is_night only)")
+
     n_mine = int(graph_cfg.get("n_mine", cfg.get("mining", {}).get("n_mine", 1500)))
     floor = int(graph_cfg.get("floor", 1))
+    route_k = int(graph_cfg.get("route_k", 10))
+    night_floor = quotas_cfg.get("is_night", 0)
+    if night_floor > n_mine:
+        raise ValueError(f"Quota is_night={night_floor} exceeds n_mine={n_mine}")
     database = settings.neo4j_database
 
     split = pd.read_parquet(state_dir / "split.parquet")
@@ -300,6 +329,15 @@ def run_graph_mining(config_path: Path, processed_dir: Path | None = None) -> di
     pool_frames = frames_for_scenes(
         processed, set(split[split["role"] == "pool"]["scene_name"]), channel
     )
+    samples = pd.read_parquet(
+        processed / "samples.parquet",
+        columns=["sample_data_token", "scene_name", "is_night", "is_rain"],
+    ).set_index("sample_data_token")
+    pool_meta = samples.loc[sorted(pool_frames)]
+    if night_floor:
+        stratum = int(pool_meta["is_night"].sum())
+        if stratum < night_floor:
+            raise ValueError(f"Quota is_night={night_floor} exceeds the stratum pool ({stratum} frames)")
 
     driver = connection.get_driver(settings)
     try:
@@ -307,41 +345,69 @@ def run_graph_mining(config_path: Path, processed_dir: Path | None = None) -> di
     finally:
         connection.close(driver)
     logger.info(
-        "Louvain: %d connected pool frames in %d communities",
-        len(communities),
-        len(set(communities.values())),
+        "Louvain: %d connected pool frames in %d communities (arm %s, %s weighting)",
+        len(communities), len(set(communities.values())), arm, weighting,
     )
 
-    selected = select_representatives(communities, degrees, n_mine, floor)
-    selected_set = set(selected)
-    assert selected_set <= pool_frames, "graph-mined frames must come from the pool"
-    assert not (selected_set & baseline_frames), "graph-mined frames overlap the baseline"
-
-    pd.DataFrame({"sample_data_token": selected}).to_parquet(
-        state_dir / "graph.parquet", index=False
-    )
-    night_share = (
-        float(
-            pd.read_parquet(
-                processed / "samples.parquet", columns=["sample_data_token", "is_night"]
-            )
-            .set_index("sample_data_token")
-            .loc[selected]["is_night"]
-            .mean()
+    diagnostics: list[dict[str, Any]] = []
+    if weighting == "size":
+        selected = select_representatives(communities, degrees, n_mine, floor)
+    else:
+        engine_cfg = load_yaml(Path(cfg.get("engine_config", "configs/engine.yaml"))).get("lancedb", {})
+        tbl = store.open_frames_table(
+            Path(engine_cfg.get("path", "data/lancedb")), engine_cfg.get("table", "frames"), dim=0
         )
-        if selected
-        else 0.0
-    )
+        failures = pd.read_parquet(state_dir / "failures.parquet")
+        top_k = int(cfg.get("sweep", {}).get("top_k_failures", 1000))
+        pool_scenes = sorted(split[split["role"] == "pool"]["scene_name"])
+        masses = route_failure_mass(
+            tbl, failures, communities, pool_scenes, channel, top_k, route_k
+        )
+        night_tokens = set(pool_meta.index[pool_meta["is_night"]])
+        selected, diagnostics = select_by_mass(
+            communities,
+            degrees,
+            masses,
+            n_mine,
+            night_tokens=night_tokens,
+            night_floor=night_floor,
+            night_pool=sorted(night_tokens),
+            seed=int(cfg.get("mining", {}).get("seed", 64)),
+        )
+
+    selected_set = set(selected)
+    if len(selected) != n_mine or len(selected_set) != n_mine:
+        raise ValueError(f"selected {len(selected)} frames ({len(selected_set)} unique) != n_mine {n_mine}")
+    if not selected_set <= pool_frames:
+        raise ValueError("graph-mined frames must come from the pool")
+    if selected_set & baseline_frames:
+        raise ValueError("graph-mined frames overlap the baseline")
+    selected_night = int(pool_meta.loc[selected]["is_night"].sum())
+    if night_floor and selected_night < night_floor:
+        raise ValueError(f"quota is_night: selected {selected_night} < floor {night_floor}")
+
+    out_name = "graph.parquet" if arm == "graph" else f"{arm}.parquet"
+    pd.DataFrame({"sample_data_token": selected}).to_parquet(state_dir / out_name, index=False)
+    if diagnostics:
+        (state_dir / f"communities_{arm}.json").write_text(
+            pd.DataFrame(diagnostics).to_json(orient="records", indent=2)
+        )
+
+    night_share = float(pool_meta.loc[selected]["is_night"].mean()) if selected else 0.0
     summary = {
-        "n_graph": len(selected),
+        "arm": arm,
+        "weighting": weighting,
+        "n_mined": len(selected),
         "n_communities": len(set(communities.values())),
         "n_pool_connected": len(communities),
-        "graph_night_share": night_share,
+        "mined_night_share": night_share,
+        "n_scenes": int(pool_meta.loc[selected]["scene_name"].nunique()),
     }
+    if arm == "graph":  # legacy summary keys round 1 consumers/log dashboards used
+        summary["n_graph"] = summary["n_mined"]
+        summary["graph_night_share"] = night_share
     logger.info(
-        "Graph-mined %d frames across %d communities (night share %.2f)",
-        summary["n_graph"],
-        summary["n_communities"],
-        night_share,
+        "Arm %s: graph-mined %d frames across %d communities (night %.2f, %d scenes)",
+        arm, len(selected), summary["n_communities"], night_share, summary["n_scenes"],
     )
     return summary
