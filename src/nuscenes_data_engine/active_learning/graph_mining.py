@@ -139,6 +139,10 @@ def select_by_mass(
     from ``night_pool`` (which may include disconnected frames) with a seeded draw.
     The main pass fills to exactly ``n_mine`` ∝ mass with a floor of 1 per community
     (communities already holding a night pick need no extra floor frame).
+
+    The community=-1 diagnostics row counts only backfilled tokens outside every
+    community; its night_members field repeats that count (sentinel semantics, not a
+    community's night membership).
     """
     members: dict[int, list[str]] = defaultdict(list)
     for token, community in communities.items():
@@ -168,7 +172,11 @@ def select_by_mass(
                     f"({len(selected) + len(pool)} frames)"
                 )
             rng = np.random.default_rng(seed)
-            selected.extend(str(t) for t in rng.choice(pool, size=shortfall, replace=False))
+            for token in rng.choice(pool, size=shortfall, replace=False):
+                token = str(token)
+                selected.append(token)
+                if token in communities:
+                    picked[communities[token]] += 1
 
     chosen = set(selected)
     capacities = {c: len([t for t in ranked[c] if t not in chosen]) for c in ranked}

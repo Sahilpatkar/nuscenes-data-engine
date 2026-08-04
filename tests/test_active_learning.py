@@ -83,6 +83,15 @@ def test_allocate_by_mass_all_zero_mass_falls_back_to_capacity() -> None:
     assert quotas[0] > quotas[1]  # degenerate case: weight by spare capacity
 
 
+def test_allocate_by_mass_largest_remainder_beats_low_id() -> None:
+    # Community 1 holds 90% of mass -> larger fractional remainder; a low-id
+    # tie-break would hand the single leftover frame to community 0 instead.
+    quotas = allocate_by_mass(
+        masses={0: 1.0, 1: 9.0}, capacities={0: 10, 1: 10}, total=1, floors={}
+    )
+    assert quotas == {0: 0, 1: 1}
+
+
 def _r3_fixture() -> tuple[dict[str, int], dict[str, float]]:
     communities = {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1}
     degrees = {"a": 5.0, "b": 4.0, "c": 3.0, "d": 5.0, "e": 1.0}
@@ -142,6 +151,30 @@ def test_select_by_mass_exact_n_and_deterministic() -> None:
     second, _ = select_by_mass(communities, degrees, masses={0: 2.0, 1: 3.0}, n_mine=4)
     assert first == second
     assert len(first) == 4 and len(set(first)) == 4
+
+
+def test_select_by_mass_backfill_of_community_member_updates_bookkeeping() -> None:
+    communities, degrees = _r3_fixture()
+    # 'c' (community 0) is in night_pool but NOT night_tokens: the backfill may draw
+    # it, and community 0 must not then receive a spurious extra floor frame.
+    selected, diag = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 1.0, 1: 1.0},
+        n_mine=4,
+        night_tokens={"d"},
+        night_floor=2,
+        night_pool=["d", "c"],
+        seed=64,
+    )
+    assert len(selected) == 4 and len(set(selected)) == 4
+    quotas = {row["community"]: row["quota"] for row in diag}
+    # every selected community-member is accounted in its community's quota
+    from collections import Counter
+
+    member_counts = Counter(communities[t] for t in selected if t in communities)
+    assert quotas[0] == member_counts[0] and quotas[1] == member_counts[1]
+    assert not any(row["community"] == -1 for row in diag)  # no disconnected picks here
 
 
 # ---------------------------------------------------------------------------
