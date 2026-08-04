@@ -11,7 +11,11 @@ import pandas as pd
 import pytest
 import yaml
 
-from nuscenes_data_engine.active_learning.graph_mining import select_representatives
+from nuscenes_data_engine.active_learning.graph_mining import (
+    allocate_by_mass,
+    select_by_mass,
+    select_representatives,
+)
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
 from nuscenes_data_engine.active_learning.mining import quota_shortfall, score_failures
 from nuscenes_data_engine.active_learning.report import render_report
@@ -38,6 +42,282 @@ def test_select_representatives_is_deterministic_and_bounded() -> None:
     first = select_representatives(communities, degrees, n_mine=9, floor=1)
     assert first == select_representatives(communities, degrees, n_mine=9, floor=1)
     assert len(first) == 9 and len(set(first)) == 9  # no duplicates
+
+
+def test_allocate_by_mass_proportional_with_floors() -> None:
+    quotas = allocate_by_mass(
+        masses={0: 3.0, 1: 1.0, 2: 0.0},
+        capacities={0: 10, 1: 10, 2: 5},
+        total=9,
+        floors={0: 1, 1: 1, 2: 1},
+    )
+    # floors 1 each, remaining 6 split ~proportional to mass (4.5/1.5/0),
+    # largest-remainder tops up community 0.
+    assert quotas == {0: 6, 1: 2, 2: 1}
+    assert sum(quotas.values()) == 9
+
+
+def test_allocate_by_mass_respects_capacity() -> None:
+    quotas = allocate_by_mass(
+        masses={0: 100.0, 1: 1.0}, capacities={0: 2, 1: 20}, total=10, floors={}
+    )
+    # community 0's huge mass is capped at its 2 members; the rest flows to 1.
+    assert quotas == {0: 2, 1: 8}
+
+
+def test_allocate_by_mass_floors_exceeding_total_raise() -> None:
+    with pytest.raises(ValueError, match="floors"):
+        allocate_by_mass(masses={}, capacities={0: 5, 1: 5}, total=8, floors={0: 5, 1: 5})
+
+
+def test_allocate_by_mass_capacity_exhausted_returns_partial() -> None:
+    # Caller handles shortfall (night-pass backfill); no exception here.
+    assert allocate_by_mass(masses={0: 1.0}, capacities={0: 2}, total=5, floors={}) == {0: 2}
+
+
+def test_allocate_by_mass_all_zero_mass_falls_back_to_capacity() -> None:
+    quotas = allocate_by_mass(
+        masses={}, capacities={0: 30, 1: 10}, total=4, floors={}
+    )
+    assert sum(quotas.values()) == 4
+    assert quotas[0] > quotas[1]  # degenerate case: weight by spare capacity
+
+
+def test_allocate_by_mass_largest_remainder_beats_low_id() -> None:
+    # Community 1 holds 90% of mass -> larger fractional remainder; a low-id
+    # tie-break would hand the single leftover frame to community 0 instead.
+    quotas = allocate_by_mass(
+        masses={0: 1.0, 1: 9.0}, capacities={0: 10, 1: 10}, total=1, floors={}
+    )
+    assert quotas == {0: 0, 1: 1}
+
+
+def _r3_fixture() -> tuple[dict[str, int], dict[str, float]]:
+    communities = {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1}
+    degrees = {"a": 5.0, "b": 4.0, "c": 3.0, "d": 5.0, "e": 1.0}
+    return communities, degrees
+
+
+def test_select_by_mass_weights_budget_by_mass() -> None:
+    communities, degrees = _r3_fixture()
+    selected, diag = select_by_mass(
+        communities, degrees, masses={0: 10.0, 1: 0.0}, n_mine=3
+    )
+    # floor 1 each; the spare frame goes to high-mass community 0 (top degrees first).
+    assert set(selected) == {"a", "b", "d"}
+    assert len(selected) == 3
+    quotas = {row["community"]: row["quota"] for row in diag}
+    assert quotas[0] == 2 and quotas[1] == 1
+
+
+def test_select_by_mass_night_floor_met_across_communities() -> None:
+    communities, degrees = _r3_fixture()
+    selected, diag = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 10.0, 1: 0.0},
+        n_mine=4,
+        night_tokens={"c", "e"},
+        night_floor=2,
+        night_pool=["c", "e"],
+        seed=64,
+    )
+    assert set(selected) == {"a", "b", "c", "e"}  # both night members forced in
+    assert len(selected) == 4
+    night_members = {row["community"]: row["night_members"] for row in diag}
+    assert night_members[0] == 1 and night_members[1] == 1
+
+
+def test_select_by_mass_night_backfill_from_disconnected_pool() -> None:
+    communities, degrees = _r3_fixture()
+    # 'f' is a night pool frame outside every community (disconnected).
+    selected, _ = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 1.0, 1: 1.0},
+        n_mine=5,
+        night_tokens={"c", "e"},
+        night_floor=3,
+        night_pool=["c", "e", "f"],
+        seed=64,
+    )
+    assert "f" in selected  # community night capacity is 2; backfill supplies the 3rd
+    assert len(selected) == 5
+
+
+def test_select_by_mass_exact_n_and_deterministic() -> None:
+    communities, degrees = _r3_fixture()
+    first, _ = select_by_mass(communities, degrees, masses={0: 2.0, 1: 3.0}, n_mine=4)
+    second, _ = select_by_mass(communities, degrees, masses={0: 2.0, 1: 3.0}, n_mine=4)
+    assert first == second
+    assert len(first) == 4 and len(set(first)) == 4
+
+
+def test_select_by_mass_backfill_of_community_member_updates_bookkeeping() -> None:
+    communities, degrees = _r3_fixture()
+    # 'c' (community 0) is in night_pool but NOT night_tokens: the backfill may draw
+    # it, and community 0 must not then receive a spurious extra floor frame.
+    selected, diag = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 1.0, 1: 1.0},
+        n_mine=4,
+        night_tokens={"d"},
+        night_floor=2,
+        night_pool=["d", "c"],
+        seed=64,
+    )
+    assert len(selected) == 4 and len(set(selected)) == 4
+    quotas = {row["community"]: row["quota"] for row in diag}
+    # every selected community-member is accounted in its community's quota
+    from collections import Counter
+
+    member_counts = Counter(communities[t] for t in selected if t in communities)
+    assert quotas[0] == member_counts[0] and quotas[1] == member_counts[1]
+    assert not any(row["community"] == -1 for row in diag)  # no disconnected picks here
+
+
+def test_route_failure_mass_routes_rate_score_to_communities(
+    mining_setup: Path, tmp_path: Path
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import route_failure_mass
+    from nuscenes_data_engine.data_engine import store
+
+    failures = pd.read_parquet(tmp_path / "state" / "failures.parquet")
+    tbl = store.open_frames_table(tmp_path / "lancedb", "frames", dim=0)
+    # Fake Louvain: day pool scenes -> community 0, night pool scenes -> community 1.
+    communities = {
+        f"pool-{s}-CAM_FRONT-{i}": (1 if s in (1, 3) else 0)
+        for s in range(4)
+        for i in range(4)
+    }
+    pool_scenes = [f"pool-{s}" for s in range(5)]
+
+    masses = route_failure_mass(
+        tbl, failures, communities, pool_scenes, "CAM_FRONT", top_k=6, route_k=3
+    )
+    # top-6 by smoothed rate = all 4 night failures (rate 4/5.5) + 2 day (rate 2/5.5);
+    # each routes to 3 same-axis pool frames, all in the matching community.
+    assert masses[1] == pytest.approx(4 * 3 * (4 / 5.5))
+    assert masses[0] == pytest.approx(2 * 3 * (2 / 5.5))
+    # pool-4 frames are absent from the store, so no mass can route through them.
+    assert set(masses) <= {0, 1}
+
+
+def _fake_communities(pool_tokens: list[str]) -> tuple[dict[str, int], dict[str, float]]:
+    communities = {
+        t: (1 if t.split("-")[1] in ("1", "3") else 0)
+        for t in pool_tokens
+        if not t.startswith("pool-4")  # pool-4 is "disconnected" (off-store)
+    }
+    degrees = {t: float(t[-1]) for t in communities}
+    return communities, degrees
+
+
+@pytest.fixture()
+def fake_louvain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bypass Neo4j: communities from scene naming, degree from frame index."""
+    from nuscenes_data_engine.active_learning import graph_mining
+
+    def _fake(
+        driver: Any, pool_tokens: list[str], database: str, seed: int = 64
+    ) -> tuple[dict[str, int], dict[str, float]]:
+        return _fake_communities(pool_tokens)
+
+    monkeypatch.setattr(graph_mining, "_louvain_communities", _fake)
+    monkeypatch.setattr(graph_mining.connection, "get_driver", lambda settings: None)
+    monkeypatch.setattr(graph_mining.connection, "close", lambda driver: None)
+
+
+def test_run_graph_mining_rate_arm(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    state = tmp_path / "state"
+    summary = run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+    assert summary["arm"] == "graph_rate" and summary["weighting"] == "rate_mass"
+    assert (state / "graph_rate.parquet").is_file()
+    assert (state / "communities_graph_rate.json").is_file()
+    assert not (state / "graph.parquet").is_file()  # legacy arm's artifact untouched
+
+    frames = pd.read_parquet(state / "graph_rate.parquet")
+    assert len(frames) == 6 == summary["n_mined"]
+    assert frames["sample_data_token"].is_unique
+    pool_tokens = {f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4)}
+    assert set(frames["sample_data_token"]) <= pool_tokens
+    # Every community represented (floor 1): both fake communities appear.
+    got_communities = {
+        1 if t.split("-")[1] in ("1", "3") else 0 for t in frames["sample_data_token"]
+    }
+    assert got_communities == {0, 1}
+
+
+def test_run_graph_mining_size_arm_matches_select_representatives(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import (
+        run_graph_mining,
+        select_representatives,
+    )
+
+    state = tmp_path / "state"
+    summary = run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph")
+    frames = pd.read_parquet(state / "graph.parquet")
+
+    pool_tokens = sorted(f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4))
+    communities, degrees = _fake_communities(pool_tokens)
+    expected = select_representatives(communities, degrees, 6, 1)
+    assert frames["sample_data_token"].tolist() == expected  # legacy path, byte-equal
+    assert summary["weighting"] == "size" and summary["n_graph"] == 6
+    assert "graph_night_share" in summary
+    assert not (state / "communities_graph.json").is_file()  # size path has no diagnostics
+
+
+def test_run_graph_mining_night_arm_meets_floor(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    summary = run_graph_mining(
+        mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate_night"
+    )
+    frames = pd.read_parquet(tmp_path / "state" / "graph_rate_night.parquet")
+    night_scenes = {"pool-1", "pool-3"}
+    n_night = sum(1 for t in frames["sample_data_token"] if t.split("-CAM")[0] in night_scenes)
+    assert len(frames) == 6
+    assert n_night >= 5
+    assert summary["mined_night_share"] >= 5 / 6
+
+    # The floor must actually change the selection vs the unconstrained rate arm.
+    run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+    rate_frames = pd.read_parquet(tmp_path / "state" / "graph_rate.parquet")
+    assert set(frames["sample_data_token"]) != set(rate_frames["sample_data_token"])
+
+
+def test_run_graph_mining_arm_validation(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
+
+    with pytest.raises(ValueError, match="Unknown graph-mining arm"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="bogus")
+
+    cfg = yaml.safe_load(mining_setup.read_text())
+    cfg["graph_mining"]["arms"]["graph_rate"] = None
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="no 'weighting' configured"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+
+    cfg["graph_mining"]["arms"]["graph_rate"] = {"weighting": "sideways"}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="Unknown weighting"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+
+    cfg["graph_mining"]["arms"]["graph_rate"] = {"weighting": "rate_mass", "quotas": {"is_rain": 2}}
+    mining_setup.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="Unknown quota flag"):
+        run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +730,19 @@ def mining_setup(tmp_path: Path) -> Path:
                         },
                     },
                 },
+                "graph_mining": {
+                    "n_mine": 6,
+                    "floor": 1,
+                    "route_k": 3,
+                    "arms": {
+                        "graph": {"weighting": "size"},
+                        "graph_rate": {"weighting": "rate_mass"},
+                        "graph_rate_night": {
+                            "weighting": "rate_mass",
+                            "quotas": {"is_night": 5},
+                        },
+                    },
+                },
                 "state": {"dir": str(state)},
                 "engine_config": str(tmp_path / "engine.yaml"),
             }
@@ -678,6 +971,28 @@ def test_resolve_arm_frames_round2_arms(tmp_path: Path) -> None:
         )
         resolved = resolve_arm_frames(state, tmp_path / "processed", cfg, arm)
         assert resolved == baseline | set(extra)
+
+
+def test_resolve_arm_frames_round3_arms(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import ARMS, resolve_arm_frames
+
+    assert set(ARMS) >= {"graph_rate", "graph_rate_night"}
+
+    _write_samples(tmp_path / "processed", {"bl-0": False, "pool-0": False})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"scene_name": ["bl-0", "pool-0"], "role": ["baseline", "pool"]}
+    ).to_parquet(state / "split.parquet", index=False)
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    baseline = {f"bl-0-CAM_FRONT-{i}" for i in range(3)}
+    for arm in ("graph_rate", "graph_rate_night"):
+        extra = [f"pool-0-{arm}-CAM_FRONT-{i}" for i in (0, 1)]
+        pd.DataFrame({"sample_data_token": extra}).to_parquet(
+            state / f"{arm}.parquet", index=False
+        )
+        assert resolve_arm_frames(state, tmp_path / "processed", cfg, arm) == baseline | set(extra)
 
 
 def test_overlay_train_config(tmp_path: Path) -> None:

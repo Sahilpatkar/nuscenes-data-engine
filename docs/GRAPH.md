@@ -144,8 +144,10 @@ Errors are returned to the model as data, so it repairs its own Cypher.
 
 A graph-native acquisition arm for Phase 6d: GDS **Louvain** community detection over the
 pool's `SIMILAR_TO` subgraph yields appearance communities without KMeans; the labeling
-budget is allocated across communities with the shared `autolabel.sampling.allocate`
-helper, and each community contributes its most-connected (representative) frames.
+budget is allocated across communities — size-proportional via the shared
+`autolabel.sampling.allocate` helper for the round-1 arm, or ∝ smoothed-rate failure mass
+via `allocate_by_mass` for the round-3 arms — and each community contributes its
+most-connected (representative) frames.
 
 ```bash
 docker compose up -d neo4j && make graph-build            # needs the SIMILAR_TO edges

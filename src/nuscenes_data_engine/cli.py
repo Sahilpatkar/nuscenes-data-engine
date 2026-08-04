@@ -593,24 +593,39 @@ def al_mine(
 
 @al_app.command("graph-mine")
 def al_graph_mine(
+    arm: str = typer.Option("graph", "--arm", help="graph | graph_rate | graph_rate_night."),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
     wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
 ) -> None:
-    """Phase 6e arm: GDS-community-detect the pool's SIMILAR_TO graph (needs Neo4j)."""
+    """Graph arms: community-detect the pool's SIMILAR_TO graph (needs Neo4j)."""
     from nuscenes_data_engine.active_learning.graph_mining import run_graph_mining
     from nuscenes_data_engine.tracking import wandb_run
 
-    with wandb_run("al-graph-mine", enabled=wandb) as run:
-        summary = run_graph_mining(config)
+    with wandb_run(
+        "al-graph-mine", name=f"al-graph-mine-{arm}", config={"arm": arm}, enabled=wandb
+    ) as run:
+        summary = run_graph_mining(config, arm=arm)
         if run is not None:
-            run.log({k: v for k, v in summary.items() if isinstance(v, int | float)})
+            # bool is an int subclass — exclude it so future flag fields aren't logged as 0/1
+            run.log(
+                {
+                    k: v
+                    for k, v in summary.items()
+                    if isinstance(v, int | float) and not isinstance(v, bool)
+                }
+            )
     logger.info("Graph-mine summary: %s", summary)
 
 
 @al_app.command("run")
 def al_run(
     arm: str = typer.Option(
-        ..., "--arm", help="baseline | mined | random | graph | rate | strat | rate_strat."
+        ...,
+        "--arm",
+        help=(
+            "baseline | mined | random | graph | rate | strat | rate_strat"
+            " | graph_rate | graph_rate_night."
+        ),
     ),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
     device: str | None = typer.Option(None, "--device"),
