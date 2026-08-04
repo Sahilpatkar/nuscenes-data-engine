@@ -325,7 +325,7 @@ connected pool frames; all routed failures had stored embeddings):
 |---|---:|---:|---:|---:|---:|
 | `graph_rate` | 0.083 | 0.199 | 378 | 11.8% | 22/97 |
 | `graph_rate_night` | 0.309 | 0.169 | 368 | 14.3% | 23/97 |
-| round-1 `graph` | 0.121 | 0.195 | 473 | — | — |
+| round-1 `graph` | 0.121 | 0.195 | 473 | 5.6% | — |
 | round-2 `rate` | 0.232 | 0.199 | 214 | 18.9% | — |
 | round-2 `rate_strat` | 0.366 | 0.275 | 224 | 16.6% | — |
 
@@ -334,15 +334,21 @@ night for failure focus** — `graph_rate` lands at 8.3% night, *below* the pool
 12%, because day-failure communities dominate the mass (Spearman mass-vs-size
 0.648, 17/97 communities got zero mass); and **the night floor is concentrated,
 not spread** — the single all-night community (916 frames) absorbs the boost, its
-quota jumping 83 → 323 (~3.9×). Scene spread (378/368) sits between round 2's
+quota jumping 83 → 323 (~3.9×) — a consequence of the mass-weighted allocator spill
+(the spec's degree-ranked spill alternative would spread it differently); partition-matched
+H2 measures this mechanism as implemented. Scene spread (378/368) sits between round 2's
 centroid arms (~220) and the size-weighted `graph` (473) — training will tell
 whether that diversity loss costs more than the failure focus gains.
 
 Determinism note: unseeded GDS Louvain is nondeterministic (community partitions
 varied run-to-run; mined-set Jaccard 0.71). GDS 2.13.11 rejects `randomSeed` for
 Louvain, so the fix is `concurrency: 1` — verified byte-identical parquets across
-reruns. Round 1's `graph` arm silently had the same nondeterminism; its artifact
-is preserved unchanged, so all comparisons stand.
+reruns. Round 1's `graph` arm silently had the same nondeterminism, and its artifact (98
+communities) is preserved unchanged against the pinned partition's 97 — so H1
+(`graph_rate` vs `graph`) carries one draw of partition noise on top of the
+weighting change (the doc's own measurement of that noise: mined-set Jaccard 0.71
+across unseeded reruns) and its effect size should be read with that in mind. H2
+(`graph_rate_night` vs `graph_rate`) is partition-matched and clean.
 
 ```bash
 # infra Mac (Neo4j + LanceDB + failures.parquet all local)

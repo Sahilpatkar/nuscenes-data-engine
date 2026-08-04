@@ -3,11 +3,13 @@
 The graph-native alternative to embedding-KMeans mining (``active_learning/mining.py``):
 use the Neo4j ``SIMILAR_TO`` graph's community structure instead of clustering raw
 vectors. GDS Louvain over the *pool's* similarity subgraph yields appearance communities;
-the labeling budget is allocated across communities with the same ``allocate`` helper the
-stratified sampler uses, and each community contributes its most-connected (representative)
-frames. Selection is graph-native and A/B'd against the mined/random arms on the shared
-val split — the acquisition function changes, the random-control gate does not. Round 3
-parameterizes the arm (``graph_mining.arms``): ``size`` weighting reproduces the round-1
+the labeling budget is allocated across communities — size-proportional via the shared
+``allocate`` helper for the round-1 arm, or ∝ smoothed-rate failure mass via
+``allocate_by_mass`` for the round-3 arms — and each community contributes its
+most-connected (representative) frames. Selection is graph-native and A/B'd against the
+mined/random arms on the shared val split — the acquisition function changes, the
+random-control gate does not. Round 3 parameterizes the arm (``graph_mining.arms``):
+``size`` weighting reproduces the round-1
 selection; ``rate_mass`` allocates budget ∝ embedding-routed smoothed-rate failure mass with
 a per-community floor and an optional night quota (spec
 docs/superpowers/specs/2026-08-04-al-round-3-design.md).
@@ -95,6 +97,8 @@ def allocate_by_mass(
     Pure/deterministic. Communities missing from ``masses`` weigh 0 and receive only
     their floor unless every active community weighs 0 (then spare capacity is the
     weight). Returns partial totals when capacity is exhausted — callers backfill.
+    Masses must be non-negative (negative weights would produce negative shares and
+    undercut floors).
     """
     quotas = {c: min(floors.get(c, 0), cap) for c, cap in capacities.items()}
     if sum(quotas.values()) > total:
