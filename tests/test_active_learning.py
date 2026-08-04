@@ -194,11 +194,12 @@ def test_route_failure_mass_routes_rate_score_to_communities(
     pool_scenes = [f"pool-{s}" for s in range(5)]
 
     masses = route_failure_mass(
-        tbl, failures, communities, pool_scenes, "CAM_FRONT", top_k=8, route_k=3
+        tbl, failures, communities, pool_scenes, "CAM_FRONT", top_k=6, route_k=3
     )
-    # Night failures carry rate (3+1)/5.5 ≈ 0.727 and sit on axis 1 -> community 1;
-    # day failures carry (1+1)/5.5 ≈ 0.364 on axis 0 -> community 0.
-    assert masses[1] > masses[0] > 0.0
+    # top-6 by smoothed rate = all 4 night failures (rate 4/5.5) + 2 day (rate 2/5.5);
+    # each routes to 3 same-axis pool frames, all in the matching community.
+    assert masses[1] == pytest.approx(4 * 3 * (4 / 5.5))
+    assert masses[0] == pytest.approx(2 * 3 * (2 / 5.5))
     # pool-4 frames are absent from the store, so no mass can route through them.
     assert set(masses) <= {0, 1}
 

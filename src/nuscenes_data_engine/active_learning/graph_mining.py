@@ -222,21 +222,33 @@ def route_failure_mass(
 ) -> dict[int, float]:
     """Distribute each top-``top_k`` rate-ranked failure's score to the communities of
     its ``route_k`` nearest pool frames (LanceDB, prefiltered). Neighbors outside any
-    community (disconnected pool frames) are skipped."""
+    community (disconnected pool frames) are skipped. Failures without a stored
+    embedding are skipped with a logged warning (they contribute no mass)."""
     scored = failures.assign(score=score_failures(failures, "smoothed_rate"))
     top = scored.sort_values(["score", "sample_data_token"], ascending=[False, True]).head(top_k)
     vectors = read_vectors(tbl, list(top["sample_data_token"]))
-    score_by_token = dict(zip(top["sample_data_token"], top["score"], strict=True))
-    masses: dict[int, float] = defaultdict(float)
-    for row in vectors.to_dict("records"):
-        score = float(score_by_token[row["sample_data_token"]])
-        neighbors = mine_candidates(
-            tbl, np.asarray(row["vector"], dtype=np.float32), pool_scenes, channel, route_k
+    vector_by_token = dict(
+        zip(vectors["sample_data_token"], vectors["vector"], strict=True)
+    )
+    missing = [t for t in top["sample_data_token"] if t not in vector_by_token]
+    if missing:
+        logger.warning(
+            "route_failure_mass: %d/%d top failures have no stored embedding and "
+            "contribute no mass (first: %s)",
+            len(missing), len(top), missing[0],
         )
-        for token in neighbors["sample_data_token"]:
-            community = communities.get(token)
+    masses: dict[int, float] = defaultdict(float)
+    for token, score in zip(top["sample_data_token"], top["score"], strict=True):
+        vector = vector_by_token.get(token)
+        if vector is None:
+            continue
+        neighbors = mine_candidates(
+            tbl, np.asarray(vector, dtype=np.float32), pool_scenes, channel, route_k
+        )
+        for neighbor in neighbors["sample_data_token"]:
+            community = communities.get(neighbor)
             if community is not None:
-                masses[community] += score
+                masses[community] += float(score)
     return dict(masses)
 
 
