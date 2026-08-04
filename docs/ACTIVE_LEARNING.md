@@ -85,7 +85,7 @@ machine**, then `graph.parquet` ships to the GPU server for training:
 ```bash
 # infra machine (Neo4j on :7687 with the SIMILAR_TO edges built)
 docker compose up -d neo4j && make graph-build
-uv run nuscenes-data-engine al graph-mine
+uv run nuscenes-data-engine al graph-mine --arm graph  # round 3 adds --arm graph_rate | graph_rate_night
 rsync -a data/active_learning/graph.parquet trinity-2-18:/home/mgaur/sahil/nuscenes_project/data/active_learning/
 # GPU server
 GPU_DEVICES=0 scripts/gpu-run.sh --bg al run --arm graph
@@ -296,6 +296,65 @@ score** (`rate_strat`). The natural next experiment selects *diverse
 representatives weighted by rate score within stratified quotas* — e.g.
 Louvain-community sampling where each community's budget is proportional to its
 summed smoothed-rate failure mass, with the night floor retained.
+
+## Round 3 — rate-weighted graph-community budgets
+
+Combines the two proven ingredients: round 1's Louvain-community diversity (the
+reigning champion) and round 2's smoothed-rate score (the best night signal). Only
+the acquisition function changes — same baseline, sweep output, random control,
+training config, and val split. Design:
+[the 2026-08-04 spec](superpowers/specs/2026-08-04-al-round-3-design.md).
+
+| arm | community budget weighting | night floor (of 1,500) |
+|---|---|---|
+| `graph_rate` | smoothed-rate failure mass, floor 1/community | none |
+| `graph_rate_night` | smoothed-rate failure mass, floor 1/community | ≥ 375 |
+
+Mechanism: the top-1,000 rate-ranked failures each route their score to the
+communities of their `route_k = 10` nearest pool frames (LanceDB); community
+budgets are allocated ∝ that failure mass (capacity-capped, floor 1 per community
+— every community stays represented); within a community, top-degree members are
+taken first. The night arm runs a mass-proportional night pass for the 375 floor
+before the main pass. All guards are explicit `ValueError`s; the round-1
+`graph.parquet` is never rewritten by the new arms.
+
+Mined-set composition (canonical seeded run, 97 Louvain communities over 21,094
+connected pool frames; all routed failures had stored embeddings):
+
+| arm | night share | rain share | scenes | top-10-scene conc. | floor-only communities |
+|---|---:|---:|---:|---:|---:|
+| `graph_rate` | 0.083 | 0.199 | 378 | 11.8% | 22/97 |
+| `graph_rate_night` | 0.309 | 0.169 | 368 | 14.3% | 23/97 |
+| round-1 `graph` | 0.121 | 0.195 | 473 | — | — |
+| round-2 `rate` | 0.232 | 0.199 | 214 | 18.9% | — |
+| round-2 `rate_strat` | 0.366 | 0.275 | 224 | 16.6% | — |
+
+Two composition findings worth pinning before training: **mass weighting trades
+night for failure focus** — `graph_rate` lands at 8.3% night, *below* the pool's
+12%, because day-failure communities dominate the mass (Spearman mass-vs-size
+0.648, 17/97 communities got zero mass); and **the night floor is concentrated,
+not spread** — the single all-night community (916 frames) absorbs the boost, its
+quota jumping 83 → 323 (~3.9×). Scene spread (378/368) sits between round 2's
+centroid arms (~220) and the size-weighted `graph` (473) — training will tell
+whether that diversity loss costs more than the failure focus gains.
+
+Determinism note: unseeded GDS Louvain is nondeterministic (community partitions
+varied run-to-run; mined-set Jaccard 0.71). GDS 2.13.11 rejects `randomSeed` for
+Louvain, so the fix is `concurrency: 1` — verified byte-identical parquets across
+reruns. Round 1's `graph` arm silently had the same nondeterminism; its artifact
+is preserved unchanged, so all comparisons stand.
+
+```bash
+# infra Mac (Neo4j + LanceDB + failures.parquet all local)
+docker compose up -d neo4j
+uv run nuscenes-data-engine al graph-mine --arm graph_rate
+uv run nuscenes-data-engine al graph-mine --arm graph_rate_night
+rsync -a data/active_learning/{graph_rate,graph_rate_night}.parquet trinity-2-18:/home/mgaur/sahil/nuscenes_project/data/active_learning/
+# TRINITY — pick a free GPU (ssh trinity-2-18 nvidia-smi); sh -c wrapper is REQUIRED
+scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm graph_rate && env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm graph_rate_night && uv run nuscenes-data-engine al report && echo CHAIN_COMPLETE'"
+```
+
+Results: pending the TRINITY training runs.
 
 Runs: MLflow `nuscenes-yolo` (one `*_al-*` run per trained arm, registry
 untouched) and W&B
