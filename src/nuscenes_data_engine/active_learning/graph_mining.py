@@ -78,6 +78,47 @@ def select_representatives(
     return selected
 
 
+def allocate_by_mass(
+    masses: dict[int, float],
+    capacities: dict[int, int],
+    total: int,
+    floors: dict[int, int],
+) -> dict[int, int]:
+    """Split ``total`` across communities ∝ mass, capped at capacity, with per-key floors.
+
+    Pure/deterministic. Communities missing from ``masses`` weigh 0 and receive only
+    their floor unless every active community weighs 0 (then spare capacity is the
+    weight). Returns partial totals when capacity is exhausted — callers backfill.
+    """
+    quotas = {c: min(floors.get(c, 0), cap) for c, cap in capacities.items()}
+    if sum(quotas.values()) > total:
+        raise ValueError(
+            f"floors sum to {sum(quotas.values())} > total {total} over {len(capacities)} communities"
+        )
+    remaining = total - sum(quotas.values())
+    while remaining > 0:
+        active = {c: capacities[c] - quotas[c] for c in capacities if capacities[c] > quotas[c]}
+        if not active:
+            break
+        weights = {c: masses.get(c, 0.0) for c in active}
+        if sum(weights.values()) <= 0.0:
+            weights = {c: float(cap) for c, cap in active.items()}
+        total_weight = sum(weights.values())
+        shares = {c: remaining * weights[c] / total_weight for c in active}
+        add = {c: min(int(shares[c]), active[c]) for c in active}
+        leftover = remaining - sum(add.values())
+        for c in sorted(active, key=lambda k: (-(shares[k] - int(shares[k])), k)):
+            if leftover <= 0:
+                break
+            if add[c] < active[c]:
+                add[c] += 1
+                leftover -= 1
+        for c, extra in add.items():
+            quotas[c] += extra
+        remaining = total - sum(quotas.values())
+    return quotas
+
+
 def _louvain_communities(
     driver: Any, pool_tokens: list[str], database: str
 ) -> tuple[dict[str, int], dict[str, float]]:

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from nuscenes_data_engine.active_learning.graph_mining import select_representatives
+from nuscenes_data_engine.active_learning.graph_mining import allocate_by_mass, select_representatives
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
 from nuscenes_data_engine.active_learning.mining import quota_shortfall, score_failures
 from nuscenes_data_engine.active_learning.report import render_report
@@ -38,6 +38,45 @@ def test_select_representatives_is_deterministic_and_bounded() -> None:
     first = select_representatives(communities, degrees, n_mine=9, floor=1)
     assert first == select_representatives(communities, degrees, n_mine=9, floor=1)
     assert len(first) == 9 and len(set(first)) == 9  # no duplicates
+
+
+def test_allocate_by_mass_proportional_with_floors() -> None:
+    quotas = allocate_by_mass(
+        masses={0: 3.0, 1: 1.0, 2: 0.0},
+        capacities={0: 10, 1: 10, 2: 5},
+        total=9,
+        floors={0: 1, 1: 1, 2: 1},
+    )
+    # floors 1 each, remaining 6 split ~proportional to mass (4.5/1.5/0),
+    # largest-remainder tops up community 0.
+    assert quotas == {0: 6, 1: 2, 2: 1}
+    assert sum(quotas.values()) == 9
+
+
+def test_allocate_by_mass_respects_capacity() -> None:
+    quotas = allocate_by_mass(
+        masses={0: 100.0, 1: 1.0}, capacities={0: 2, 1: 20}, total=10, floors={}
+    )
+    # community 0's huge mass is capped at its 2 members; the rest flows to 1.
+    assert quotas == {0: 2, 1: 8}
+
+
+def test_allocate_by_mass_floors_exceeding_total_raise() -> None:
+    with pytest.raises(ValueError, match="floors"):
+        allocate_by_mass(masses={}, capacities={0: 5, 1: 5}, total=8, floors={0: 5, 1: 5})
+
+
+def test_allocate_by_mass_capacity_exhausted_returns_partial() -> None:
+    # Caller handles shortfall (night-pass backfill); no exception here.
+    assert allocate_by_mass(masses={0: 1.0}, capacities={0: 2}, total=5, floors={}) == {0: 2}
+
+
+def test_allocate_by_mass_all_zero_mass_falls_back_to_capacity() -> None:
+    quotas = allocate_by_mass(
+        masses={}, capacities={0: 30, 1: 10}, total=4, floors={}
+    )
+    assert sum(quotas.values()) == 4
+    assert quotas[0] > quotas[1]  # degenerate case: weight by spare capacity
 
 
 # ---------------------------------------------------------------------------
