@@ -219,7 +219,9 @@ def fake_louvain(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bypass Neo4j: communities from scene naming, degree from frame index."""
     from nuscenes_data_engine.active_learning import graph_mining
 
-    def _fake(driver: Any, pool_tokens: list[str], database: str) -> tuple[dict[str, int], dict[str, float]]:
+    def _fake(
+        driver: Any, pool_tokens: list[str], database: str, seed: int = 64
+    ) -> tuple[dict[str, int], dict[str, float]]:
         return _fake_communities(pool_tokens)
 
     monkeypatch.setattr(graph_mining, "_louvain_communities", _fake)

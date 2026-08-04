@@ -52,11 +52,6 @@ MATCH (a:Frame)-[:SIMILAR_TO]->(b:Frame)
 WHERE a._al_pool = true AND b._al_pool = true
 RETURN gds.graph.project('{_GRAPH}', a, b) AS g
 """
-_LOUVAIN = f"""
-CALL gds.louvain.stream('{_GRAPH}')
-YIELD nodeId, communityId
-RETURN gds.util.asNode(nodeId).token AS token, communityId AS community
-"""
 _DEGREE = f"""
 CALL gds.degree.stream('{_GRAPH}')
 YIELD nodeId, score
@@ -259,9 +254,26 @@ def route_failure_mass(
 
 
 def _louvain_communities(
-    driver: Any, pool_tokens: list[str], database: str
+    driver: Any, pool_tokens: list[str], database: str, seed: int = 64
 ) -> tuple[dict[str, int], dict[str, float]]:
-    """Mark the pool, project its SIMILAR_TO subgraph, and stream Louvain + degree."""
+    """Mark the pool, project its SIMILAR_TO subgraph, and stream Louvain + degree.
+
+    ``concurrency: 1`` pins Louvain to single-threaded execution, removing the
+    thread-join nondeterminism that otherwise makes the community partition vary
+    run-to-run on an identical graph (round 3 finding — no ``randomSeed`` was set
+    previously). ``randomSeed`` itself is deliberately *not* passed: this GDS build
+    (2.13.11) rejects it for ``gds.louvain.stream`` with
+    ``IllegalArgumentException: Unexpected configuration key: randomSeed``
+    (verified empirically against the live instance). ``seed`` is accepted here for
+    signature symmetry with ``select_by_mass``'s seed (the same resolved config
+    value is threaded through both) and to embed in the config if a future GDS
+    version restores support; it is otherwise unused today.
+    """
+    louvain_query = (
+        f"CALL gds.louvain.stream('{_GRAPH}', {{concurrency: 1}}) "
+        "YIELD nodeId, communityId "
+        f"RETURN gds.util.asNode(nodeId).token AS token, communityId AS community"
+    )
     connection.run_write_batches(
         driver, _MARK_POOL, [{"token": token} for token in pool_tokens], database=database
     )
@@ -270,7 +282,7 @@ def _louvain_communities(
         connection.write_query(driver, _PROJECT, database=database)
         communities = {
             row["token"]: int(row["community"])
-            for row in connection.write_query(driver, _LOUVAIN, database=database)
+            for row in connection.write_query(driver, louvain_query, database=database)
         }
         degrees = {
             row["token"]: float(row["degree"])
@@ -328,6 +340,7 @@ def run_graph_mining(
             "(the main pass needs room for community floors)"
         )
     database = settings.neo4j_database
+    seed = int(graph_cfg.get("seed", cfg.get("mining", {}).get("seed", 64)))
 
     split = pd.read_parquet(state_dir / "split.parquet")
     baseline_frames = frames_for_scenes(
@@ -348,7 +361,7 @@ def run_graph_mining(
 
     driver = connection.get_driver(settings)
     try:
-        communities, degrees = _louvain_communities(driver, sorted(pool_frames), database)
+        communities, degrees = _louvain_communities(driver, sorted(pool_frames), database, seed=seed)
     finally:
         connection.close(driver)
     logger.info(
@@ -384,7 +397,7 @@ def run_graph_mining(
             night_tokens=night_tokens,
             night_floor=night_floor,
             night_pool=sorted(night_tokens),
-            seed=int(graph_cfg.get("seed", cfg.get("mining", {}).get("seed", 64))),
+            seed=seed,
         )
 
     selected_set = set(selected)
