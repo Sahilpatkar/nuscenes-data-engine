@@ -19,6 +19,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from nuscenes_data_engine.config import get_settings, load_yaml
@@ -117,6 +118,84 @@ def allocate_by_mass(
             quotas[c] += extra
         remaining = total - sum(quotas.values())
     return quotas
+
+
+def select_by_mass(
+    communities: dict[str, int],
+    degrees: dict[str, float],
+    masses: dict[int, float],
+    n_mine: int,
+    *,
+    night_tokens: set[str] | None = None,
+    night_floor: int = 0,
+    night_pool: list[str] | None = None,
+    seed: int = 64,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Mass-weighted community selection: optional night pass, then floor-1 main pass.
+
+    Pure/DB-free and deterministic. Night pass allocates ``night_floor`` across
+    communities ∝ mass over their *night* members (top-degree first, capacity-capped
+    with automatic cross-community spill via the allocator); a shortfall backfills
+    from ``night_pool`` (which may include disconnected frames) with a seeded draw.
+    The main pass fills to exactly ``n_mine`` ∝ mass with a floor of 1 per community
+    (communities already holding a night pick need no extra floor frame).
+    """
+    members: dict[int, list[str]] = defaultdict(list)
+    for token, community in communities.items():
+        members[community].append(token)
+    ranked = {
+        c: sorted(tokens, key=lambda t: (-degrees.get(t, 0.0), t))
+        for c, tokens in members.items()
+    }
+    night = night_tokens or set()
+    selected: list[str] = []
+    picked: dict[int, int] = defaultdict(int)
+
+    if night_floor > 0:
+        night_ranked = {c: [t for t in ranked[c] if t in night] for c in ranked}
+        night_caps = {c: len(tokens) for c, tokens in night_ranked.items()}
+        night_quotas = allocate_by_mass(masses, night_caps, night_floor, floors={})
+        for c in sorted(night_quotas):
+            take = night_ranked[c][: night_quotas[c]]
+            selected.extend(take)
+            picked[c] += len(take)
+        shortfall = night_floor - len(selected)
+        if shortfall > 0:
+            pool = sorted(set(night_pool or []) - set(selected))
+            if len(pool) < shortfall:
+                raise ValueError(
+                    f"night floor {night_floor} exceeds available night pool "
+                    f"({len(selected) + len(pool)} frames)"
+                )
+            rng = np.random.default_rng(seed)
+            selected.extend(str(t) for t in rng.choice(pool, size=shortfall, replace=False))
+
+    chosen = set(selected)
+    capacities = {c: len([t for t in ranked[c] if t not in chosen]) for c in ranked}
+    floors = {c: 0 if picked[c] > 0 or capacities[c] == 0 else 1 for c in ranked}
+    quotas = allocate_by_mass(masses, capacities, n_mine - len(selected), floors)
+    for c in sorted(quotas):
+        take = [t for t in ranked[c] if t not in chosen][: quotas[c]]
+        selected.extend(take)
+        picked[c] += len(take)
+
+    diagnostics = [
+        {
+            "community": c,
+            "size": len(members[c]),
+            "mass": round(masses.get(c, 0.0), 4),
+            "night_members": len([t for t in members[c] if t in night]),
+            "quota": picked[c],
+        }
+        for c in sorted(members)
+    ]
+    n_backfilled = len(selected) - sum(picked.values())
+    if n_backfilled:
+        diagnostics.append(
+            {"community": -1, "size": n_backfilled, "mass": 0.0,
+             "night_members": n_backfilled, "quota": n_backfilled}
+        )
+    return selected, diagnostics
 
 
 def _louvain_communities(

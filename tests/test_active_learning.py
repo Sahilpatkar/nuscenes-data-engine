@@ -11,7 +11,11 @@ import pandas as pd
 import pytest
 import yaml
 
-from nuscenes_data_engine.active_learning.graph_mining import allocate_by_mass, select_representatives
+from nuscenes_data_engine.active_learning.graph_mining import (
+    allocate_by_mass,
+    select_by_mass,
+    select_representatives,
+)
 from nuscenes_data_engine.active_learning.matching import FrameFailure, iou_matrix, match_frame
 from nuscenes_data_engine.active_learning.mining import quota_shortfall, score_failures
 from nuscenes_data_engine.active_learning.report import render_report
@@ -77,6 +81,67 @@ def test_allocate_by_mass_all_zero_mass_falls_back_to_capacity() -> None:
     )
     assert sum(quotas.values()) == 4
     assert quotas[0] > quotas[1]  # degenerate case: weight by spare capacity
+
+
+def _r3_fixture() -> tuple[dict[str, int], dict[str, float]]:
+    communities = {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1}
+    degrees = {"a": 5.0, "b": 4.0, "c": 3.0, "d": 5.0, "e": 1.0}
+    return communities, degrees
+
+
+def test_select_by_mass_weights_budget_by_mass() -> None:
+    communities, degrees = _r3_fixture()
+    selected, diag = select_by_mass(
+        communities, degrees, masses={0: 10.0, 1: 0.0}, n_mine=3
+    )
+    # floor 1 each; the spare frame goes to high-mass community 0 (top degrees first).
+    assert set(selected) == {"a", "b", "d"}
+    assert len(selected) == 3
+    quotas = {row["community"]: row["quota"] for row in diag}
+    assert quotas[0] == 2 and quotas[1] == 1
+
+
+def test_select_by_mass_night_floor_met_across_communities() -> None:
+    communities, degrees = _r3_fixture()
+    selected, diag = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 10.0, 1: 0.0},
+        n_mine=4,
+        night_tokens={"c", "e"},
+        night_floor=2,
+        night_pool=["c", "e"],
+        seed=64,
+    )
+    assert set(selected) == {"a", "b", "c", "e"}  # both night members forced in
+    assert len(selected) == 4
+    night_members = {row["community"]: row["night_members"] for row in diag}
+    assert night_members[0] == 1 and night_members[1] == 1
+
+
+def test_select_by_mass_night_backfill_from_disconnected_pool() -> None:
+    communities, degrees = _r3_fixture()
+    # 'f' is a night pool frame outside every community (disconnected).
+    selected, _ = select_by_mass(
+        communities,
+        degrees,
+        masses={0: 1.0, 1: 1.0},
+        n_mine=5,
+        night_tokens={"c", "e"},
+        night_floor=3,
+        night_pool=["c", "e", "f"],
+        seed=64,
+    )
+    assert "f" in selected  # community night capacity is 2; backfill supplies the 3rd
+    assert len(selected) == 5
+
+
+def test_select_by_mass_exact_n_and_deterministic() -> None:
+    communities, degrees = _r3_fixture()
+    first, _ = select_by_mass(communities, degrees, masses={0: 2.0, 1: 3.0}, n_mine=4)
+    second, _ = select_by_mass(communities, degrees, masses={0: 2.0, 1: 3.0}, n_mine=4)
+    assert first == second
+    assert len(first) == 4 and len(set(first)) == 4
 
 
 # ---------------------------------------------------------------------------
