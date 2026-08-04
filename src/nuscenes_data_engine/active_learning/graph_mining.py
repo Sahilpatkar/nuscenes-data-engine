@@ -12,8 +12,9 @@ selection; ``rate_mass`` allocates budget ∝ embedding-routed smoothed-rate fai
 a per-community floor and an optional night quota (spec
 docs/superpowers/specs/2026-08-04-al-round-3-design.md).
 
-The GDS steps run on the infra machine (where Neo4j lives); the resulting ``graph.parquet``
-feeds ``al run --arm graph`` on the GPU server, exactly like ``mined.parquet``.
+The GDS steps run on the infra machine (where Neo4j lives); the resulting per-arm token set
+(``graph.parquet`` for the legacy ``graph`` arm, ``<arm>.parquet`` for every other arm) feeds
+``al run --arm <arm>`` on the GPU server, exactly like ``mined.parquet``.
 """
 
 from __future__ import annotations
@@ -146,7 +147,8 @@ def select_by_mass(
     communities ∝ mass over their *night* members (top-degree first, capacity-capped
     with automatic cross-community spill via the allocator); a shortfall backfills
     from ``night_pool`` (which may include disconnected frames) with a seeded draw.
-    The main pass fills to exactly ``n_mine`` ∝ mass with a floor of 1 per community
+    The main pass fills toward exactly ``n_mine`` (the caller's exact-count guard enforces
+    it; connected capacity can under-fill) ∝ mass with a floor of 1 per community
     (communities already holding a night pick need no extra floor frame).
 
     The community=-1 diagnostics row counts only backfilled tokens outside every
@@ -313,13 +315,18 @@ def run_graph_mining(
     for flag in quotas_cfg:
         if flag != "is_night":
             raise ValueError(f"Unknown quota flag {flag!r} (round 3 supports is_night only)")
+    if any(v < 0 for v in quotas_cfg.values()):
+        raise ValueError(f"Quota floors must be >= 0, got {quotas_cfg}")
 
     n_mine = int(graph_cfg.get("n_mine", cfg.get("mining", {}).get("n_mine", 1500)))
     floor = int(graph_cfg.get("floor", 1))
     route_k = int(graph_cfg.get("route_k", 10))
     night_floor = quotas_cfg.get("is_night", 0)
-    if night_floor > n_mine:
-        raise ValueError(f"Quota is_night={night_floor} exceeds n_mine={n_mine}")
+    if night_floor >= n_mine:
+        raise ValueError(
+            f"Quota is_night={night_floor} must be < n_mine={n_mine} "
+            "(the main pass needs room for community floors)"
+        )
     database = settings.neo4j_database
 
     split = pd.read_parquet(state_dir / "split.parquet")
@@ -331,7 +338,7 @@ def run_graph_mining(
     )
     samples = pd.read_parquet(
         processed / "samples.parquet",
-        columns=["sample_data_token", "scene_name", "is_night", "is_rain"],
+        columns=["sample_data_token", "scene_name", "is_night"],
     ).set_index("sample_data_token")
     pool_meta = samples.loc[sorted(pool_frames)]
     if night_floor:
@@ -350,6 +357,7 @@ def run_graph_mining(
     )
 
     diagnostics: list[dict[str, Any]] = []
+    summary_extras: dict[str, Any] = {}
     if weighting == "size":
         selected = select_representatives(communities, degrees, n_mine, floor)
     else:
@@ -363,6 +371,10 @@ def run_graph_mining(
         masses = route_failure_mass(
             tbl, failures, communities, pool_scenes, channel, top_k, route_k
         )
+        summary_extras = {
+            "mass_total": round(float(sum(masses.values())), 4),
+            "n_communities_with_mass": sum(1 for m in masses.values() if m > 0),
+        }
         night_tokens = set(pool_meta.index[pool_meta["is_night"]])
         selected, diagnostics = select_by_mass(
             communities,
@@ -372,7 +384,7 @@ def run_graph_mining(
             night_tokens=night_tokens,
             night_floor=night_floor,
             night_pool=sorted(night_tokens),
-            seed=int(cfg.get("mining", {}).get("seed", 64)),
+            seed=int(graph_cfg.get("seed", cfg.get("mining", {}).get("seed", 64))),
         )
 
     selected_set = set(selected)
@@ -406,6 +418,7 @@ def run_graph_mining(
     if arm == "graph":  # legacy summary keys round 1 consumers/log dashboards used
         summary["n_graph"] = summary["n_mined"]
         summary["graph_night_share"] = night_share
+    summary.update(summary_extras)
     logger.info(
         "Arm %s: graph-mined %d frames across %d communities (night %.2f, %d scenes)",
         arm, len(selected), summary["n_communities"], night_share, summary["n_scenes"],

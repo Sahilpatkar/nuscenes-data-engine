@@ -204,19 +204,23 @@ def test_route_failure_mass_routes_rate_score_to_communities(
     assert set(masses) <= {0, 1}
 
 
+def _fake_communities(pool_tokens: list[str]) -> tuple[dict[str, int], dict[str, float]]:
+    communities = {
+        t: (1 if t.split("-")[1] in ("1", "3") else 0)
+        for t in pool_tokens
+        if not t.startswith("pool-4")  # pool-4 is "disconnected" (off-store)
+    }
+    degrees = {t: float(t[-1]) for t in communities}
+    return communities, degrees
+
+
 @pytest.fixture()
 def fake_louvain(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bypass Neo4j: communities from scene naming, degree from frame index."""
     from nuscenes_data_engine.active_learning import graph_mining
 
     def _fake(driver: Any, pool_tokens: list[str], database: str) -> tuple[dict[str, int], dict[str, float]]:
-        communities = {
-            t: (1 if t.split("-")[1] in ("1", "3") else 0)
-            for t in pool_tokens
-            if not t.startswith("pool-4")  # pool-4 is "disconnected" (off-store)
-        }
-        degrees = {t: float(t[-1]) for t in communities}
-        return communities, degrees
+        return _fake_communities(pool_tokens)
 
     monkeypatch.setattr(graph_mining, "_louvain_communities", _fake)
     monkeypatch.setattr(graph_mining.connection, "get_driver", lambda settings: None)
@@ -247,6 +251,27 @@ def test_run_graph_mining_rate_arm(
     assert got_communities == {0, 1}
 
 
+def test_run_graph_mining_size_arm_matches_select_representatives(
+    mining_setup: Path, tmp_path: Path, fake_louvain: None
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import (
+        run_graph_mining,
+        select_representatives,
+    )
+
+    state = tmp_path / "state"
+    summary = run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph")
+    frames = pd.read_parquet(state / "graph.parquet")
+
+    pool_tokens = sorted(f"pool-{s}-CAM_FRONT-{i}" for s in range(5) for i in range(4))
+    communities, degrees = _fake_communities(pool_tokens)
+    expected = select_representatives(communities, degrees, 6, 1)
+    assert frames["sample_data_token"].tolist() == expected  # legacy path, byte-equal
+    assert summary["weighting"] == "size" and summary["n_graph"] == 6
+    assert "graph_night_share" in summary
+    assert not (state / "communities_graph.json").is_file()  # size path has no diagnostics
+
+
 def test_run_graph_mining_night_arm_meets_floor(
     mining_setup: Path, tmp_path: Path, fake_louvain: None
 ) -> None:
@@ -257,10 +282,15 @@ def test_run_graph_mining_night_arm_meets_floor(
     )
     frames = pd.read_parquet(tmp_path / "state" / "graph_rate_night.parquet")
     night_scenes = {"pool-1", "pool-3"}
-    n_night = sum(1 for t in frames["sample_data_token"] if f"{t.split('-CAM')[0]}" in night_scenes)
+    n_night = sum(1 for t in frames["sample_data_token"] if t.split("-CAM")[0] in night_scenes)
     assert len(frames) == 6
-    assert n_night >= 2
-    assert summary["mined_night_share"] >= 2 / 6
+    assert n_night >= 5
+    assert summary["mined_night_share"] >= 5 / 6
+
+    # The floor must actually change the selection vs the unconstrained rate arm.
+    run_graph_mining(mining_setup, processed_dir=tmp_path / "processed", arm="graph_rate")
+    rate_frames = pd.read_parquet(tmp_path / "state" / "graph_rate.parquet")
+    assert set(frames["sample_data_token"]) != set(rate_frames["sample_data_token"])
 
 
 def test_run_graph_mining_arm_validation(
@@ -707,7 +737,7 @@ def mining_setup(tmp_path: Path) -> Path:
                         "graph_rate": {"weighting": "rate_mass"},
                         "graph_rate_night": {
                             "weighting": "rate_mass",
-                            "quotas": {"is_night": 2},
+                            "quotas": {"is_night": 5},
                         },
                     },
                 },
