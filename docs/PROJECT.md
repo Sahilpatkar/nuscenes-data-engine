@@ -245,6 +245,10 @@ undercounted (recall 0.58). Conclusion: VLM labels are production-useful for
 | + 1,500 similarity-mined | 8,535 | 0.2637 (+0.016) | 0.1739 (+0.007) |
 | + 1,500 random (control) | 8,535 | **0.2817 (+0.034)** | 0.1619 (−0.005) |
 
+*(Round 2 added three acquisition-score arms — best: `rate_strat` at +0.0239
+overall/+0.0069 night; none beat the random gate. Full seven-arm table and
+analysis: docs/ACTIVE_LEARNING.md.)*
+
 **The random control beat similarity mining** — a negative result worth more than
 a fake win, with a quantified mechanism:
 
@@ -320,10 +324,15 @@ Ordered roughly by value-per-effort:
    where random regressed), spanning 473 scenes vs mined's 219. Was open (built in
    round 2): rate-based acquisition and night/rain-stratified
    quotas — the harness and random-control gate already exist; only the score changes.
-   *Round 2 is implemented and mined (arms `rate`, `strat`, `rate_strat` — smoothed-rate
-   scoring and night 25% / rain 20% floors, spec `2026-08-02-al-round-2-design.md`):
-   the rate score alone lifts the mined set to 23% night (round 1: 0%), and the quota
-   arms clear their floors (36.6% night on `rate_strat`); TRINITY training runs pending.*
+   *Round 2 is DONE (arms `rate`, `strat`, `rate_strat` — smoothed-rate scoring and
+   night 25% / rain 20% floors, spec `2026-08-02-al-round-2-design.md`). Results: the
+   mechanisms compose (`rate_strat` +0.0239 overall beats both components; only arm
+   besides `mined`/`graph` to lift overall AND night), `rate` posts the best night
+   mAP50 of all seven arms (0.3076), quotas-without-a-night-aware-score actively hurt
+   (`strat` night −0.0086) — but none beats the random control (+0.0340) or `graph`
+   (+0.0344) overall: the diversity lesson survives a better score. Next: combine
+   graph-community diversity with rate-weighted, night-floored budgets
+   (docs/ACTIVE_LEARNING.md, "Round 2 results").*
 2. **Ego-pose / 3D geometry ingestion (Phase B) — DONE.** `ingest-geometry` now persists
    the ego pose + all 1.17M 3D GT boxes (world position, size, heading, velocity, BEV
    distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/
