@@ -22,6 +22,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from nuscenes_data_engine.active_learning.mining import (
+    mine_candidates,
+    read_vectors,
+    score_failures,
+)
 from nuscenes_data_engine.config import get_settings, load_yaml
 from nuscenes_data_engine.data_engine.autolabel.sampling import allocate
 from nuscenes_data_engine.data_engine.graph import connection
@@ -204,6 +209,35 @@ def select_by_mass(
              "night_members": n_backfilled, "quota": n_backfilled}
         )
     return selected, diagnostics
+
+
+def route_failure_mass(
+    tbl: Any,
+    failures: pd.DataFrame,
+    communities: dict[str, int],
+    pool_scenes: list[str],
+    channel: str,
+    top_k: int,
+    route_k: int,
+) -> dict[int, float]:
+    """Distribute each top-``top_k`` rate-ranked failure's score to the communities of
+    its ``route_k`` nearest pool frames (LanceDB, prefiltered). Neighbors outside any
+    community (disconnected pool frames) are skipped."""
+    scored = failures.assign(score=score_failures(failures, "smoothed_rate"))
+    top = scored.sort_values(["score", "sample_data_token"], ascending=[False, True]).head(top_k)
+    vectors = read_vectors(tbl, list(top["sample_data_token"]))
+    score_by_token = dict(zip(top["sample_data_token"], top["score"], strict=True))
+    masses: dict[int, float] = defaultdict(float)
+    for row in vectors.to_dict("records"):
+        score = float(score_by_token[row["sample_data_token"]])
+        neighbors = mine_candidates(
+            tbl, np.asarray(row["vector"], dtype=np.float32), pool_scenes, channel, route_k
+        )
+        for token in neighbors["sample_data_token"]:
+            community = communities.get(token)
+            if community is not None:
+                masses[community] += score
+    return dict(masses)
 
 
 def _louvain_communities(

@@ -177,6 +177,32 @@ def test_select_by_mass_backfill_of_community_member_updates_bookkeeping() -> No
     assert not any(row["community"] == -1 for row in diag)  # no disconnected picks here
 
 
+def test_route_failure_mass_routes_rate_score_to_communities(
+    mining_setup: Path, tmp_path: Path
+) -> None:
+    from nuscenes_data_engine.active_learning.graph_mining import route_failure_mass
+    from nuscenes_data_engine.data_engine import store
+
+    failures = pd.read_parquet(tmp_path / "state" / "failures.parquet")
+    tbl = store.open_frames_table(tmp_path / "lancedb", "frames", dim=0)
+    # Fake Louvain: day pool scenes -> community 0, night pool scenes -> community 1.
+    communities = {
+        f"pool-{s}-CAM_FRONT-{i}": (1 if s in (1, 3) else 0)
+        for s in range(4)
+        for i in range(4)
+    }
+    pool_scenes = [f"pool-{s}" for s in range(5)]
+
+    masses = route_failure_mass(
+        tbl, failures, communities, pool_scenes, "CAM_FRONT", top_k=8, route_k=3
+    )
+    # Night failures carry rate (3+1)/5.5 ≈ 0.727 and sit on axis 1 -> community 1;
+    # day failures carry (1+1)/5.5 ≈ 0.364 on axis 0 -> community 0.
+    assert masses[1] > masses[0] > 0.0
+    # pool-4 frames are absent from the store, so no mass can route through them.
+    assert set(masses) <= {0, 1}
+
+
 # ---------------------------------------------------------------------------
 # matching.py — pure numpy, runs in torch-free CI
 # ---------------------------------------------------------------------------
