@@ -20,7 +20,10 @@ logger = logging.getLogger("nuscenes_data_engine")
 def nearest_message(
     messages: list[dict[str, Any]], t_us: int, tolerance_us: int
 ) -> dict[str, Any] | None:
-    """The message whose ``utime`` is closest to ``t_us``, or None if none within tolerance."""
+    """The message whose ``utime`` is closest to ``t_us``, or None if none within tolerance.
+
+    Ties (two messages equidistant) resolve to the earlier one in ``messages``.
+    """
     best: dict[str, Any] | None = None
     best_dt = tolerance_us + 1
     for msg in messages:
@@ -91,7 +94,7 @@ def flatten_canbus(
             try:
                 monitor = can.get_messages(scene["name"], "vehicle_monitor")
                 pose = can.get_messages(scene["name"], "pose")
-            except Exception:  # devkit raises plain Exception for absent scene files
+            except (FileNotFoundError, OSError):  # absent CAN files for this scene
                 logger.warning("CAN data missing for %s; writing nulls", scene["name"])
                 has_canbus = False
 

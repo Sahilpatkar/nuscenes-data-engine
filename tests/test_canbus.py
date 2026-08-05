@@ -57,6 +57,18 @@ def test_accel_window_empty_returns_nones() -> None:
     assert accel_window(far, t_us=0, window_us=500_000) == (None, None, None)
 
 
+def test_accel_window_exact_boundary_included() -> None:
+    pose = [
+        {"utime": 500_000, "accel": [-5.0, 0.0, 9.8], "vel": [1.0, 0.0, 0.0]},
+        {"utime": 1_500_000, "accel": [-6.0, 0.0, 9.8], "vel": [2.0, 0.0, 0.0]},
+    ]
+    # Both sit exactly ±500_000 us from t; an exclusive window would drop both.
+    accel_min, accel_max, speed = accel_window(pose, t_us=1_000_000, window_us=500_000)
+    assert accel_min == pytest.approx(-6.0)
+    assert accel_max == pytest.approx(-5.0)
+    assert speed is not None
+
+
 def test_scene_number() -> None:
     assert scene_number("scene-0161") == 161
     assert scene_number("scene-1094") == 1094
@@ -111,7 +123,7 @@ class _FakeCan:
 
     def get_messages(self, scene_name: str, message: str) -> list[dict[str, Any]]:
         if scene_name in self._missing:
-            raise Exception(f"no CAN data for {scene_name}")
+            raise FileNotFoundError(f"no CAN data for {scene_name}")
         return self._monitor if message == "vehicle_monitor" else self._pose
 
 
@@ -193,3 +205,15 @@ def test_flatten_canbus_limit_scenes() -> None:
         limit_scenes=1,
     )
     assert {r["scene_name"] for r in rows} == {"scene-0001"}
+
+
+def test_flatten_canbus_propagates_unexpected_errors() -> None:
+    """A devkit AssertionError (bad message name) must fail loudly, not degrade to nulls."""
+    from nuscenes_data_engine.ingestion.canbus import flatten_canbus
+
+    class _AssertingCan(_FakeCan):
+        def get_messages(self, scene_name: str, message: str) -> list[dict[str, Any]]:
+            raise AssertionError(f"Message {message} not found among all_messages")
+
+    with pytest.raises(AssertionError, match="not found"):
+        flatten_canbus(_FakeNusc([_scene("scene-0005")]), _AssertingCan(_MONITOR, _POSE))
