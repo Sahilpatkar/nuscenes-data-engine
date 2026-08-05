@@ -246,8 +246,10 @@ undercounted (recall 0.58). Conclusion: VLM labels are production-useful for
 | + 1,500 random (control) | 8,535 | **0.2817 (+0.034)** | 0.1619 (−0.005) |
 
 *(Round 2 added three acquisition-score arms — best: `rate_strat` at +0.0239
-overall/+0.0069 night; none beat the random gate. Full seven-arm table and
-analysis: docs/ACTIVE_LEARNING.md.)*
+overall/+0.0069 night; none beat the random gate. Round 3 added rate-weighted
+graph-community budgets: `graph_rate_night` posts the project's best night gain,
+**+0.0101 night mAP50-95**, at +0.0254 overall. Full nine-arm table and analysis:
+docs/ACTIVE_LEARNING.md.)*
 
 **The random control beat similarity mining** — a negative result worth more than
 a fake win, with a quantified mechanism:
@@ -333,11 +335,15 @@ Ordered roughly by value-per-effort:
    (+0.0344) overall: the diversity lesson survives a better score. Next: combine
    graph-community diversity with rate-weighted, night-floored budgets
    (docs/ACTIVE_LEARNING.md, "Round 2 results").*
-   *Round 3 (mined, training pending): budget ∝ embedding-routed smoothed-rate failure
-   mass across Louvain communities (floor 1/community), ± night-375 floor — arms
-   `graph_rate` (8.3% night, 378 scenes) / `graph_rate_night` (30.9% night, 368
-   scenes); GDS Louvain now pinned deterministic (`concurrency: 1`); spec
-   `2026-08-04-al-round-3-design.md`.*
+   *Round 3 — DONE (budget ∝ embedding-routed smoothed-rate failure mass across
+   Louvain communities, floor 1/community, ± night-375 floor; GDS Louvain pinned
+   deterministic via `concurrency: 1`; spec `2026-08-04-al-round-3-design.md`).
+   Results: rate-mass weighting alone matches size weighting (+0.0330 vs +0.0344,
+   within partition noise) — but `graph_rate_night` delivers **the project's best
+   night gain of all nine arms, +0.0101 night mAP50-95** (0.1768) at ~75% of the
+   best overall gain. With diversity held by the community floor, an explicit night
+   floor finally moves the night slice; the overall/night trade-off is now an
+   explicit, tunable choice (docs/ACTIVE_LEARNING.md, "Round 3 results").*
 2. **Ego-pose / 3D geometry ingestion (Phase B) — DONE.** `ingest-geometry` now persists
    the ego pose + all 1.17M 3D GT boxes (world position, size, heading, velocity, BEV
    distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/
