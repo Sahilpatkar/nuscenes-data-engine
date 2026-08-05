@@ -145,7 +145,8 @@ def speed_correlation(canbus: Any, ego: Any) -> float | None:
     )
     if len(merged) < 2:
         return None
-    return float(merged["can_speed_kmh"].div(3.6).corr(merged["speed_mps"]))
+    corr = float(merged["can_speed_kmh"].div(3.6).corr(merged["speed_mps"]))
+    return None if math.isnan(corr) else corr
 
 
 def run_canbus_ingestion(
@@ -170,8 +171,8 @@ def run_canbus_ingestion(
 
     from nuscenes.can_bus.can_bus_api import NuScenesCanBus
 
-    nusc = load_nusc(dataroot, version)
     can = NuScenesCanBus(dataroot=str(dataroot))
+    nusc = load_nusc(dataroot, version)
     rows = flatten_canbus(
         nusc,
         can,
@@ -185,9 +186,13 @@ def run_canbus_ingestion(
     corr = None
     ego_path = processed_dir / "ego_pose.parquet"
     if ego_path.is_file():
-        corr = speed_correlation(
-            pd.DataFrame(rows), pd.read_parquet(ego_path, columns=["sample_token", "speed_mps"])
-        )
+        try:
+            corr = speed_correlation(
+                pd.DataFrame(rows),
+                pd.read_parquet(ego_path, columns=["sample_token", "speed_mps"]),
+            )
+        except Exception as exc:  # sanity cross-check only — never fail a written table
+            logger.warning("Speed cross-check skipped (%s); canbus.parquet is unaffected", exc)
     summary = {
         "version": version,
         "scenes_processed": limit_scenes if limit_scenes else len(nusc.scene),

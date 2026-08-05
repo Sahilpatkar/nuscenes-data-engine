@@ -233,3 +233,29 @@ def test_speed_correlation_matches_pandas() -> None:
     assert corr == pytest.approx(1.0)  # kmh/3.6 exactly equals the GT speeds
 
     assert speed_correlation(canbus.head(1), ego.head(1)) is None  # <2 matched rows
+
+
+def test_speed_correlation_zero_variance_returns_none() -> None:
+    """Constant speeds give pandas a NaN correlation; the helper must report None."""
+    pd = pytest.importorskip("pandas")
+    from nuscenes_data_engine.ingestion.canbus import speed_correlation
+
+    canbus = pd.DataFrame({"sample_token": ["a", "b"], "can_speed_kmh": [36.0, 36.0]})
+    ego = pd.DataFrame({"sample_token": ["a", "b"], "speed_mps": [10.0, 10.0]})
+    assert speed_correlation(canbus, ego) is None
+
+
+def test_speed_correlation_imperfect_fit_and_two_row_boundary() -> None:
+    pd = pytest.importorskip("pandas")
+    from nuscenes_data_engine.ingestion.canbus import speed_correlation
+
+    # can m/s = [10, 5, 21] vs GT [10, 5, 20]: strong but not exactly 1.0.
+    canbus = pd.DataFrame(
+        {"sample_token": ["a", "b", "c"], "can_speed_kmh": [36.0, 18.0, 75.6]}
+    )
+    ego = pd.DataFrame({"sample_token": ["a", "b", "c"], "speed_mps": [10.0, 5.0, 20.0]})
+    corr = speed_correlation(canbus, ego)
+    assert corr is not None and 0.99 < corr < 1.0
+
+    two = speed_correlation(canbus.head(2), ego.head(2))  # exactly 2 rows -> computed
+    assert two is not None
