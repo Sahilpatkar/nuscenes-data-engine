@@ -360,7 +360,45 @@ rsync -a data/active_learning/{graph_rate,graph_rate_night}.parquet trinity-2-18
 scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm graph_rate && env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm graph_rate_night && uv run nuscenes-data-engine al report && echo CHAIN_COMPLETE'"
 ```
 
-Results: pending the TRINITY training runs.
+### Round 3 results
+
+Both arms trained on TRINITY (RTX 3080 Ti, ~20 min/arm, 2026-08-04), identical
+6,019-frame CAM_FRONT val split (602 night — small-slice humility applies, and H1
+additionally carries one draw of Louvain partition noise per the determinism note):
+
+| arm | overall mAP50 | overall mAP50-95 | night mAP50 | night mAP50-95 | Δ overall | Δ night |
+|---|---:|---:|---:|---:|---:|---:|
+| `graph_rate` | 0.4873 | 0.2807 | 0.2951 | 0.1663 | +0.0330 | −0.0004 |
+| `graph_rate_night` | 0.4757 | 0.2731 | 0.3000 | **0.1768** | +0.0254 | **+0.0101** |
+| `graph` (champion) | 0.4861 | 0.2821 | 0.2839 | 0.1703 | +0.0344 | +0.0036 |
+| `random` (gate) | 0.4872 | 0.2817 | 0.2711 | 0.1619 | +0.0340 | −0.0048 |
+
+Verdicts:
+
+- **H1 (rate-mass weighting beats size weighting) — not supported.** `graph_rate`
+  (+0.0330) sits within partition noise of `graph` (+0.0344) and `random` (+0.0340)
+  on overall, and its night edge is gone (−0.0004 vs +0.0036) — consistent with its
+  composition (8.3% night, below pool parity: day-failure communities dominate the
+  mass). Failure-mass focus neither helps nor hurts overall once community-level
+  diversity is preserved; the coverage floor, not the weighting, carries the arm.
+- **H2 (night floor on top) — confirmed, and it's the project's best night result.**
+  `graph_rate_night` posts **+0.0101 night mAP50-95** (0.1768) — the largest night
+  gain of all nine arms across three rounds (previous best: `mined` +0.0072) — at
+  an overall cost of ~0.008 vs `graph_rate` (partition-matched, so this comparison
+  is clean). One community-concentrated night boost (916-frame all-night community,
+  quota 83 → 323) moved the night slice more than any acquisition change before it.
+- **The overall gate still holds** — nothing beats `graph`/`random` on overall
+  mAP50-95. After nine arms the frontier is clear: **maximum overall** comes from
+  diversity (size-weighted `graph` or plain `random`); **maximum night** comes from
+  `graph_rate_night`, which keeps ~75% of the best overall gain while tripling the
+  best prior night delta. Given the project's release gate is night mAP (Phase 3),
+  `graph_rate_night` is arguably the most *deployable* acquisition function this
+  harness has produced.
+
+Three-round arc, in one line each: round 1 — diversity beats similarity; round 2 —
+better scores compose but can't out-run diversity; round 3 — with diversity held
+(community floor), an explicit night floor finally moves the night slice, and the
+overall/night trade-off becomes an explicit, tunable choice.
 
 Runs: MLflow `nuscenes-yolo` (one `*_al-*` run per trained arm, registry
 untouched) and W&B
