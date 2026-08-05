@@ -431,6 +431,8 @@ def test_graph_schema_prompt_describes_the_model() -> None:
     assert "Frame" in prompt and "Category" in prompt
     assert "CO_OCCURS_WITH" in prompt and "SIMILAR_TO" in prompt
     assert "run_cypher" in prompt or "read-only" in prompt
+    assert "is_hard_braking" in prompt
+    assert "hard braking near pedestrians" in prompt.lower()
 
 
 # ---------------------------------------------------------------------------

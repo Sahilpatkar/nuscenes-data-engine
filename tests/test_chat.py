@@ -117,6 +117,34 @@ def test_schema_prompt_matches_available_tables(con: Any) -> None:
     assert "no ego-pose" in prompt
 
 
+def test_catalog_exposes_canbus_view(tmp_path: Path) -> None:
+    pd = pytest.importorskip("pandas")
+    duckdb = pytest.importorskip("duckdb")
+    del duckdb
+    from nuscenes_data_engine.data_engine.chat.catalog import catalog_tables, open_catalog
+
+    pd.DataFrame(
+        {"sample_token": ["s1"], "has_canbus": [True], "can_speed_kmh": [14.7],
+         "is_hard_braking": [True]}
+    ).to_parquet(tmp_path / "canbus.parquet")
+    con = open_catalog(tmp_path)
+    assert "canbus" in catalog_tables(con)
+    assert con.execute("SELECT count(*) FROM canbus WHERE is_hard_braking").fetchone()[0] == 1
+
+
+def test_schema_prompt_notes_canbus_when_present(tmp_path: Path, con: Any) -> None:
+    # `con` was opened before canbus.parquet existed -> its prompt has no canbus text.
+    assert "canbus" not in catalog.schema_prompt(catalog.catalog_tables(con))
+
+    pd.DataFrame(
+        {"sample_token": ["s1"], "has_canbus": [True], "can_speed_kmh": [14.7],
+         "is_hard_braking": [True]}
+    ).to_parquet(tmp_path / "canbus.parquet")
+    con_with_canbus = catalog.open_catalog(tmp_path)
+    prompt = catalog.schema_prompt(catalog.catalog_tables(con_with_canbus))
+    assert "is_hard_braking" in prompt and "canbus" in prompt
+
+
 # ---------------------------------------------------------------------------
 # transports.py
 # ---------------------------------------------------------------------------
