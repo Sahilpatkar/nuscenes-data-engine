@@ -175,10 +175,12 @@ acceleration/velocity fields instead use every `pose` message inside a **±0.5 s
 around the keyframe, since a single nearest-sample would miss the peak deceleration of a
 braking event.
 
-**Missing CAN data.** Some scenes are in the devkit's `can_bus.can_blacklist`, and a few
-more have CAN files missing on disk; both are treated as absent CAN data (`has_canbus =
-False`, all CAN columns null) — **no keyframe is ever dropped**. On the full
-`v1.0-trainval` run this is 597 keyframes across 15 scenes.
+**Missing CAN data.** On the full `v1.0-trainval` run, all 15 no-CAN scenes (597
+keyframes; scenes 161-168 and 170-176) are in the devkit's `can_bus.can_blacklist`.
+Scenes whose CAN files are merely missing on disk are handled identically (`has_canbus =
+False`, all CAN columns null) — this is a defensive path, not one exercised by this run,
+since every excluded scene here is blacklisted rather than file-missing. Either way,
+**no keyframe is ever dropped**.
 
 **Config** (`configs/data.yaml`):
 

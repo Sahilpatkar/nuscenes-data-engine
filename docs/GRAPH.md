@@ -224,6 +224,12 @@ MATCH (e:EgoPose {is_hard_braking: true})<-[:AT_POSE]-(s:Sample)
 WHERE c.group = 'pedestrian' AND o.distance_to_ego_m < 10
 RETURN count(DISTINCT s)   // 30 — identical to the SQL form
 ```
+```sql
+SELECT count(DISTINCT c.sample_token)
+FROM canbus c JOIN annotations_3d a USING (sample_token)
+WHERE c.is_hard_braking AND a.category_group = 'pedestrian'
+  AND a.distance_to_ego_m < 10;   -- 30, identical to the Cypher above
+```
 
 > The `graph_smoke` test builds a tiny graph end-to-end against a live Neo4j and **deletes
 > all nodes** on cleanup — run it against a throwaway/dev instance, not a graph you want to

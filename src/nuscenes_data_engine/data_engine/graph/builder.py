@@ -134,7 +134,12 @@ SET e.has_canbus = row.has_canbus,
     e.is_hard_braking = row.is_hard_braking
 """
 
-_CANBUS_APPLIED = "MATCH (e:EgoPose) WHERE e.has_canbus IS NOT NULL RETURN count(e) AS n"
+_CANBUS_APPLIED = """
+UNWIND $tokens AS token
+MATCH (:Sample {token: token})-[:AT_POSE]->(e:EgoPose)
+WHERE e.has_canbus IS NOT NULL
+RETURN count(e) AS n
+"""
 
 _INSTANCES = """
 UNWIND $rows AS row
@@ -282,7 +287,10 @@ def build_graph(
                 canbus_payload = model.canbus_rows(canbus)
                 load("canbus", _CANBUS, canbus_payload)
                 applied = connection.read_query(
-                    driver, _CANBUS_APPLIED, database=database
+                    driver,
+                    _CANBUS_APPLIED,
+                    database=database,
+                    params={"tokens": [r["sample_token"] for r in canbus_payload]},
                 )[0]["n"]
                 summary["canbus_applied"] = applied
                 if applied < len(canbus_payload):

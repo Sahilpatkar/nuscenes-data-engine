@@ -140,6 +140,26 @@ def _instances() -> pd.DataFrame:
     return pd.DataFrame(instance_records(_annotations_3d().to_dict("records")))
 
 
+def _canbus() -> pd.DataFrame:
+    """Same 3 keyframes as `_ego_poses()`: one hard-braking row, one has_canbus=False
+    (all-null signals) row -- mirrors the real table's "no keyframe ever dropped" shape.
+    """
+    return pd.DataFrame([
+        {"sample_token": "sm1", "scene_token": "sA", "has_canbus": True,
+         "can_speed_kmh": 14.7, "steering_deg": 191.9, "brake_pedal": 20.0,
+         "throttle": 55.0, "yaw_rate": 18.9, "accel_long_min_mps2": -4.0,
+         "accel_long_max_mps2": 0.5, "is_hard_braking": True},
+        {"sample_token": "sm2", "scene_token": "sA", "has_canbus": False,
+         "can_speed_kmh": None, "steering_deg": None, "brake_pedal": None,
+         "throttle": None, "yaw_rate": None, "accel_long_min_mps2": None,
+         "accel_long_max_mps2": None, "is_hard_braking": None},
+        {"sample_token": "sm3", "scene_token": "sB", "has_canbus": True,
+         "can_speed_kmh": 8.0, "steering_deg": 0.0, "brake_pedal": 0.0,
+         "throttle": 10.0, "yaw_rate": 0.0, "accel_long_min_mps2": 0.2,
+         "accel_long_max_mps2": 0.6, "is_hard_braking": False},
+    ])
+
+
 # ---------------------------------------------------------------------------
 # node projections
 # ---------------------------------------------------------------------------
@@ -315,6 +335,9 @@ def test_canbus_applied_query_counts_marked_egoposes() -> None:
 
     assert "EgoPose" in _CANBUS_APPLIED and "has_canbus IS NOT NULL" in _CANBUS_APPLIED
     assert "count(" in _CANBUS_APPLIED
+    # Scoped to the loaded batch (not a global count) so a no-op --limit-scenes batch
+    # against an already-loaded graph can still be detected.
+    assert "UNWIND $tokens" in _CANBUS_APPLIED and "$tokens" in _CANBUS_APPLIED
 
 
 def test_object_observation_rows_carry_geometry_and_null_velocity() -> None:
@@ -573,6 +596,7 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
     _ego_poses().to_parquet(processed / "ego_pose.parquet")
     _annotations_3d().to_parquet(processed / "annotations_3d.parquet")
     _instances().to_parquet(processed / "instances.parquet")
+    _canbus().to_parquet(processed / "canbus.parquet")
     monkeypatch.setenv("PROCESSED_DIR", str(processed))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))  # no labels.parquet -> VLM pass skipped
     settings = get_settings()
@@ -598,6 +622,9 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
         assert summary["contains"] >= 5
         # Phase B geometry passes ran.
         assert summary["ego_poses"] == 3 and summary["observations"] == 2 and summary["instances"] == 2
+        # CAN-bus pass ran and every row matched its EgoPose (no silent no-op).
+        assert summary["canbus"] == 3
+        assert summary["canbus_applied"] == 3
 
         counts = {
             row["label"]: row["n"]
