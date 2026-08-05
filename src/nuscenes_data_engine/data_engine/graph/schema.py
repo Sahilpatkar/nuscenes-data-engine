@@ -38,6 +38,8 @@ _INDEXES: tuple[tuple[str, str], ...] = (
     # Phase B: the distance filter + category lookups on 3D observations.
     ("ObjectObservation", "distance_to_ego_m"),
     ("ObjectObservation", "category"),
+    # CAN-bus: the accel-range filter behind the hard-braking flag.
+    ("EgoPose", "accel_long_min_mps2"),
 )
 
 # (label, property) — Neo4j point index for spatial ops (point.distance, within-region).

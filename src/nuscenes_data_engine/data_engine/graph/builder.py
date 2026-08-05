@@ -122,6 +122,18 @@ MERGE (e:EgoPose {token: row.token})
 MERGE (sm)-[:AT_POSE]->(e)
 """
 
+_CANBUS = """
+UNWIND $rows AS row
+MATCH (:Sample {token: row.sample_token})-[:AT_POSE]->(e:EgoPose)
+SET e.has_canbus = row.has_canbus,
+    e.can_speed_kmh = row.can_speed_kmh, e.steering_deg = row.steering_deg,
+    e.brake_pedal = row.brake_pedal, e.throttle = row.throttle,
+    e.yaw_rate = row.yaw_rate,
+    e.accel_long_min_mps2 = row.accel_long_min_mps2,
+    e.accel_long_max_mps2 = row.accel_long_max_mps2,
+    e.is_hard_braking = row.is_hard_braking
+"""
+
 _INSTANCES = """
 UNWIND $rows AS row
 MATCH (sc:Scene {token: row.scene_token})
@@ -259,6 +271,13 @@ def build_graph(
             )
             summary["observations"] = written
             logger.info("  %-14s %8d", "observations", written)
+
+            canbus_path = processed / "canbus.parquet"
+            if canbus_path.is_file():
+                canbus = pd.read_parquet(canbus_path)
+                if keep_scenes is not None:
+                    canbus = canbus[canbus["scene_token"].isin(keep_scenes)]
+                load("canbus", _CANBUS, model.canbus_rows(canbus))
     finally:
         connection.close(driver)
 

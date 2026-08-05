@@ -275,6 +275,41 @@ def test_ego_pose_rows_carry_position_and_speed() -> None:
     assert rows["e2"]["speed_mps"] is None  # first-in-scene keyframe -> null speed
 
 
+def test_canbus_rows_projection_and_null_handling() -> None:
+    pd = pytest.importorskip("pandas")
+    from nuscenes_data_engine.data_engine.graph.model import canbus_rows
+
+    df = pd.DataFrame(
+        [
+            {
+                "sample_token": "s1", "has_canbus": True, "can_speed_kmh": 14.7,
+                "steering_deg": 191.9, "brake_pedal": 20.0, "throttle": 55.0,
+                "yaw_rate": 18.9, "accel_long_min_mps2": -4.0,
+                "accel_long_max_mps2": 0.5, "is_hard_braking": True,
+            },
+            {
+                "sample_token": "s2", "has_canbus": False, "can_speed_kmh": None,
+                "steering_deg": None, "brake_pedal": None, "throttle": None,
+                "yaw_rate": None, "accel_long_min_mps2": None,
+                "accel_long_max_mps2": None, "is_hard_braking": None,
+            },
+        ]
+    )
+    rows = canbus_rows(df)
+    assert rows[0]["sample_token"] == "s1" and rows[0]["is_hard_braking"] is True
+    assert rows[0]["accel_long_min_mps2"] == pytest.approx(-4.0)
+    assert rows[0]["brake_pedal"] == pytest.approx(20.0)
+    assert rows[1]["has_canbus"] is False
+    assert rows[1]["can_speed_kmh"] is None and rows[1]["is_hard_braking"] is None
+
+
+def test_schema_includes_canbus_index() -> None:
+    from nuscenes_data_engine.data_engine.graph.schema import schema_statements
+
+    stmts = "\n".join(schema_statements())
+    assert "egopose_accel_long_min_mps2_idx" in stmts
+
+
 def test_object_observation_rows_carry_geometry_and_null_velocity() -> None:
     ann = pd.DataFrame([
         {"annotation_token": "a1", "sample_token": "sm1", "instance_token": "i1",

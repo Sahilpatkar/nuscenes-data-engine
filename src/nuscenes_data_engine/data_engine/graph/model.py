@@ -254,6 +254,25 @@ def ego_pose_rows(ego: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
+def canbus_rows(canbus: pd.DataFrame) -> list[dict[str, Any]]:
+    """CAN-dynamics property payload per keyframe, SET onto the existing ``EgoPose``."""
+    return [
+        {
+            "sample_token": str(r.sample_token),
+            "has_canbus": bool(r.has_canbus),
+            "can_speed_kmh": _opt_float(r.can_speed_kmh),
+            "steering_deg": _opt_float(r.steering_deg),
+            "brake_pedal": _opt_float(r.brake_pedal),
+            "throttle": _opt_float(r.throttle),
+            "yaw_rate": _opt_float(r.yaw_rate),
+            "accel_long_min_mps2": _opt_float(r.accel_long_min_mps2),
+            "accel_long_max_mps2": _opt_float(r.accel_long_max_mps2),
+            "is_hard_braking": None if pd.isna(r.is_hard_braking) else bool(r.is_hard_braking),
+        }
+        for r in canbus.itertuples(index=False)
+    ]
+
+
 def object_observation_rows(annotations_3d: pd.DataFrame) -> list[dict[str, Any]]:
     """``ObjectObservation`` node per 3D GT box (world geometry + ego-relative metrics)."""
     return [
