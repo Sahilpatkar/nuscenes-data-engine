@@ -104,6 +104,25 @@ def ingest_geometry(
 
 
 @app.command()
+def ingest_canbus(
+    config: Path = typer.Option(
+        Path("configs/data.yaml"), "--config", "-c", help="Path to data.yaml."
+    ),
+    limit_scenes: int | None = typer.Option(
+        None, "--limit-scenes", help="Only process the first N scenes (fast dev runs)."
+    ),
+) -> None:
+    """CAN bus: keyframe-aligned ego dynamics (speed/steering/brake, is_hard_braking)."""
+    from nuscenes_data_engine.ingestion.canbus import run_canbus_ingestion
+
+    summary = run_canbus_ingestion(config, limit_scenes=limit_scenes)
+    logger.info(
+        "Done: %d canbus rows (%d hard-braking) -> %s",
+        summary["canbus_rows"], summary["n_hard_braking"], summary["canbus_parquet"],
+    )
+
+
+@app.command()
 def validate(
     processed_dir: Path = typer.Option(
         Path("data/processed"), "--processed-dir", help="Directory with the Parquet tables."

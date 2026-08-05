@@ -217,3 +217,19 @@ def test_flatten_canbus_propagates_unexpected_errors() -> None:
 
     with pytest.raises(AssertionError, match="not found"):
         flatten_canbus(_FakeNusc([_scene("scene-0005")]), _AssertingCan(_MONITOR, _POSE))
+
+
+def test_speed_correlation_matches_pandas() -> None:
+    pd = pytest.importorskip("pandas")
+    from nuscenes_data_engine.ingestion.canbus import speed_correlation
+
+    canbus = pd.DataFrame(
+        {"sample_token": ["a", "b", "c", "d"], "can_speed_kmh": [36.0, 18.0, 72.0, None]}
+    )
+    ego = pd.DataFrame(
+        {"sample_token": ["a", "b", "c", "d"], "speed_mps": [10.0, 5.0, 20.0, 1.0]}
+    )
+    corr = speed_correlation(canbus, ego)
+    assert corr == pytest.approx(1.0)  # kmh/3.6 exactly equals the GT speeds
+
+    assert speed_correlation(canbus.head(1), ego.head(1)) is None  # <2 matched rows
