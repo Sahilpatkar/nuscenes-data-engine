@@ -140,3 +140,64 @@ GT metadata only, no LiDAR blobs) writes three more Parquet tables — the ego p
 These back the DuckDB `ego_pose`/`annotations_3d`/`instances` chat views and the Neo4j
 `EgoPose`/`ObjectObservation`/`ObjectInstance` nodes (see [GRAPH.md](GRAPH.md)), unlocking
 distance-to-ego, trajectory/speed, 3D-size, and cross-frame-tracking queries.
+
+## CAN-bus table (Phase B)
+
+`uv run nuscenes-data-engine ingest-canbus` (also devkit-only, runs where the dataset
+lives) parses the separate [nuScenes can_bus expansion](https://www.nuscenes.org/nuscenes)
+into a keyframe-aligned dynamics table — the vehicle's own speed/steering/brake signals,
+independent of GT-derived pose:
+
+- **`canbus.parquet`** — one row per keyframe (34,149, unique `sample_token`):
+  - `sample_token`, `timestamp` — join key (µs).
+  - `has_canbus` (bool) — `False` for keyframes with no CAN data (see below); every other
+    CAN column is null on those rows.
+  - `can_speed_kmh` — nearest `vehicle_monitor.vehicle_speed` (km/h).
+  - `steering_deg`, `steering_speed` — nearest `vehicle_monitor.steering` / `steering_speed`.
+  - `brake_pedal` — nearest `vehicle_monitor.brake`, **raw 0–126 platform scale** (not a
+    physical unit).
+  - `brake_switch`, `throttle`, `yaw_rate`, `left_signal`, `right_signal` — remaining
+    nearest `vehicle_monitor` fields, as-is from the devkit.
+  - `accel_long_min_mps2`, `accel_long_max_mps2` — min/max longitudinal acceleration
+    (m/s², vehicle-frame x-forward) over a **±0.5 s window** of the 50 Hz `pose` CAN
+    stream centered on the keyframe timestamp; null if the window contains no messages.
+  - `can_vel_mps` — speed (m/s) from the `pose` message nearest the keyframe (independent
+    of `can_speed_kmh`'s `vehicle_monitor` source).
+  - `is_hard_braking` (bool | null) — `accel_long_min_mps2 <= -3.0 m/s²`; null (not
+    `False`) when the window is empty, so it composes correctly with SQL `WHERE
+    is_hard_braking`.
+  - `scene_token`, `scene_name`, `location`, `is_night`, `is_rain` — scene/weather context,
+    same convention as the other Phase B tables.
+
+**Alignment.** `vehicle_monitor` is a ~2 Hz stream; each keyframe takes the nearest
+message within a **600 ms** tolerance (`nearest_message`), null beyond that. The
+acceleration/velocity fields instead use every `pose` message inside a **±0.5 s** window
+around the keyframe, since a single nearest-sample would miss the peak deceleration of a
+braking event.
+
+**Missing CAN data.** Some scenes are in the devkit's `can_bus.can_blacklist`, and a few
+more have CAN files missing on disk; both are treated as absent CAN data (`has_canbus =
+False`, all CAN columns null) — **no keyframe is ever dropped**. On the full
+`v1.0-trainval` run this is 597 keyframes across 15 scenes.
+
+**Config** (`configs/data.yaml`):
+
+```yaml
+canbus:                      # CAN-bus keyframe alignment
+  window_s: 0.5               # pose-accel window around each keyframe
+  hard_braking_mps2: -3.0     # is_hard_braking threshold on accel_long_min
+  monitor_tolerance_ms: 600   # max age of the nearest vehicle_monitor message
+```
+
+**CLI:**
+
+```bash
+uv run nuscenes-data-engine ingest-canbus [--limit-scenes N]
+# outputs: data/processed/canbus.parquet
+```
+
+**Validation note — independent speed cross-check.** `run_canbus_ingestion` correlates
+`can_speed_kmh / 3.6` (vehicle CAN) against `ego_pose.speed_mps` (GT-pose deltas) — two
+independent sources that should agree if keyframe alignment is correct. Measured on the
+full run: **Pearson r = 0.999** (same 0.999 on the 5-scene smoke run), logged as
+`speed_correlation_vs_gt` in the ingestion summary.
