@@ -134,6 +134,8 @@ SET e.has_canbus = row.has_canbus,
     e.is_hard_braking = row.is_hard_braking
 """
 
+_CANBUS_APPLIED = "MATCH (e:EgoPose) WHERE e.has_canbus IS NOT NULL RETURN count(e) AS n"
+
 _INSTANCES = """
 UNWIND $rows AS row
 MATCH (sc:Scene {token: row.scene_token})
@@ -277,7 +279,18 @@ def build_graph(
                 canbus = pd.read_parquet(canbus_path)
                 if keep_scenes is not None:
                     canbus = canbus[canbus["scene_token"].isin(keep_scenes)]
-                load("canbus", _CANBUS, model.canbus_rows(canbus))
+                canbus_payload = model.canbus_rows(canbus)
+                load("canbus", _CANBUS, canbus_payload)
+                applied = connection.read_query(
+                    driver, _CANBUS_APPLIED, database=database
+                )[0]["n"]
+                summary["canbus_applied"] = applied
+                if applied < len(canbus_payload):
+                    logger.warning(
+                        "  canbus: %d/%d rows applied — %d keyframes had no EgoPose "
+                        "(stale graph or out-of-sync --limit-scenes?)",
+                        applied, len(canbus_payload), len(canbus_payload) - applied,
+                    )
     finally:
         connection.close(driver)
 

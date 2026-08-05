@@ -162,7 +162,7 @@ def schema_prompt(tables: list[str]) -> str:
             "  brake_switch, throttle, yaw_rate, left_signal, right_signal,\n"
             "  accel_long_min_mps2 / accel_long_max_mps2 (50 Hz window ±0.5 s),\n"
             "  can_vel_mps, is_hard_braking (accel_long_min <= -3.0 m/s²),\n"
-            "  scene_name, location, is_night, is_rain\n"
+            "  scene_name, location, is_night, is_rain"
         ),
     }
     has_geometry = "annotations_3d" in tables

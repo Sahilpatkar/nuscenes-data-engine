@@ -310,6 +310,13 @@ def test_schema_includes_canbus_index() -> None:
     assert "egopose_accel_long_min_mps2_idx" in stmts
 
 
+def test_canbus_applied_query_counts_marked_egoposes() -> None:
+    from nuscenes_data_engine.data_engine.graph.builder import _CANBUS_APPLIED
+
+    assert "EgoPose" in _CANBUS_APPLIED and "has_canbus IS NOT NULL" in _CANBUS_APPLIED
+    assert "count(" in _CANBUS_APPLIED
+
+
 def test_object_observation_rows_carry_geometry_and_null_velocity() -> None:
     ann = pd.DataFrame([
         {"annotation_token": "a1", "sample_token": "sm1", "instance_token": "i1",
@@ -432,6 +439,7 @@ def test_graph_schema_prompt_describes_the_model() -> None:
     assert "CO_OCCURS_WITH" in prompt and "SIMILAR_TO" in prompt
     assert "run_cypher" in prompt or "read-only" in prompt
     assert "is_hard_braking" in prompt
+    assert "accel_long_max_mps2" in prompt
     assert "hard braking near pedestrians" in prompt.lower()
 
 
