@@ -50,8 +50,9 @@ CLI there (foreground or `--bg` with a log file).
                     ┌─ ingestion (Phase 1) ─────────────────────────────┐
 raw nuScenes  ───►  │ flatten + 3D→2D projection → Parquet              │
 (read-only)         │ Great Expectations validation → DVC/MinIO version │
+                    │ + Phase B: ego pose/3D geometry + CAN-bus dynamics │
                     └──────────────┬────────────────────────────────────┘
-                                   ▼ data/processed/{samples,annotations,availability}.parquet
+                                   ▼ data/processed/{samples,annotations,availability,ego_pose,annotations_3d,instances,canbus}.parquet
       ┌────────────────────────────┼──────────────────────────────────────────┐
       ▼                            ▼                                          ▼
  training (2)                data engine (6)                            analytics
@@ -349,7 +350,14 @@ Ordered roughly by value-per-effort:
    distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/
    `instances` Parquet, DuckDB views, and Neo4j `EgoPose`/`ObjectObservation`/`ObjectInstance`
    nodes with point indexes. The project plan's "pedestrians within 5 m of ego at night" is
-   answerable in both SQL and Cypher (see docs/GRAPH.md). Still open: CAN-bus (steering/braking).
+   answerable in both SQL and Cypher (see docs/GRAPH.md). **CAN-bus (steering/braking) —
+   DONE.** `ingest-canbus` keyframe-aligns the nuScenes `can_bus` expansion (vehicle
+   speed/steering/brake/throttle, windowed longitudinal accel, `is_hard_braking`) into
+   `canbus.parquet`, a DuckDB view, and CAN properties on the `EgoPose` graph nodes:
+   **34,149** keyframe-aligned rows, **94** hard-braking, an independent speed
+   cross-check of **r = 0.999** against the GT-derived `ego_pose.speed_mps`, and the
+   flagship "hard braking near pedestrians" query returns **30** identically in SQL and
+   Cypher (docs/DATA.md, docs/GRAPH.md).
 3. **Terraform cloud deployment** (the remaining roadmap item) — lift the compose
    stack to a cloud host; the chat agent's Anthropic flip means no GPU is needed
    for any serving-path component.

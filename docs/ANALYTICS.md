@@ -88,3 +88,22 @@ FROM availability GROUP BY 1, 2 ORDER BY 1, 2
 Radar is referenced by the metadata but entirely absent on this server, and LiDAR has
 keyframes only — exactly why the pipeline filters on the manifest instead of trusting
 metadata paths (see [DATA.md](DATA.md)).
+
+## 5. Hard braking by location and time of day (CAN-bus, Phase B)
+
+```sql
+SELECT location, is_night, count(*) AS n
+FROM canbus WHERE is_hard_braking
+GROUP BY 1, 2 ORDER BY n DESC;
+```
+
+```
+│ boston-seaport           │ false │ 56 │
+│ singapore-onenorth       │ false │ 13 │
+│ singapore-queenstown     │ false │ 13 │
+│ singapore-hollandvillage │ true  │ 12 │
+```
+
+94 hard-braking keyframes total. Mean CAN speed at hard-braking keyframes is **14.8 km/h**,
+versus **18.0 km/h** overall — braking events skew toward slower, more congested driving,
+not highway speed. 6.4% of hard-braking keyframes are in rain.

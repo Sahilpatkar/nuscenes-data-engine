@@ -173,8 +173,19 @@ The graph is now geo-spatial as well as relational: `ingest-geometry` persists t
 distance-to-ego, ego-relative coords, instance tracking), and `graph build` adds three
 node types keyed off the keyframe `Sample`:
 
-- **`EgoPose`** (34,149) `{x, y, z, point, heading, speed_mps, location, is_night, is_rain}`
-  — `(Sample)-[:AT_POSE]->(EgoPose)`; trajectory = the `NEXT` chain of ego points.
+- **`EgoPose`** (34,149) `{x, y, z, point, heading, speed_mps, location, is_night, is_rain,
+  has_canbus, can_speed_kmh, steering_deg, brake_pedal, throttle, yaw_rate,
+  accel_long_min_mps2, accel_long_max_mps2, is_hard_braking}` — `(Sample)-[:AT_POSE]->(EgoPose)`;
+  trajectory = the `NEXT` chain of ego points. The CAN properties come from a second,
+  idempotent `SET` pass keyed off `(Sample)-[:AT_POSE]->(EgoPose)` (`canbus.parquet` →
+  `graph/builder.py`'s `_CANBUS` pass), run after the base `EgoPose` load; a range index on
+  `accel_long_min_mps2` backs the hard-braking filter. The applied count is read back from
+  the graph after the write (`MATCH (e:EgoPose) WHERE e.has_canbus IS NOT NULL RETURN
+  count(e)`) rather than trusted from the batch size, so a silent no-op (e.g. a stale graph
+  missing the matching `EgoPose`) is detectable — full run: `canbus: 34149,
+  canbus_applied: 34149`. Because Neo4j `SET`ting a property to `null` **removes** it,
+  `{is_hard_braking: true}` naturally excludes both no-CAN keyframes and keyframes whose
+  accel window was empty (no ambiguous `false`).
 - **`ObjectObservation`** (1,166,187) `{category, x, y, z, point, width/length/height, yaw,
   speed_mps, distance_to_ego_m, ego_rel_x (forward), ego_rel_y (left), num_lidar_pts,
   visibility, location, is_night, is_rain}` — `(Sample)-[:HAS_OBJECT]->(ObjectObservation)-[:OF_CATEGORY]->(Category)`.
@@ -201,7 +212,24 @@ uv run nuscenes-data-engine graph build          # adds the geo passes; --limit-
 ```
 
 The observation load is idempotent and resumable (a keyframe already carrying `HAS_OBJECT`
-is skipped). Still out of scope: CAN-bus (steering/braking) dynamics.
+is skipped).
+
+CAN-bus dynamics are now ingested too (see the `EgoPose` CAN properties above). A second
+flagship — *"hard braking with a pedestrian within 10 m"* — answers identically (**30**)
+in SQL (`canbus` `JOIN` `annotations_3d`) and Cypher:
+
+```cypher
+MATCH (e:EgoPose {is_hard_braking: true})<-[:AT_POSE]-(s:Sample)
+      -[:HAS_OBJECT]->(o:ObjectObservation)-[:OF_CATEGORY]->(c:Category)
+WHERE c.group = 'pedestrian' AND o.distance_to_ego_m < 10
+RETURN count(DISTINCT s)   // 30 — identical to the SQL form
+```
+```sql
+SELECT count(DISTINCT c.sample_token)
+FROM canbus c JOIN annotations_3d a USING (sample_token)
+WHERE c.is_hard_braking AND a.category_group = 'pedestrian'
+  AND a.distance_to_ego_m < 10;   -- 30, identical to the Cypher above
+```
 
 > The `graph_smoke` test builds a tiny graph end-to-end against a live Neo4j and **deletes
 > all nodes** on cleanup — run it against a throwaway/dev instance, not a graph you want to

@@ -82,9 +82,10 @@ answer's steps in an expander.
 ## Tables the agent can query
 
 `samples` (204,894 camera keyframes), `annotations` (~1.1M projected 2D boxes),
-`availability` (file-integrity manifest), and `labels` (5,000 Qwen2.5-VL scene
-labels from Phase 6b) — schemas in [ANALYTICS.md](ANALYTICS.md) and in the agent's
-system prompt.
+`availability` (file-integrity manifest), `labels` (5,000 Qwen2.5-VL scene
+labels from Phase 6b), `ego_pose`/`annotations_3d`/`instances` (Phase B 3D geometry),
+and `canbus` (Phase B CAN-bus ego dynamics — speed, steering, braking, `is_hard_braking`)
+— schemas in [ANALYTICS.md](ANALYTICS.md) and in the agent's system prompt.
 
 **Multi-hop questions:** when the Phase 6e knowledge graph is reachable, the agent
 gains a fourth tool, `run_cypher`, for relationship / path / co-occurrence /
@@ -94,8 +95,14 @@ similarity / temporal-next questions that SQL joins express awkwardly (see
 **Geometry (Phase B):** ego-pose + 3D object geometry are now ingested, so
 distance-to-ego questions *are* answerable — e.g. "pedestrians within 5 m of ego at
 night" via `annotations_3d.distance_to_ego_m` in SQL or the `ObjectObservation` nodes
-in the graph (see [GRAPH.md](GRAPH.md)). CAN-bus (steering/braking) is still not
-ingested.
+in the graph (see [GRAPH.md](GRAPH.md)).
+
+**Ego dynamics (Phase B, CAN-bus):** speed/steering/braking are also ingested (the
+`canbus` table), so dynamics questions are answerable too — e.g. "how many keyframes
+have hard braking near pedestrians?" joins `canbus.is_hard_braking` to
+`annotations_3d.distance_to_ego_m` in SQL, or the same query via the `EgoPose`/
+`ObjectObservation` graph nodes (see the flagship query in
+[GRAPH.md](GRAPH.md#geo-spatial-layer-phase-b) — 30 keyframes, identical in both).
 
 ## Example questions (live transcripts, qwen2.5:14b on an M4 Pro)
 

@@ -140,6 +140,26 @@ def _instances() -> pd.DataFrame:
     return pd.DataFrame(instance_records(_annotations_3d().to_dict("records")))
 
 
+def _canbus() -> pd.DataFrame:
+    """Same 3 keyframes as `_ego_poses()`: one hard-braking row, one has_canbus=False
+    (all-null signals) row -- mirrors the real table's "no keyframe ever dropped" shape.
+    """
+    return pd.DataFrame([
+        {"sample_token": "sm1", "scene_token": "sA", "has_canbus": True,
+         "can_speed_kmh": 14.7, "steering_deg": 191.9, "brake_pedal": 20.0,
+         "throttle": 55.0, "yaw_rate": 18.9, "accel_long_min_mps2": -4.0,
+         "accel_long_max_mps2": 0.5, "is_hard_braking": True},
+        {"sample_token": "sm2", "scene_token": "sA", "has_canbus": False,
+         "can_speed_kmh": None, "steering_deg": None, "brake_pedal": None,
+         "throttle": None, "yaw_rate": None, "accel_long_min_mps2": None,
+         "accel_long_max_mps2": None, "is_hard_braking": None},
+        {"sample_token": "sm3", "scene_token": "sB", "has_canbus": True,
+         "can_speed_kmh": 8.0, "steering_deg": 0.0, "brake_pedal": 0.0,
+         "throttle": 10.0, "yaw_rate": 0.0, "accel_long_min_mps2": 0.2,
+         "accel_long_max_mps2": 0.6, "is_hard_braking": False},
+    ])
+
+
 # ---------------------------------------------------------------------------
 # node projections
 # ---------------------------------------------------------------------------
@@ -275,6 +295,51 @@ def test_ego_pose_rows_carry_position_and_speed() -> None:
     assert rows["e2"]["speed_mps"] is None  # first-in-scene keyframe -> null speed
 
 
+def test_canbus_rows_projection_and_null_handling() -> None:
+    pd = pytest.importorskip("pandas")
+    from nuscenes_data_engine.data_engine.graph.model import canbus_rows
+
+    df = pd.DataFrame(
+        [
+            {
+                "sample_token": "s1", "has_canbus": True, "can_speed_kmh": 14.7,
+                "steering_deg": 191.9, "brake_pedal": 20.0, "throttle": 55.0,
+                "yaw_rate": 18.9, "accel_long_min_mps2": -4.0,
+                "accel_long_max_mps2": 0.5, "is_hard_braking": True,
+            },
+            {
+                "sample_token": "s2", "has_canbus": False, "can_speed_kmh": None,
+                "steering_deg": None, "brake_pedal": None, "throttle": None,
+                "yaw_rate": None, "accel_long_min_mps2": None,
+                "accel_long_max_mps2": None, "is_hard_braking": None,
+            },
+        ]
+    )
+    rows = canbus_rows(df)
+    assert rows[0]["sample_token"] == "s1" and rows[0]["is_hard_braking"] is True
+    assert rows[0]["accel_long_min_mps2"] == pytest.approx(-4.0)
+    assert rows[0]["brake_pedal"] == pytest.approx(20.0)
+    assert rows[1]["has_canbus"] is False
+    assert rows[1]["can_speed_kmh"] is None and rows[1]["is_hard_braking"] is None
+
+
+def test_schema_includes_canbus_index() -> None:
+    from nuscenes_data_engine.data_engine.graph.schema import schema_statements
+
+    stmts = "\n".join(schema_statements())
+    assert "egopose_accel_long_min_mps2_idx" in stmts
+
+
+def test_canbus_applied_query_counts_marked_egoposes() -> None:
+    from nuscenes_data_engine.data_engine.graph.builder import _CANBUS_APPLIED
+
+    assert "EgoPose" in _CANBUS_APPLIED and "has_canbus IS NOT NULL" in _CANBUS_APPLIED
+    assert "count(" in _CANBUS_APPLIED
+    # Scoped to the loaded batch (not a global count) so a no-op --limit-scenes batch
+    # against an already-loaded graph can still be detected.
+    assert "UNWIND $tokens" in _CANBUS_APPLIED and "$tokens" in _CANBUS_APPLIED
+
+
 def test_object_observation_rows_carry_geometry_and_null_velocity() -> None:
     ann = pd.DataFrame([
         {"annotation_token": "a1", "sample_token": "sm1", "instance_token": "i1",
@@ -396,6 +461,9 @@ def test_graph_schema_prompt_describes_the_model() -> None:
     assert "Frame" in prompt and "Category" in prompt
     assert "CO_OCCURS_WITH" in prompt and "SIMILAR_TO" in prompt
     assert "run_cypher" in prompt or "read-only" in prompt
+    assert "is_hard_braking" in prompt
+    assert "accel_long_max_mps2" in prompt
+    assert "hard braking near pedestrians" in prompt.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +596,7 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
     _ego_poses().to_parquet(processed / "ego_pose.parquet")
     _annotations_3d().to_parquet(processed / "annotations_3d.parquet")
     _instances().to_parquet(processed / "instances.parquet")
+    _canbus().to_parquet(processed / "canbus.parquet")
     monkeypatch.setenv("PROCESSED_DIR", str(processed))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))  # no labels.parquet -> VLM pass skipped
     settings = get_settings()
@@ -553,6 +622,9 @@ def test_graph_build_end_to_end(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) 
         assert summary["contains"] >= 5
         # Phase B geometry passes ran.
         assert summary["ego_poses"] == 3 and summary["observations"] == 2 and summary["instances"] == 2
+        # CAN-bus pass ran and every row matched its EgoPose (no silent no-op).
+        assert summary["canbus"] == 3
+        assert summary["canbus_applied"] == 3
 
         counts = {
             row["label"]: row["n"]

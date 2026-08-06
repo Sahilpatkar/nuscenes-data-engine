@@ -122,6 +122,25 @@ MERGE (e:EgoPose {token: row.token})
 MERGE (sm)-[:AT_POSE]->(e)
 """
 
+_CANBUS = """
+UNWIND $rows AS row
+MATCH (:Sample {token: row.sample_token})-[:AT_POSE]->(e:EgoPose)
+SET e.has_canbus = row.has_canbus,
+    e.can_speed_kmh = row.can_speed_kmh, e.steering_deg = row.steering_deg,
+    e.brake_pedal = row.brake_pedal, e.throttle = row.throttle,
+    e.yaw_rate = row.yaw_rate,
+    e.accel_long_min_mps2 = row.accel_long_min_mps2,
+    e.accel_long_max_mps2 = row.accel_long_max_mps2,
+    e.is_hard_braking = row.is_hard_braking
+"""
+
+_CANBUS_APPLIED = """
+UNWIND $tokens AS token
+MATCH (:Sample {token: token})-[:AT_POSE]->(e:EgoPose)
+WHERE e.has_canbus IS NOT NULL
+RETURN count(e) AS n
+"""
+
 _INSTANCES = """
 UNWIND $rows AS row
 MATCH (sc:Scene {token: row.scene_token})
@@ -259,6 +278,27 @@ def build_graph(
             )
             summary["observations"] = written
             logger.info("  %-14s %8d", "observations", written)
+
+            canbus_path = processed / "canbus.parquet"
+            if canbus_path.is_file():
+                canbus = pd.read_parquet(canbus_path)
+                if keep_scenes is not None:
+                    canbus = canbus[canbus["scene_token"].isin(keep_scenes)]
+                canbus_payload = model.canbus_rows(canbus)
+                load("canbus", _CANBUS, canbus_payload)
+                applied = connection.read_query(
+                    driver,
+                    _CANBUS_APPLIED,
+                    database=database,
+                    params={"tokens": [r["sample_token"] for r in canbus_payload]},
+                )[0]["n"]
+                summary["canbus_applied"] = applied
+                if applied < len(canbus_payload):
+                    logger.warning(
+                        "  canbus: %d/%d rows applied — %d keyframes had no EgoPose "
+                        "(stale graph or out-of-sync --limit-scenes?)",
+                        applied, len(canbus_payload), len(canbus_payload) - applied,
+                    )
     finally:
         connection.close(driver)
 

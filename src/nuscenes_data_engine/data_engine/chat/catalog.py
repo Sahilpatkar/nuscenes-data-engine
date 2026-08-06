@@ -20,7 +20,10 @@ logger = logging.getLogger("nuscenes_data_engine")
 MAX_ROWS = 50
 MAX_CELL_CHARS = 300
 
-TABLES = ("samples", "annotations", "availability", "ego_pose", "annotations_3d", "instances")
+TABLES = (
+    "samples", "annotations", "availability", "ego_pose", "annotations_3d", "instances",
+    "canbus",
+)
 
 # Settings/extension escapes and file-reading table functions (word-boundary match).
 _DENIED_KEYWORDS = re.compile(
@@ -152,6 +155,15 @@ def schema_prompt(tables: list[str]) -> str:
             "  instance_token (joins annotations_3d), category_name, category_group,\n"
             "  scene_token, n_annotations (keyframes the object is observed in)"
         ),
+        "canbus": (
+            "canbus — one row per keyframe: CAN-bus ego dynamics (can_bus expansion):\n"
+            "  sample_token (joins ego_pose/annotations_3d), has_canbus,\n"
+            "  can_speed_kmh, steering_deg, steering_speed, brake_pedal (raw 0-126),\n"
+            "  brake_switch, throttle, yaw_rate, left_signal, right_signal,\n"
+            "  accel_long_min_mps2 / accel_long_max_mps2 (50 Hz window ±0.5 s),\n"
+            "  can_vel_mps, is_hard_braking (accel_long_min <= -3.0 m/s²),\n"
+            "  scene_name, location, is_night, is_rain"
+        ),
     }
     has_geometry = "annotations_3d" in tables
     geometry_note = (
@@ -163,12 +175,18 @@ def schema_prompt(tables: list[str]) -> str:
         else "There is no ego-pose or object-distance data — distance questions cannot be\n"
         "answered.\n"
     )
+    canbus_note = (
+        "Ego dynamics ARE available (canbus table): hard braking, steering, throttle.\n"
+        if "canbus" in tables
+        else ""
+    )
     notes = (
         "Notes: is_night/is_rain are scene-level flags derived from the scene\n"
         "description. Night driving exists only in Singapore; all rain is in Boston.\n"
         "location is one of the four full names above — there is NO bare 'singapore' or\n"
         "'boston'; match a city with LIKE 'singapore%' (or IN (...)), never = 'singapore'.\n"
         + geometry_note
+        + canbus_note
         + "For multi-hop relationship / co-occurrence / similarity / temporal\n"
         "questions, prefer the run_cypher knowledge-graph tool when it is offered.\n"
         "Example patterns:\n"

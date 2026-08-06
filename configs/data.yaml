@@ -29,3 +29,9 @@ output:
     ego_pose: ego_pose.parquet         # one row per keyframe (ego position/heading/speed)
     annotations_3d: annotations_3d.parquet  # one row per 3D GT box (world pos, size, distance-to-ego)
     instances: instances.parquet       # one row per tracked object (instance_token)
+    canbus: canbus.parquet             # one row per keyframe (CAN speed/steering/brake, is_hard_braking)
+
+canbus:                      # CAN-bus keyframe alignment (docs/superpowers/specs/2026-08-05-canbus-ingestion-design.md)
+  window_s: 0.5              # pose-accel window around each keyframe
+  hard_braking_mps2: -3.0    # is_hard_braking threshold on accel_long_min
+  monitor_tolerance_ms: 600  # max age of the nearest vehicle_monitor message
