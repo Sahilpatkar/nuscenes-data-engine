@@ -181,13 +181,24 @@ def propose_boxes(
 
 
 def build_weak_sample(
-    samples: pd.DataFrame, arm_tokens: list[str], existing_labels: pd.DataFrame | None
+    samples: pd.DataFrame,
+    arm_tokens: list[str],
+    existing_labels: pd.DataFrame | None,
+    *,
+    availability: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """The arm frames still needing a VLM label, in Phase 6b's ``sample.parquet`` shape.
 
     Frames already labelled with ``parse_status == 'ok'`` are skipped; unparsed ones are
     re-labelled. The extra columns (``present``/``in_opus_subset``/``stratum``) exist so
     the unchanged 6b submit/collect path can consume this table.
+
+    ``availability`` mirrors the filter ``sampling.build_sample`` applies against
+    ``data/processed/availability.parquet`` (``sample_data_token``, ``present``): frames
+    absent from the manifest or marked not-present are excluded — the image isn't on
+    disk, so the VLM can't be sent it — rather than defaulted to ``present=True``. When
+    ``availability`` is omitted, ``present`` is set to ``True`` for every row (today's
+    behaviour, unchanged for existing callers).
     """
     labelled: set[str] = set()
     if existing_labels is not None and len(existing_labels):
@@ -195,7 +206,11 @@ def build_weak_sample(
         labelled = set(ok["sample_data_token"])
     wanted = [t for t in arm_tokens if t not in labelled]
     weak = samples[samples["sample_data_token"].isin(wanted)].copy()
-    weak["present"] = True
+    if availability is not None:
+        manifest = availability[["sample_data_token", "present"]]
+        weak = weak.merge(manifest[manifest["present"]], on="sample_data_token")
+    else:
+        weak["present"] = True
     weak["in_opus_subset"] = False
     weak["stratum"] = "weak-supervision"
     return weak.sort_values("sample_data_token", ignore_index=True)
@@ -204,7 +219,13 @@ def build_weak_sample(
 def run_pseudo_sample(
     config_path: Path, weak_config_path: Path, *, arm: str, processed_dir: Path | None = None
 ) -> dict[str, Any]:
-    """Write ``sample.parquet`` (6b shape) for the arm frames still needing VLM labels."""
+    """Write ``sample.parquet`` (6b shape) for the arm frames still needing VLM labels.
+
+    Raises ``ValueError`` if any arm token is missing from ``samples.parquet`` — a
+    mismatch there means the arm was mined against different processed data. When
+    ``availability.parquet`` exists it is passed to :func:`build_weak_sample` so frames
+    without an on-disk image are dropped rather than silently sent to the VLM.
+    """
     from nuscenes_data_engine.config import get_settings, load_yaml
 
     cfg = load_yaml(config_path)
@@ -220,6 +241,13 @@ def run_pseudo_sample(
     arm_tokens = list(pd.read_parquet(arm_path)["sample_data_token"])
 
     samples = pd.read_parquet(processed / "samples.parquet")
+    missing = set(arm_tokens) - set(samples["sample_data_token"])
+    if missing:
+        raise ValueError(
+            f"{len(missing)} arm frames missing from samples.parquet "
+            f"(first: {sorted(missing)[0]})"
+        )
+
     labels_path = Path(settings.data_dir) / "autolabel" / "labels.parquet"
     existing = pd.read_parquet(labels_path) if labels_path.is_file() else None
     weak_labels_path = weak_state / "labels.parquet"
@@ -227,7 +255,17 @@ def run_pseudo_sample(
         weak_existing = pd.read_parquet(weak_labels_path)
         existing = weak_existing if existing is None else pd.concat([existing, weak_existing])
 
-    weak = build_weak_sample(samples, arm_tokens, existing)
+    availability_path = processed / "availability.parquet"
+    availability = pd.read_parquet(availability_path) if availability_path.is_file() else None
+
+    weak = build_weak_sample(samples, arm_tokens, existing, availability=availability)
+    if availability is not None:
+        n_before_availability = len(build_weak_sample(samples, arm_tokens, existing))
+        n_not_present = n_before_availability - len(weak)
+        logger.info(
+            "Arm %s: %d frames dropped as not present on disk (availability manifest)",
+            arm, n_not_present,
+        )
     weak_state.mkdir(parents=True, exist_ok=True)
     weak.to_parquet(weak_state / "sample.parquet", index=False)
     summary = {

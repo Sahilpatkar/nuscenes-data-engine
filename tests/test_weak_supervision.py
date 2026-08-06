@@ -207,3 +207,121 @@ def test_build_weak_sample_relabels_unparsed_frames(tmp_path: Path) -> None:
     already = pd.DataFrame({"sample_data_token": ["a"], "parse_status": ["error"]})
     weak = build_weak_sample(samples, ["a"], already)
     assert list(weak["sample_data_token"]) == ["a"]  # unparsed -> label again
+
+
+def test_build_weak_sample_excludes_frames_missing_from_availability() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b"], "sample_token": ["sa", "sb"],
+            "channel": ["CAM_FRONT"] * 2, "filename": ["a.jpg", "b.jpg"],
+            "width": [1600] * 2, "height": [900] * 2, "timestamp": [1, 2],
+            "n_boxes": [1, 2], "scene_token": ["s1"] * 2, "scene_name": ["scene-0001"] * 2,
+            "scene_description": ["x"] * 2, "log_token": ["l1"] * 2,
+            "location": ["boston-seaport"] * 2, "is_night": [False] * 2,
+            "is_rain": [False] * 2,
+        }
+    )
+    # 'b' is recorded but its image is not on disk -> must not be sent to the VLM.
+    availability = pd.DataFrame(
+        {"sample_data_token": ["a", "b"], "present": [True, False]}
+    )
+    weak = build_weak_sample(samples, ["a", "b"], None, availability=availability)
+    assert list(weak["sample_data_token"]) == ["a"]
+    assert weak["present"].all()
+
+
+def test_build_weak_sample_without_availability_keeps_all_frames() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    )
+    weak = build_weak_sample(samples, ["a"], None)
+    assert list(weak["sample_data_token"]) == ["a"] and weak["present"].all()
+
+
+def test_run_pseudo_sample_writes_sample_and_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_sample
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))  # no 6b labels
+
+    pd.DataFrame({"sample_data_token": ["a", "b"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b"], "sample_token": ["sa", "sb"],
+            "channel": ["CAM_FRONT"] * 2, "filename": ["a.jpg", "b.jpg"],
+            "width": [1600] * 2, "height": [900] * 2, "timestamp": [1, 2],
+            "n_boxes": [1, 2], "scene_token": ["s1"] * 2, "scene_name": ["scene-0001"] * 2,
+            "scene_description": ["x"] * 2, "log_token": ["l1"] * 2,
+            "location": ["boston-seaport"] * 2, "is_night": [False] * 2,
+            "is_rain": [False] * 2,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+
+    config = tmp_path / "al.yaml"
+    config.write_text(yaml.safe_dump({"state": {"dir": str(state)}}))
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    first = run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+    assert first["n_needing_labels"] == 2
+    assert (weak_state / "sample.parquet").is_file()
+
+    # Simulate a successful collect: 'a' now labelled ok -> only 'b' remains.
+    pd.DataFrame(
+        {"sample_data_token": ["a"], "parse_status": ["ok"]}
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+    second = run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+    assert second["n_needing_labels"] == 1
+
+
+def test_run_pseudo_sample_rejects_tokens_missing_from_samples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_sample
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["a", "ghost"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    config = tmp_path / "al.yaml"
+    config.write_text(yaml.safe_dump({"state": {"dir": str(state)}}))
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(tmp_path / "weak")}}))
+
+    with pytest.raises(ValueError, match="missing from samples"):
+        run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
