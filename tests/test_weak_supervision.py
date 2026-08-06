@@ -342,7 +342,10 @@ def test_run_pseudo_label_writes_accepted_and_pseudo_labels(
     weak_state.mkdir()
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))  # no 6b labels
 
-    # Arm has three frames; f1 agrees, f2 disagrees on pedestrians, f3 has no label.
+    # Arm has three frames; f1 agrees, f2 disagrees on pedestrians, f3 disagrees on cars.
+    # (Every arm frame must carry a label — run_pseudo_label now requires full
+    # coverage before it will spend the GPU — so f3 gets a label too, just one that
+    # disagrees, to keep it rejected for a count reason rather than a coverage gap.)
     pd.DataFrame({"sample_data_token": ["f1", "f2", "f3"]}).to_parquet(
         state / "random.parquet", index=False
     )
@@ -363,6 +366,7 @@ def test_run_pseudo_label_writes_accepted_and_pseudo_labels(
         [
             {**base, "sample_data_token": "f1", "cars": 2, "pedestrians": 1},
             {**base, "sample_data_token": "f2", "cars": 2, "pedestrians": 9},
+            {**base, "sample_data_token": "f3", "cars": 9},
         ]
     ).to_parquet(weak_state / "labels.parquet", index=False)
 
@@ -412,6 +416,57 @@ def test_run_pseudo_label_writes_accepted_and_pseudo_labels(
     pseudo = pd.read_parquet(state / "random_pseudo_labels.parquet")
     assert set(pseudo["sample_data_token"]) == {"f1"}  # rejected frames' boxes dropped
     assert len(pseudo) == 3
+    assert "score" not in pseudo.columns or pseudo["score"].notna().all()
+
+
+def test_run_pseudo_label_requires_labels_for_every_arm_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running before `autolabel collect` finishes must fail loudly, not silently shrink."""
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["f1", "f2"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {"sample_data_token": ["f1", "f2"], "filename": ["f1.jpg", "f2.jpg"],
+         "channel": ["CAM_FRONT"] * 2, "scene_name": ["scene-0001"] * 2}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    # Only f1 was labelled; f2 is still pending.
+    pd.DataFrame([{**base, "sample_data_token": "f1"}]).to_parquet(
+        weak_state / "labels.parquet", index=False
+    )
+
+    called = []
+    monkeypatch.setattr(pl, "propose_boxes", lambda *a, **k: called.append(1) or pd.DataFrame())
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="have no VLM label"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )
+    assert not called, "must fail before spending the GPU proposal"
 
 
 def test_run_pseudo_label_empty_acceptance_raises(

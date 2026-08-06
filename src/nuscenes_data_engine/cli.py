@@ -643,14 +643,19 @@ def al_pseudo_label(
             config, weak_config, arm=arm, weights=weights, device=device
         )
         if run is not None:
+            flat = {
+                f"{key}/{sub}": value
+                for key, nested in summary.items()
+                if isinstance(nested, dict)
+                for sub, value in nested.items()
+            }
             # bool is an int subclass — exclude it so flag fields aren't logged as 0/1
-            run.log(
-                {
-                    k: v
-                    for k, v in summary.items()
-                    if isinstance(v, int | float) and not isinstance(v, bool)
-                }
-            )
+            scalars = {
+                k: v
+                for k, v in summary.items()
+                if isinstance(v, int | float) and not isinstance(v, bool)
+            }
+            run.log({**scalars, **flat})
     logger.info("Pseudo-label summary: %s", summary)
 
 

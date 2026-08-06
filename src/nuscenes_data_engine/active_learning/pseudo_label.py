@@ -10,6 +10,7 @@ docs/superpowers/specs/2026-08-06-vlm-weak-supervision-design.md
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from pathlib import Path
@@ -177,7 +178,10 @@ def propose_boxes(
             )
         if (start // batch_size) % 10 == 0:
             logger.info("Proposing: %d/%d frames", min(start + batch_size, len(records)), len(records))
-    return pd.DataFrame(rows)
+    columns = [
+        "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+    ]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def build_weak_sample(
@@ -299,8 +303,14 @@ def run_pseudo_label(
 ) -> dict[str, Any]:
     """Propose boxes for an arm's frames, verify them against VLM counts, write both.
 
-    Writes ``<arm>_pseudo_labels.parquet`` (accepted frames' boxes) and
-    ``<arm>_accepted.parquet`` (the token list both weak arms train on).
+    Writes ``<arm>_pseudo_labels.parquet`` (accepted frames' boxes),
+    ``<arm>_accepted.parquet`` (the token list both weak arms train on), and
+    ``<arm>_pseudo_summary.json`` (retention/rejection diagnostics).
+
+    Every cheap check — arm/sample consistency, VLM label coverage, val-split
+    membership — runs before :func:`propose_boxes` so a run started too early (before
+    ``autolabel collect`` finished labelling every arm frame) fails loudly instead of
+    silently shrinking to whatever subset happened to have a label.
     """
     from nuscenes_data_engine.config import get_settings, load_yaml
 
@@ -309,7 +319,7 @@ def run_pseudo_label(
     settings = get_settings()
     state_dir = Path(cfg.get("state", {}).get("dir", "data/active_learning"))
     processed = processed_dir or Path("data/processed")
-    pseudo_cfg = cfg.get("pseudo", {})
+    pseudo_cfg = cfg.get("pseudo") or {}
     conf = float(pseudo_cfg.get("conf", 0.5))
     tolerance = int(pseudo_cfg.get("tolerance", 1))
     imgsz = int(pseudo_cfg.get("imgsz", cfg.get("train", {}).get("imgsz", 640)))
@@ -322,19 +332,12 @@ def run_pseudo_label(
     arm_tokens = set(pd.read_parquet(arm_path)["sample_data_token"])
 
     samples = pd.read_parquet(processed / "samples.parquet")
-    frames = samples[samples["sample_data_token"].isin(arm_tokens)]
-    if len(frames) != len(arm_tokens):
+    missing = arm_tokens - set(samples["sample_data_token"])
+    if missing:
         raise ValueError(
-            f"{len(arm_tokens) - len(frames)} arm frames missing from samples.parquet"
+            f"{len(missing)} arm frames missing from samples (first: {sorted(missing)[0]})"
         )
-
-    boxes = propose_boxes(
-        weights, frames, Path(settings.nuscenes_dataroot),
-        conf=conf, imgsz=imgsz, device=device, batch_size=batch_size,
-    )
-    # Frames with no detection still count as candidates (empty label = background).
-    det_counts: dict[str, dict[str, int]] = {token: {} for token in sorted(arm_tokens)}
-    det_counts.update(detection_counts(boxes))
+    frames = samples[samples["sample_data_token"].isin(arm_tokens)]
 
     labels: list[pd.DataFrame] = []
     for path in (
@@ -345,14 +348,48 @@ def run_pseudo_label(
             labels.append(pd.read_parquet(path))
     if not labels:
         raise ValueError("No VLM labels found — run `al pseudo-sample` then autolabel first.")
-    all_labels = pd.concat(labels, ignore_index=True).drop_duplicates(
-        subset="sample_data_token", keep="last"
+    all_labels = pd.concat(labels, ignore_index=True)
+    # Prefer a parsed label over an unparsed one regardless of source order; the
+    # weak table only ever holds tokens build_weak_sample deemed unlabelled, so this
+    # matters mainly for a re-run or a future arm.
+    all_labels = (
+        all_labels.assign(_ok=(all_labels["parse_status"] == "ok").astype(int))
+        .sort_values("_ok", kind="stable")
+        .drop_duplicates(subset="sample_data_token", keep="last")
+        .drop(columns="_ok")
     )
     vlm_labels = {
         str(row["sample_data_token"]): row
         for row in all_labels.to_dict("records")
         if str(row["sample_data_token"]) in arm_tokens
     }
+
+    # By construction every arm frame carries a VLM label by this point (pseudo-sample
+    # + autolabel collect ran first); if any don't, this ran before collect finished —
+    # fail now, before the GPU proposal, rather than quietly verifying a shrunken subset.
+    unlabelled = sorted(t for t in arm_tokens if t not in vlm_labels)
+    if unlabelled:
+        raise ValueError(
+            f"{len(unlabelled)} of {len(arm_tokens)} arm frames have no VLM label "
+            f"(first: {unlabelled[0]}) — run `al pseudo-sample --arm {arm}` and finish "
+            "`autolabel collect` before pseudo-labelling"
+        )
+
+    # Defence in depth: the arm parquet is pool-only by construction (round-1 mining
+    # guards), but a pseudo-labelled val frame would silently corrupt every arm's
+    # comparison, so check it here too rather than trusting an upstream invariant.
+    # Computed before propose_boxes so a missing devkit or missing scene_name column
+    # also surfaces before the GPU run.
+    val_scenes = _official_val_scenes()
+    val_frames = set(samples[samples["scene_name"].isin(val_scenes)]["sample_data_token"])
+
+    boxes = propose_boxes(
+        weights, frames, Path(settings.nuscenes_dataroot),
+        conf=conf, imgsz=imgsz, device=device, batch_size=batch_size,
+    )
+    # Frames with no detection still count as candidates (empty label = background).
+    det_counts: dict[str, dict[str, int]] = {token: {} for token in sorted(arm_tokens)}
+    det_counts.update(detection_counts(boxes))
 
     accepted, diagnostics = verify_frames(det_counts, vlm_labels, tolerance)
     if not accepted:
@@ -365,11 +402,6 @@ def run_pseudo_label(
     accepted_set = set(accepted)
     if not accepted_set <= arm_tokens:
         raise ValueError("accepted frames must come from the arm's mined frames")
-    # Defence in depth: the arm parquet is pool-only by construction (round-1 mining
-    # guards), but a pseudo-labelled val frame would silently corrupt every arm's
-    # comparison, so check it here too rather than trusting an upstream invariant.
-    val_scenes = _official_val_scenes()
-    val_frames = set(samples[samples["scene_name"].isin(val_scenes)]["sample_data_token"])
     if accepted_set & val_frames:
         raise ValueError(
             f"{len(accepted_set & val_frames)} accepted frames are in the val split"
@@ -381,14 +413,26 @@ def run_pseudo_label(
     )
     pseudo.to_parquet(state_dir / f"{arm}_pseudo_labels.parquet", index=False)
 
+    # How the detector's kept-frame boxes compare to ground truth, when available —
+    # tells the write-up whether the detector systematically under-labels the frames
+    # it keeps (a training-data property distinct from verification retention).
+    gt_mean = None
+    annotations_path = processed / "annotations.parquet"
+    if annotations_path.is_file():
+        gt = pd.read_parquet(annotations_path, columns=["sample_data_token", "category_group"])
+        gt = gt[gt["category_group"].notna() & gt["sample_data_token"].isin(accepted_set)]
+        gt_mean = len(gt) / len(accepted)
+
     summary = {
         "arm": arm,
         "conf": conf,
         "tolerance": tolerance,
         "n_boxes": len(pseudo),
         "mean_boxes_per_accepted_frame": len(pseudo) / len(accepted),
+        "mean_gt_boxes_per_accepted_frame": gt_mean,
         **diagnostics,
     }
+    (state_dir / f"{arm}_pseudo_summary.json").write_text(json.dumps(summary, indent=2))
     logger.info(
         "Arm %s: %d/%d frames accepted (retention %.2f), %d pseudo boxes; "
         "rejected by class: %s; accepted mutual-zero by class: %s",
