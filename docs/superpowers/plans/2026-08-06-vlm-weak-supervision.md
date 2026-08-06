@@ -963,12 +963,42 @@ def test_apply_pseudo_labels_replaces_gt_for_those_tokens_only() -> None:
             "score": [0.9],
         }
     )
-    merged = _apply_pseudo_labels(gt, pseudo)
+    merged = _apply_pseudo_labels(gt, pseudo, {"f1"})
     f1 = merged[merged["sample_data_token"] == "f1"]
     assert list(f1["category_group"]) == ["truck"]  # GT rows for f1 replaced
     f2 = merged[merged["sample_data_token"] == "f2"]
     assert list(f2["category_group"]) == ["bus"]  # untouched
     assert set(gt.columns) <= set(merged.columns)  # schema preserved for the builder
+
+
+def test_apply_pseudo_labels_accepted_but_empty_frame_loses_its_gt() -> None:
+    """An accepted frame the detector found nothing in must train as a background.
+
+    Its GT must NOT survive: the arm's whole claim is that these frames carry no
+    ground truth. Deriving the replacement key from the pseudo table (which has no
+    rows for such a frame) would silently leave the GT in place.
+    """
+    from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
+
+    gt = pd.DataFrame(
+        {
+            "sample_data_token": ["empty", "other"],
+            "category_group": ["pedestrian", "car"],
+            "x_min": [0.0, 2.0], "y_min": [0.0, 2.0],
+            "x_max": [10.0, 12.0], "y_max": [10.0, 12.0],
+        }
+    )
+    pseudo = pd.DataFrame(
+        {
+            "sample_data_token": pd.Series([], dtype=str),
+            "category_group": pd.Series([], dtype=str),
+            "x_min": pd.Series([], dtype=float), "y_min": pd.Series([], dtype=float),
+            "x_max": pd.Series([], dtype=float), "y_max": pd.Series([], dtype=float),
+        }
+    )
+    merged = _apply_pseudo_labels(gt, pseudo, {"empty"})
+    assert "empty" not in set(merged["sample_data_token"])  # trains as a background
+    assert list(merged[merged["sample_data_token"] == "other"]["category_group"]) == ["car"]
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1020,29 +1050,39 @@ def _build_key(
 
 ```python
 def _apply_pseudo_labels(
-    annotations: pd.DataFrame, pseudo_labels: pd.DataFrame
+    annotations: pd.DataFrame,
+    pseudo_labels: pd.DataFrame,
+    pseudo_tokens: set[str],
 ) -> pd.DataFrame:
-    """Replace GT rows with pseudo rows for the tokens the pseudo table covers.
+    """Replace GT rows with pseudo rows for every token in ``pseudo_tokens``.
 
     Whole-frame replacement (not a merge): a frame is labelled either by ground truth
-    or by the detector, never half of each.
+    or by the detector, never half of each. The token set is passed explicitly rather
+    than derived from ``pseudo_labels`` because an accepted frame with **zero** detected
+    boxes contributes no rows — deriving the key from the table would leave that frame's
+    ground truth in place and silently break the arm's "no GT" claim.
     """
-    tokens = set(pseudo_labels["sample_data_token"])
-    kept = annotations[~annotations["sample_data_token"].isin(tokens)]
+    kept = annotations[~annotations["sample_data_token"].isin(pseudo_tokens)]
     columns = [c for c in annotations.columns if c in pseudo_labels.columns]
     return pd.concat([kept, pseudo_labels[columns]], ignore_index=True)
 ```
 
 (c) in `build_yolo_dataset`, add the parameter and wire both call sites:
 
-- signature gains `pseudo_labels: pd.DataFrame | None = None,` after `train_frames`;
-- docstring gains: `pseudo_labels: Replace ground-truth boxes with these for the tokens they cover (weak supervision). The cache key includes their content hash.`
+- signature gains, after `train_frames`:
+  ```python
+    pseudo_labels: pd.DataFrame | None = None,
+    pseudo_tokens: set[str] | None = None,
+  ```
+- docstring gains: `pseudo_labels: Replace ground-truth boxes with these for every token in pseudo_tokens (weak supervision). The cache key includes their content hash. pseudo_tokens: The frames whose labels come from pseudo_labels — passed explicitly because an accepted frame with zero detected boxes has no rows in pseudo_labels and must still lose its ground truth.`
 - the `key = _build_key(...)` call gains `pseudo_labels=pseudo_labels`;
 - immediately before the existing line `ann = annotations[annotations["category_group"].notna()].copy()` insert:
 
 ```python
-    if pseudo_labels is not None and len(pseudo_labels):
-        annotations = _apply_pseudo_labels(annotations, pseudo_labels)
+    if pseudo_labels is not None:
+        if pseudo_tokens is None:
+            raise ValueError("pseudo_labels requires pseudo_tokens (empty frames have no rows)")
+        annotations = _apply_pseudo_labels(annotations, pseudo_labels, pseudo_tokens)
 ```
 
 - [ ] **Step 4: Run to verify pass**
@@ -1132,6 +1172,7 @@ ARMS = (
 
 ```python
     pseudo_labels = None
+    pseudo_tokens = None
     if arm == "weak_random":
         pseudo_path = state_dir / "random_pseudo_labels.parquet"
         if not pseudo_path.is_file():
@@ -1139,9 +1180,15 @@ ARMS = (
                 f"Arm {arm!r} needs {pseudo_path} — run `al pseudo-label --arm random` first"
             )
         pseudo_labels = pd.read_parquet(pseudo_path)
+        # Every accepted frame is pseudo-labelled, including those the detector found
+        # nothing in — those have no rows in the table, so the token set comes from
+        # accepted.parquet or their ground truth would survive into a "no GT" arm.
+        pseudo_tokens = set(
+            pd.read_parquet(state_dir / "random_accepted.parquet")["sample_data_token"]
+        )
 ```
 
-and add `pseudo_labels=pseudo_labels,` to the `build_yolo_dataset(...)` call's keyword arguments.
+and add `pseudo_labels=pseudo_labels, pseudo_tokens=pseudo_tokens,` to the `build_yolo_dataset(...)` call's keyword arguments.
 
 (d) update the module docstring's arm list to mention the weak-supervision pair and the spec path.
 
