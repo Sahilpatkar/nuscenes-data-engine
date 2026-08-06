@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from nuscenes_data_engine.active_learning.experiment import ARM_EXTRA_FILE
 from nuscenes_data_engine.active_learning.experiment import ARMS as ARM_ORDER
 from nuscenes_data_engine.config import load_yaml
 
@@ -25,8 +26,13 @@ def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str,
     ).set_index("sample_data_token")
     composition: dict[str, dict[str, Any]] = {}
     for arm in ARM_ORDER:
-        path = state_dir / f"{arm}.parquet"
-        if arm == "baseline" or not path.is_file():
+        if arm == "baseline":
+            continue
+        # Most arms' extra-frames file is f"{arm}.parquet"; the weak arms share
+        # random_accepted.parquet (see ARM_EXTRA_FILE), so resolve through the same map
+        # resolve_arm_frames uses rather than assuming the naming convention.
+        path = state_dir / ARM_EXTRA_FILE.get(arm, f"{arm}.parquet")
+        if not path.is_file():
             continue
         tokens = pd.read_parquet(path, columns=["sample_data_token"])["sample_data_token"]
         rows = samples.reindex(tokens).dropna(subset=["scene_name"])

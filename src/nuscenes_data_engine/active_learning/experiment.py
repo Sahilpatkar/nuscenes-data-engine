@@ -32,6 +32,22 @@ ARMS = (
     "weak_random", "weak_random_gt",
 )
 
+# Per-arm extra-frames parquet, relative to the AL state dir. Module-level (not just a
+# local in resolve_arm_frames) so report.arm_composition can resolve the same file —
+# the weak arms share random_accepted.parquet, which isn't f"{arm}.parquet".
+ARM_EXTRA_FILE: dict[str, str] = {
+    "mined": "mined.parquet",
+    "random": "random.parquet",
+    "graph": "graph.parquet",
+    "rate": "rate.parquet",
+    "strat": "strat.parquet",
+    "rate_strat": "rate_strat.parquet",
+    "graph_rate": "graph_rate.parquet",
+    "graph_rate_night": "graph_rate_night.parquet",
+    "weak_random": "random_accepted.parquet",
+    "weak_random_gt": "random_accepted.parquet",
+}
+
 
 def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any], arm: str) -> set[str]:
     """The train-frame token set for one arm."""
@@ -44,19 +60,7 @@ def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any]
     )
     if arm == "baseline":
         return baseline
-    extra_file = {
-        "mined": "mined.parquet",
-        "random": "random.parquet",
-        "graph": "graph.parquet",
-        "rate": "rate.parquet",
-        "strat": "strat.parquet",
-        "rate_strat": "rate_strat.parquet",
-        "graph_rate": "graph_rate.parquet",
-        "graph_rate_night": "graph_rate_night.parquet",
-        "weak_random": "random_accepted.parquet",
-        "weak_random_gt": "random_accepted.parquet",
-    }[arm]
-    extra = set(pd.read_parquet(state_dir / extra_file)["sample_data_token"])
+    extra = set(pd.read_parquet(state_dir / ARM_EXTRA_FILE[arm])["sample_data_token"])
     return baseline | extra
 
 
@@ -173,6 +177,7 @@ def run_arm(
     record = {
         "n_train_images": stats.get("train_images"),
         "val_images": stats.get("val_images"),
+        "n_boxes": stats.get("boxes"),
         "run_name": summary["run_name"],
         "best_weights": str(summary["best_weights"]),
         "overall": report["overall"],

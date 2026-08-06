@@ -1107,6 +1107,26 @@ def test_arm_composition_reads_state(tmp_path: Path) -> None:
     assert arm_composition(state, tmp_path / "missing") == {}
 
 
+def test_arm_composition_computed_for_weak_arms(tmp_path: Path) -> None:
+    """weak_random/weak_random_gt's frame source is random_accepted.parquet, not
+    f"{arm}.parquet" — composition must resolve that through the same ARM_EXTRA_FILE
+    map resolve_arm_frames uses, or Task 9's write-up gets blank composition cells."""
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
+    processed = tmp_path / "processed"
+    _write_samples(processed, {"s0": False, "s1": True}, rain_scenes={"s1"})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"sample_data_token": ["s0-CAM_FRONT-0", "s1-CAM_FRONT-0", "s1-CAM_FRONT-1"]}
+    ).to_parquet(state / "random_accepted.parquet", index=False)
+
+    composition = arm_composition(state, processed)
+    expected = {"n_scenes": 2, "night_share": round(2 / 3, 3), "rain_share": round(2 / 3, 3)}
+    assert composition["weak_random"] == expected
+    assert composition["weak_random_gt"] == expected  # same accepted set -> same composition
+
+
 def test_run_report_writes_markdown(tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.report import run_report
 

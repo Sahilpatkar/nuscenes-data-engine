@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -618,6 +619,213 @@ def test_weak_arms_registered_and_share_accepted_frames(tmp_path: Path) -> None:
     weak = resolve_arm_frames(state, processed, cfg, "weak_random")
     weak_gt = resolve_arm_frames(state, processed, cfg, "weak_random_gt")
     assert weak == weak_gt == {"bl-1", "bl-2", "p-1"}  # identical frame sets
+
+
+# ---------------------------------------------------------------------------
+# build_yolo_dataset end-to-end seam: the real builder, not just the helpers.
+#
+# Everything below needs the nuScenes devkit's official train/val scene split, since
+# the builder derives `split` from `create_splits_scenes()` (see dataset.py). scene-0001
+# is an official train scene, scene-0003 an official val scene — same pair test_training.py
+# uses.
+# ---------------------------------------------------------------------------
+
+_SEAM_TRAIN_SCENE = "scene-0001"
+_SEAM_VAL_SCENE = "scene-0003"
+
+
+def _write_seam_fixture(processed_dir: Path, dataroot: Path) -> None:
+    """Real-schema samples/annotations for the pseudo-label seam end-to-end tests.
+
+    Four frames:
+      t-pseudo: train, GT=car, accepted with a pseudo box (truck) -> pseudo wins outright.
+      t-empty:  train, GT=pedestrian, accepted but the detector found nothing -> background.
+      t-plain:  train, GT=bus, not accepted -> GT must survive untouched.
+      v-1:      val, GT=car -> must never be touched by pseudo labels.
+    """
+    frames = [
+        ("t-pseudo", _SEAM_TRAIN_SCENE, "car"),
+        ("t-empty", _SEAM_TRAIN_SCENE, "pedestrian"),
+        ("t-plain", _SEAM_TRAIN_SCENE, "bus"),
+        ("v-1", _SEAM_VAL_SCENE, "car"),
+    ]
+    (dataroot / "samples" / "CAM_FRONT").mkdir(parents=True, exist_ok=True)
+    rows_img, rows_ann = [], []
+    for token, scene, gt_class in frames:
+        fname = f"samples/CAM_FRONT/{token}.jpg"
+        (dataroot / fname).write_bytes(b"\xff\xd8\xff")  # tiny fake jpeg
+        rows_img.append(
+            {
+                "sample_data_token": token, "sample_token": f"s-{token}", "channel": "CAM_FRONT",
+                "filename": fname, "width": 1600, "height": 900, "timestamp": 0, "n_boxes": 1,
+                "scene_token": scene, "scene_name": scene, "scene_description": "x",
+                "log_token": "l", "location": "singapore-onenorth", "is_night": False,
+                "is_rain": False,
+            }
+        )
+        rows_ann.append(
+            {
+                "annotation_token": f"ann-{token}", "sample_data_token": token,
+                "sample_token": f"s-{token}", "channel": "CAM_FRONT",
+                "category_name": f"gt.{gt_class}", "category_group": gt_class,
+                "visibility_token": "4", "num_lidar_pts": 5, "num_radar_pts": 1,
+                "x_min": 100.0, "y_min": 200.0, "x_max": 300.0, "y_max": 400.0,
+                "bbox_area": 40000.0, "scene_token": scene, "scene_name": scene,
+                "scene_description": "x", "log_token": "l", "location": "singapore-onenorth",
+                "is_night": False, "is_rain": False,
+            }
+        )
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows_img).to_parquet(processed_dir / "samples.parquet")
+    pd.DataFrame(rows_ann).to_parquet(processed_dir / "annotations.parquet")
+
+
+def test_build_yolo_dataset_pseudo_seam_end_to_end(tmp_path: Path) -> None:
+    """Builds two REAL datasets (pseudo vs. GT) and inspects the label files on disk.
+
+    Only the dataset-builder helpers (_apply_pseudo_labels, _build_key) are covered by
+    the other tests in this file. If someone moved the _apply_pseudo_labels call to the
+    wrong spot in build_yolo_dataset, or dropped `pseudo_labels=pseudo_labels` from its
+    _build_key(...) call, every one of those helper tests would still pass while the
+    published arm comparison silently used the wrong labels. This test exercises the
+    real seam to catch that class of mistake.
+    """
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.ingestion.categories import CLASS_TO_INDEX
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [50.0], "y_min": [60.0], "x_max": [150.0], "y_max": [260.0],
+            "score": [0.85],
+        }
+    )
+    pseudo_tokens = {"t-pseudo", "t-empty"}  # both accepted; only t-pseudo has detections
+
+    pseudo_out = tmp_path / "yolo_pseudo"
+    _, pseudo_stats = build_yolo_dataset(
+        processed, dataroot, pseudo_out, cameras=["CAM_FRONT"],
+        pseudo_labels=pseudo_labels, pseudo_tokens=pseudo_tokens,
+    )
+    gt_out = tmp_path / "yolo_gt"
+    _, gt_stats = build_yolo_dataset(processed, dataroot, gt_out, cameras=["CAM_FRONT"])
+
+    # Same 4 frames either way (pseudo labels never change which frames are included) —
+    # only t-empty's box count changes (1 GT box -> 0, a background), which is the
+    # measurable effect of "accepted but the detector found nothing".
+    assert pseudo_stats["train_images"] == gt_stats["train_images"] == 3
+    assert pseudo_stats["val_images"] == gt_stats["val_images"] == 1
+    assert pseudo_stats["boxes"] == 3 and gt_stats["boxes"] == 4
+
+    # Accepted frame WITH a pseudo row -> only the pseudo class, no GT (car) lines.
+    pseudo_lines = (pseudo_out / "labels" / "train" / "t-pseudo.txt").read_text().splitlines()
+    assert pseudo_lines  # not empty
+    classes = {line.split()[0] for line in pseudo_lines}
+    assert classes == {str(CLASS_TO_INDEX["truck"])}
+    assert str(CLASS_TO_INDEX["car"]) not in classes
+
+    # Accepted frame with GT but ZERO pseudo rows -> empty label file (background).
+    empty_label = (pseudo_out / "labels" / "train" / "t-empty.txt").read_text()
+    assert empty_label == ""
+
+    # Non-accepted train frame -> GT unchanged (identical to a plain GT build).
+    plain_pseudo = (pseudo_out / "labels" / "train" / "t-plain.txt").read_text()
+    plain_gt = (gt_out / "labels" / "train" / "t-plain.txt").read_text()
+    assert plain_pseudo == plain_gt
+    assert plain_pseudo.split()[0] == str(CLASS_TO_INDEX["bus"])
+
+    # Val must stay byte-identical between the pseudo build and the GT build.
+    val_pseudo = (pseudo_out / "labels" / "val" / "v-1.txt").read_bytes()
+    val_gt = (gt_out / "labels" / "val" / "v-1.txt").read_bytes()
+    assert val_pseudo == val_gt
+
+    # The two builds' manifest keys must differ (distinct cache identity).
+    pseudo_key = json.loads((pseudo_out / ".build_manifest.json").read_text())["key"]
+    gt_key = json.loads((gt_out / ".build_manifest.json").read_text())["key"]
+    assert pseudo_key != gt_key
+    assert "pseudo_labels" in pseudo_key and "pseudo_labels" not in gt_key
+
+
+def test_build_yolo_dataset_pseudo_labels_without_tokens_raises(tmp_path: Path) -> None:
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [0.0], "y_min": [0.0], "x_max": [10.0], "y_max": [10.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="pseudo_tokens"):
+        build_yolo_dataset(
+            processed, dataroot, tmp_path / "yolo_notokens", cameras=["CAM_FRONT"],
+            pseudo_labels=pseudo_labels,
+        )
+
+
+def test_build_yolo_dataset_rejects_val_token_in_pseudo_tokens(tmp_path: Path) -> None:
+    """The val split must stay identical across arms; a val token in pseudo_tokens
+
+    would silently delete that frame's GT in the pseudo build only — merge_results
+    only compares val_images counts, so nothing else would catch this.
+    """
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [0.0], "y_min": [0.0], "x_max": [10.0], "y_max": [10.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="val split"):
+        build_yolo_dataset(
+            processed, dataroot, tmp_path / "yolo_leak", cameras=["CAM_FRONT"],
+            pseudo_labels=pseudo_labels, pseudo_tokens={"t-pseudo", "v-1"},
+        )
+
+
+def test_build_key_changes_with_pseudo_tokens() -> None:
+    """Same pseudo table, different accepted set -> different key.
+
+    pseudo_tokens co-determines which GT rows disappear (including accepted-but-empty
+    frames that contribute no rows to pseudo_labels), so it must be hashed into the
+    cache key independently of the table's content hash.
+    """
+    pytest.importorskip("nuscenes")
+    import nuscenes_data_engine.training.dataset as dataset_mod
+    from nuscenes_data_engine.training.dataset import _build_key
+
+    original = dataset_mod.compute_data_version
+    dataset_mod.compute_data_version = lambda _: "v0"  # type: ignore[assignment]
+    try:
+        pseudo = pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["car"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        )
+        key_a = _build_key(
+            Path("x"), ["CAM_FRONT"], None, pseudo_labels=pseudo, pseudo_tokens={"f1"}
+        )
+        key_b = _build_key(
+            Path("x"), ["CAM_FRONT"], None, pseudo_labels=pseudo, pseudo_tokens={"f1", "f2"}
+        )
+    finally:
+        dataset_mod.compute_data_version = original  # type: ignore[assignment]
+
+    assert key_a["pseudo_tokens"] != key_b["pseudo_tokens"]
 
 
 def test_apply_pseudo_labels_replaces_gt_for_those_tokens_only() -> None:
