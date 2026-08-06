@@ -2,9 +2,13 @@
 
 Arms: ``baseline`` (25% train scenes) plus baseline-and-extra-frames arms —
 ``mined``/``random``/``graph`` from round 1 and ``rate``/``strat``/``rate_strat``
-from round 2 (see docs/superpowers/specs/2026-08-02-al-round-2-design.md). Each arm
-gets its own YOLO dataset dir and run-name suffix; the val split is identical
-across arms by construction and asserted at result-merge time.
+from round 2 (see docs/superpowers/specs/2026-08-02-al-round-2-design.md). Plus the
+weak-supervision pair ``weak_random``/``weak_random_gt``, which trains on the SAME
+frame set (the ``random`` arm's accepted set) but with pseudo labels vs. ground truth
+respectively — isolating label quality from frame count (see
+docs/superpowers/specs/2026-08-06-vlm-weak-supervision-design.md). Each arm gets its
+own YOLO dataset dir and run-name suffix; the val split is identical across arms by
+construction and asserted at result-merge time.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ ARMS = (
     "baseline", "mined", "random", "graph",
     "rate", "strat", "rate_strat",
     "graph_rate", "graph_rate_night",
+    "weak_random", "weak_random_gt",
 )
 
 
@@ -48,6 +53,8 @@ def resolve_arm_frames(state_dir: Path, processed_dir: Path, cfg: dict[str, Any]
         "rate_strat": "rate_strat.parquet",
         "graph_rate": "graph_rate.parquet",
         "graph_rate_night": "graph_rate_night.parquet",
+        "weak_random": "random_accepted.parquet",
+        "weak_random_gt": "random_accepted.parquet",
     }[arm]
     extra = set(pd.read_parquet(state_dir / extra_file)["sample_data_token"])
     return baseline | extra
@@ -110,12 +117,31 @@ def run_arm(
 
     arm_dir = state_dir / "arms" / arm
     arm_dir.mkdir(parents=True, exist_ok=True)
+
+    pseudo_labels = None
+    pseudo_tokens = None
+    if arm == "weak_random":
+        pseudo_path = state_dir / "random_pseudo_labels.parquet"
+        if not pseudo_path.is_file():
+            raise ValueError(
+                f"Arm {arm!r} needs {pseudo_path} — run `al pseudo-label --arm random` first"
+            )
+        pseudo_labels = pd.read_parquet(pseudo_path)
+        # Every accepted frame is pseudo-labelled, including those the detector found
+        # nothing in — those have no rows in the table, so the token set comes from
+        # accepted.parquet or their ground truth would survive into a "no GT" arm.
+        pseudo_tokens = set(
+            pd.read_parquet(state_dir / "random_accepted.parquet")["sample_data_token"]
+        )
+
     data_yaml, stats = build_yolo_dataset(
         processed,
         Path(settings.nuscenes_dataroot),
         arm_dir / "yolo",
         cameras=[channel],
         train_frames=tokens,
+        pseudo_labels=pseudo_labels,
+        pseudo_tokens=pseudo_tokens,
         force=force_rebuild,
     )
 

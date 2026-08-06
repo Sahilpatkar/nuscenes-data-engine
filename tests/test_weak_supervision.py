@@ -589,6 +589,37 @@ def test_build_key_changes_with_pseudo_labels() -> None:
     assert pseudo_a["pseudo_labels"] != pseudo_b["pseudo_labels"]  # content-sensitive
 
 
+def test_weak_arms_registered_and_share_accepted_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import ARMS, resolve_arm_frames
+
+    assert {"weak_random", "weak_random_gt"} <= set(ARMS)
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["bl-1", "bl-2", "p-1", "p-2"],
+            "scene_name": ["bl", "bl", "pool", "pool"],
+            "channel": ["CAM_FRONT"] * 4,
+            "filename": ["a.jpg", "b.jpg", "c.jpg", "d.jpg"],
+            "is_night": [False] * 4,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame({"scene_name": ["bl", "pool"], "role": ["baseline", "pool"]}).to_parquet(
+        state / "split.parquet", index=False
+    )
+    pd.DataFrame({"sample_data_token": ["p-1"]}).to_parquet(
+        state / "random_accepted.parquet", index=False
+    )
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    weak = resolve_arm_frames(state, processed, cfg, "weak_random")
+    weak_gt = resolve_arm_frames(state, processed, cfg, "weak_random_gt")
+    assert weak == weak_gt == {"bl-1", "bl-2", "p-1"}  # identical frame sets
+
+
 def test_apply_pseudo_labels_replaces_gt_for_those_tokens_only() -> None:
     from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
 
