@@ -562,3 +562,84 @@ def test_run_pseudo_label_rejects_val_frames(
             config, weak_config, arm="random", weights=tmp_path / "best.pt",
             processed_dir=processed, device="cpu",
         )
+
+
+def test_build_key_changes_with_pseudo_labels() -> None:
+    pytest.importorskip("nuscenes")
+    import nuscenes_data_engine.training.dataset as dataset_mod
+    from nuscenes_data_engine.training.dataset import _build_key
+
+    original = dataset_mod.compute_data_version
+    dataset_mod.compute_data_version = lambda _: "v0"  # type: ignore[assignment]
+    try:
+        kwargs: dict[str, Any] = {"cameras": ["CAM_FRONT"], "limit_scenes": None}
+        plain = _build_key(Path("x"), **kwargs)
+        pseudo_a = _build_key(Path("x"), **kwargs, pseudo_labels=pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["car"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        ))
+        pseudo_b = _build_key(Path("x"), **kwargs, pseudo_labels=pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["truck"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        ))
+    finally:
+        dataset_mod.compute_data_version = original  # type: ignore[assignment]
+
+    assert "pseudo_labels" not in plain  # pre-existing manifests keep matching
+    assert pseudo_a["pseudo_labels"] != pseudo_b["pseudo_labels"]  # content-sensitive
+
+
+def test_apply_pseudo_labels_replaces_gt_for_those_tokens_only() -> None:
+    from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
+
+    gt = pd.DataFrame(
+        {
+            "sample_data_token": ["f1", "f1", "f2"],
+            "category_group": ["car", "pedestrian", "bus"],
+            "x_min": [0.0, 1.0, 2.0], "y_min": [0.0, 1.0, 2.0],
+            "x_max": [10.0, 11.0, 12.0], "y_max": [10.0, 11.0, 12.0],
+        }
+    )
+    pseudo = pd.DataFrame(
+        {
+            "sample_data_token": ["f1"], "category_group": ["truck"],
+            "x_min": [5.0], "y_min": [5.0], "x_max": [15.0], "y_max": [15.0],
+            "score": [0.9],
+        }
+    )
+    merged = _apply_pseudo_labels(gt, pseudo, {"f1"})
+    f1 = merged[merged["sample_data_token"] == "f1"]
+    assert list(f1["category_group"]) == ["truck"]  # GT rows for f1 replaced
+    f2 = merged[merged["sample_data_token"] == "f2"]
+    assert list(f2["category_group"]) == ["bus"]  # untouched
+    assert set(gt.columns) <= set(merged.columns)  # schema preserved for the builder
+
+
+def test_apply_pseudo_labels_accepted_but_empty_frame_loses_its_gt() -> None:
+    """An accepted frame the detector found nothing in must train as a background.
+
+    Its GT must NOT survive: the arm's whole claim is that these frames carry no
+    ground truth. Deriving the replacement key from the pseudo table (which has no
+    rows for such a frame) would silently leave the GT in place.
+    """
+    from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
+
+    gt = pd.DataFrame(
+        {
+            "sample_data_token": ["empty", "other"],
+            "category_group": ["pedestrian", "car"],
+            "x_min": [0.0, 2.0], "y_min": [0.0, 2.0],
+            "x_max": [10.0, 12.0], "y_max": [10.0, 12.0],
+        }
+    )
+    pseudo = pd.DataFrame(
+        {
+            "sample_data_token": pd.Series([], dtype=str),
+            "category_group": pd.Series([], dtype=str),
+            "x_min": pd.Series([], dtype=float), "y_min": pd.Series([], dtype=float),
+            "x_max": pd.Series([], dtype=float), "y_max": pd.Series([], dtype=float),
+        }
+    )
+    merged = _apply_pseudo_labels(gt, pseudo, {"empty"})
+    assert "empty" not in set(merged["sample_data_token"])  # trains as a background
+    assert list(merged[merged["sample_data_token"] == "other"]["category_group"]) == ["car"]
