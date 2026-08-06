@@ -83,3 +83,71 @@ def verify_frames(
         "rejected_by_class": dict(rejected_by_class),
     }
     return accepted, diagnostics
+
+
+def boxes_to_rows(
+    token: str,
+    xyxy: Any,
+    classes: Any,
+    scores: Any,
+) -> list[dict[str, Any]]:
+    """One detector frame's boxes as annotations-schema rows (pixel xyxy + score)."""
+    from nuscenes_data_engine.ingestion.categories import DETECTION_CLASSES
+
+    return [
+        {
+            "sample_data_token": token,
+            "category_group": DETECTION_CLASSES[int(cls)],
+            "x_min": float(box[0]),
+            "y_min": float(box[1]),
+            "x_max": float(box[2]),
+            "y_max": float(box[3]),
+            "score": float(score),
+        }
+        for box, cls, score in zip(xyxy, classes, scores, strict=True)
+    ]
+
+
+def propose_boxes(
+    weights: Path,
+    frames: pd.DataFrame,
+    dataroot: Path,
+    *,
+    conf: float,
+    imgsz: int,
+    device: str,
+    batch_size: int,
+) -> pd.DataFrame:
+    """Run the baseline detector over ``frames`` (needs GPU + ultralytics + images).
+
+    ``frames`` needs ``sample_data_token`` and ``filename``. Returns annotations-schema
+    rows for every detection at or above ``conf`` — frames with no detection simply
+    contribute no rows (a valid empty/background label file downstream).
+    """
+    from nuscenes_data_engine.training.runtime import configure_ultralytics
+
+    configure_ultralytics()  # before importing ultralytics
+    from ultralytics import YOLO
+
+    model = YOLO(str(weights))
+    rows: list[dict[str, Any]] = []
+    records = frames.to_dict("records")
+    for start in range(0, len(records), batch_size):
+        batch = records[start : start + batch_size]
+        paths = [str(dataroot / r["filename"]) for r in batch]
+        results = model.predict(paths, imgsz=imgsz, conf=conf, device=device, verbose=False)
+        for record, result in zip(batch, results, strict=True):
+            boxes = result.boxes
+            if not len(boxes):
+                continue
+            rows.extend(
+                boxes_to_rows(
+                    str(record["sample_data_token"]),
+                    boxes.xyxy.cpu().numpy(),
+                    boxes.cls.cpu().numpy().astype(int),
+                    boxes.conf.cpu().numpy(),
+                )
+            )
+        if (start // batch_size) % 10 == 0:
+            logger.info("Proposing: %d/%d frames", min(start + batch_size, len(records)), len(records))
+    return pd.DataFrame(rows)

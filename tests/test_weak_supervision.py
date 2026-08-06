@@ -91,3 +91,32 @@ def test_verify_frames_is_deterministic_and_sorted() -> None:
     vlm = {t: _labels(cars=1) for t in ("f3", "f1", "f2")}
     accepted, _ = verify_frames(det, vlm, tolerance=1)
     assert accepted == ["f1", "f2", "f3"]
+
+
+def test_boxes_to_rows_projects_to_annotations_schema() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    rows = boxes_to_rows(
+        "f1",
+        np.array([[10.0, 20.0, 110.0, 220.0], [0.0, 0.0, 50.0, 50.0]]),
+        np.array([0, 3]),  # car, pedestrian (CLASS_TO_INDEX order)
+        np.array([0.9, 0.7]),
+    )
+    assert [r["category_group"] for r in rows] == ["car", "pedestrian"]
+    assert rows[0]["sample_data_token"] == "f1"
+    assert (rows[0]["x_min"], rows[0]["y_min"]) == (10.0, 20.0)
+    assert (rows[0]["x_max"], rows[0]["y_max"]) == (110.0, 220.0)
+    assert rows[0]["score"] == pytest.approx(0.9)
+    assert set(rows[0]) == {
+        "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+    }
+
+
+def test_boxes_to_rows_empty_frame_yields_no_rows() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    assert boxes_to_rows("f1", np.zeros((0, 4)), np.zeros(0, int), np.zeros(0)) == []
