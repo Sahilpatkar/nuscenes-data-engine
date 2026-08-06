@@ -1,0 +1,21 @@
+# Phase 6b config reused for weak supervision: identical labelling, separate state dir
+# so the original 5,000-frame run's sample/batches/results/labels are never touched.
+# The sample is written by `al pseudo-sample --arm <arm>`, not `autolabel sample`.
+provider: local
+
+models:
+  primary: claude-haiku-4-5
+  comparison: claude-opus-4-8
+
+local:
+  base_url: http://localhost:8399/v1
+  model: Qwen/Qwen2.5-VL-7B-Instruct
+  concurrency: 8
+
+batch:
+  chunk_size: 500
+  max_batch_bytes: 190000000
+  max_tokens: 800
+
+state:
+  dir: data/active_learning/autolabel_weak

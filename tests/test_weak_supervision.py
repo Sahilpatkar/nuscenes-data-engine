@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -156,3 +157,53 @@ def test_boxes_to_rows_empty_frame_yields_no_rows() -> None:
     from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
 
     assert boxes_to_rows("f1", np.zeros((0, 4)), np.zeros(0, int), np.zeros(0)) == []
+
+
+def test_build_weak_sample_selects_only_unlabelled_arm_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b", "c"],
+            "sample_token": ["sa", "sb", "sc"],
+            "channel": ["CAM_FRONT"] * 3,
+            "filename": ["a.jpg", "b.jpg", "c.jpg"],
+            "width": [1600] * 3,
+            "height": [900] * 3,
+            "timestamp": [1, 2, 3],
+            "n_boxes": [1, 2, 3],
+            "scene_token": ["s1"] * 3,
+            "scene_name": ["scene-0001"] * 3,
+            "scene_description": ["x"] * 3,
+            "log_token": ["l1"] * 3,
+            "location": ["boston-seaport"] * 3,
+            "is_night": [False] * 3,
+            "is_rain": [False] * 3,
+        }
+    )
+    arm_tokens = ["a", "b", "c"]
+    already = pd.DataFrame({"sample_data_token": ["b"], "parse_status": ["ok"]})
+
+    weak = build_weak_sample(samples, arm_tokens, already)
+    assert list(weak["sample_data_token"]) == ["a", "c"]  # 'b' already labelled
+    # Columns the 6b submit path reads must all be present.
+    for column in ("filename", "sample_token", "scene_name", "present", "in_opus_subset"):
+        assert column in weak.columns
+    assert weak["present"].all() and not weak["in_opus_subset"].any()
+
+
+def test_build_weak_sample_relabels_unparsed_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    )
+    already = pd.DataFrame({"sample_data_token": ["a"], "parse_status": ["error"]})
+    weak = build_weak_sample(samples, ["a"], already)
+    assert list(weak["sample_data_token"]) == ["a"]  # unparsed -> label again

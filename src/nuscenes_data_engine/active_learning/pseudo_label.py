@@ -178,3 +178,66 @@ def propose_boxes(
         if (start // batch_size) % 10 == 0:
             logger.info("Proposing: %d/%d frames", min(start + batch_size, len(records)), len(records))
     return pd.DataFrame(rows)
+
+
+def build_weak_sample(
+    samples: pd.DataFrame, arm_tokens: list[str], existing_labels: pd.DataFrame | None
+) -> pd.DataFrame:
+    """The arm frames still needing a VLM label, in Phase 6b's ``sample.parquet`` shape.
+
+    Frames already labelled with ``parse_status == 'ok'`` are skipped; unparsed ones are
+    re-labelled. The extra columns (``present``/``in_opus_subset``/``stratum``) exist so
+    the unchanged 6b submit/collect path can consume this table.
+    """
+    labelled: set[str] = set()
+    if existing_labels is not None and len(existing_labels):
+        ok = existing_labels[existing_labels["parse_status"] == "ok"]
+        labelled = set(ok["sample_data_token"])
+    wanted = [t for t in arm_tokens if t not in labelled]
+    weak = samples[samples["sample_data_token"].isin(wanted)].copy()
+    weak["present"] = True
+    weak["in_opus_subset"] = False
+    weak["stratum"] = "weak-supervision"
+    return weak.sort_values("sample_data_token", ignore_index=True)
+
+
+def run_pseudo_sample(
+    config_path: Path, weak_config_path: Path, *, arm: str, processed_dir: Path | None = None
+) -> dict[str, Any]:
+    """Write ``sample.parquet`` (6b shape) for the arm frames still needing VLM labels."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+
+    cfg = load_yaml(config_path)
+    weak_cfg = load_yaml(weak_config_path)
+    settings = get_settings()
+    state_dir = Path(cfg.get("state", {}).get("dir", "data/active_learning"))
+    processed = processed_dir or Path("data/processed")
+    weak_state = Path(weak_cfg.get("state", {}).get("dir", "data/active_learning/autolabel_weak"))
+
+    arm_path = state_dir / f"{arm}.parquet"
+    if not arm_path.is_file():
+        raise ValueError(f"No mined frames for arm {arm!r} at {arm_path}")
+    arm_tokens = list(pd.read_parquet(arm_path)["sample_data_token"])
+
+    samples = pd.read_parquet(processed / "samples.parquet")
+    labels_path = Path(settings.data_dir) / "autolabel" / "labels.parquet"
+    existing = pd.read_parquet(labels_path) if labels_path.is_file() else None
+    weak_labels_path = weak_state / "labels.parquet"
+    if weak_labels_path.is_file():  # a previous weak run already labelled some
+        weak_existing = pd.read_parquet(weak_labels_path)
+        existing = weak_existing if existing is None else pd.concat([existing, weak_existing])
+
+    weak = build_weak_sample(samples, arm_tokens, existing)
+    weak_state.mkdir(parents=True, exist_ok=True)
+    weak.to_parquet(weak_state / "sample.parquet", index=False)
+    summary = {
+        "arm": arm,
+        "n_arm_frames": len(arm_tokens),
+        "n_needing_labels": len(weak),
+        "sample_parquet": str(weak_state / "sample.parquet"),
+    }
+    logger.info(
+        "Arm %s: %d/%d frames need VLM labels -> %s",
+        arm, len(weak), len(arm_tokens), weak_state / "sample.parquet",
+    )
+    return summary

@@ -610,6 +610,19 @@ def al_mine(
             )
 
 
+@al_app.command("pseudo-sample")
+def al_pseudo_sample(
+    arm: str = typer.Option(..., "--arm", help="Arm whose frames need VLM labels."),
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    weak_config: Path = typer.Option(Path("configs/autolabel_weak.yaml"), "--weak-config"),
+) -> None:
+    """Write the VLM sample for an arm's not-yet-labelled frames (step 1 of weak sup)."""
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_sample
+
+    summary = run_pseudo_sample(config, weak_config, arm=arm)
+    logger.info("Pseudo-sample: %s", summary)
+
+
 @al_app.command("graph-mine")
 def al_graph_mine(
     arm: str = typer.Option("graph", "--arm", help="graph | graph_rate | graph_rate_night."),
