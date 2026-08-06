@@ -33,6 +33,8 @@ VLM_TO_DETECTOR: dict[str, str] = {
 
 def detection_counts(boxes: pd.DataFrame) -> dict[str, dict[str, int]]:
     """Per-frame, per-detector-class box counts from an annotations-schema frame."""
+    if boxes.empty:
+        return {}
     counts: dict[str, dict[str, int]] = {}
     for token, group in boxes.groupby("sample_data_token")["category_group"]:
         counts[str(token)] = {str(k): int(v) for k, v in Counter(group).items()}
@@ -49,9 +51,15 @@ def verify_frames(
     A frame is accepted iff, for every mapped class, ``|detector - vlm| <= tolerance``.
     Frames with no VLM label, or whose label failed to parse, are rejected — the
     verifier can only vouch for what it actually saw.
+
+    ``accepted_mutual_zero_by_class`` counts accepted frames where detector and VLM both
+    reported zero of a class — agreement that may reflect a shared blind spot rather than
+    a true negative (6b measured pedestrian presence recall at 0.58), so it is reported
+    alongside retention rather than gating acceptance.
     """
     accepted: list[str] = []
     rejected_by_class: Counter[str] = Counter()
+    mutual_zero: Counter[str] = Counter()
     n_no_label = 0
     n_unparsed = 0
 
@@ -73,6 +81,11 @@ def verify_frames(
             rejected_by_class.update(disagreeing)
             continue
         accepted.append(token)
+        mutual_zero.update(
+            det_class
+            for vlm_field, det_class in VLM_TO_DETECTOR.items()
+            if det_counts[token].get(det_class, 0) == 0 and int(label[vlm_field]) == 0
+        )
 
     diagnostics = {
         "n_candidates": len(det_counts),
@@ -81,6 +94,7 @@ def verify_frames(
         "n_unparsed": n_unparsed,
         "retention": len(accepted) / len(det_counts) if det_counts else 0.0,
         "rejected_by_class": dict(rejected_by_class),
+        "accepted_mutual_zero_by_class": dict(mutual_zero),
     }
     return accepted, diagnostics
 
@@ -91,21 +105,34 @@ def boxes_to_rows(
     classes: Any,
     scores: Any,
 ) -> list[dict[str, Any]]:
-    """One detector frame's boxes as annotations-schema rows (pixel xyxy + score)."""
+    """One detector frame's boxes as annotations-schema rows (pixel xyxy + score).
+
+    NOTE: a checkpoint whose taxonomy merely *overlaps* ours (e.g. COCO, where class 0
+    is `person` and ours is `car`) cannot be detected here — the index is in range and
+    the mislabel is silent. Always pass a checkpoint fine-tuned on this taxonomy.
+    """
     from nuscenes_data_engine.ingestion.categories import DETECTION_CLASSES
 
-    return [
-        {
-            "sample_data_token": token,
-            "category_group": DETECTION_CLASSES[int(cls)],
-            "x_min": float(box[0]),
-            "y_min": float(box[1]),
-            "x_max": float(box[2]),
-            "y_max": float(box[3]),
-            "score": float(score),
-        }
-        for box, cls, score in zip(xyxy, classes, scores, strict=True)
-    ]
+    rows: list[dict[str, Any]] = []
+    for box, cls, score in zip(xyxy, classes, scores, strict=True):
+        index = int(cls)
+        if not 0 <= index < len(DETECTION_CLASSES):
+            raise ValueError(
+                f"class index {index} out of range for {DETECTION_CLASSES} — "
+                "wrong weights file (not fine-tuned on this taxonomy)?"
+            )
+        rows.append(
+            {
+                "sample_data_token": token,
+                "category_group": DETECTION_CLASSES[index],
+                "x_min": float(box[0]),
+                "y_min": float(box[1]),
+                "x_max": float(box[2]),
+                "y_max": float(box[3]),
+                "score": float(score),
+            }
+        )
+    return rows
 
 
 def propose_boxes(

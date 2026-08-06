@@ -23,6 +23,13 @@ def test_vlm_to_detector_covers_every_detector_class() -> None:
     assert "construction_vehicles" not in VLM_TO_DETECTOR
 
 
+def test_detection_counts_empty_inputs_return_empty() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import detection_counts
+
+    assert detection_counts(pd.DataFrame([])) == {}  # column-less: propose_boxes' empty shape
+    assert detection_counts(pd.DataFrame({"sample_data_token": [], "category_group": []})) == {}
+
+
 def test_detection_counts_per_frame_and_class() -> None:
     boxes = pd.DataFrame(
         {
@@ -78,12 +85,32 @@ def test_verify_frames_zero_detections_matches_zero_counts() -> None:
 
 
 def test_verify_frames_rejects_missing_or_unparsed_labels() -> None:
-    det = {"f1": {"car": 1}, "f2": {"car": 1}}
-    vlm = {"f2": _labels(cars=1, parse_status="error")}  # f1 absent, f2 unparsed
+    det = {"f1": {"car": 1}, "f2": {"car": 1}, "f3": {"car": 1}}
+    vlm = {"f3": _labels(cars=1, parse_status="error")}  # f1, f2 absent; f3 unparsed
     accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
     assert accepted == []
-    assert diagnostics["n_no_label"] == 1
+    assert diagnostics["n_no_label"] == 2
     assert diagnostics["n_unparsed"] == 1
+
+
+def test_verify_frames_mapping_is_not_permutable() -> None:
+    """Distinct nonzero counts per class, so a swapped mapping cannot pass."""
+    det = {"f1": {"car": 1, "truck": 2, "bus": 3, "pedestrian": 4, "bicycle": 5}}
+    vlm = {"f1": _labels(cars=1, trucks=2, buses=3, pedestrians=4, bicycles=5)}
+    assert verify_frames(det, vlm, tolerance=0)[0] == ["f1"]
+    swapped = {"f1": _labels(cars=1, trucks=3, buses=2, pedestrians=4, bicycles=5)}
+    assert verify_frames(det, swapped, tolerance=0)[0] == []
+
+
+def test_verify_frames_reports_mutual_zero_agreement() -> None:
+    det = {"f1": {"car": 2}, "f2": {"car": 1, "pedestrian": 1}}
+    vlm = {"f1": _labels(cars=2), "f2": _labels(cars=1, pedestrians=1)}
+    accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
+    assert accepted == ["f1", "f2"]
+    # f1 has neither detector nor VLM pedestrians -> the blind-spot bucket; f2 has both.
+    assert diagnostics["accepted_mutual_zero_by_class"]["pedestrian"] == 1
+    assert diagnostics["accepted_mutual_zero_by_class"]["bus"] == 2  # neither frame has buses
+    assert "car" not in diagnostics["accepted_mutual_zero_by_class"]
 
 
 def test_verify_frames_is_deterministic_and_sorted() -> None:
@@ -112,6 +139,15 @@ def test_boxes_to_rows_projects_to_annotations_schema() -> None:
     assert set(rows[0]) == {
         "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
     }
+
+
+def test_boxes_to_rows_rejects_out_of_taxonomy_class_index() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    with pytest.raises(ValueError, match="wrong weights file"):
+        boxes_to_rows("f1", np.array([[0.0, 0.0, 1.0, 1.0]]), np.array([79]), np.array([0.9]))
 
 
 def test_boxes_to_rows_empty_frame_yields_no_rows() -> None:
