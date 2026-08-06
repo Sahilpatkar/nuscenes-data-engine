@@ -325,3 +325,185 @@ def test_run_pseudo_sample_rejects_tokens_missing_from_samples(
 
     with pytest.raises(ValueError, match="missing from samples"):
         run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+
+
+def test_run_pseudo_label_writes_accepted_and_pseudo_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))  # no 6b labels
+
+    # Arm has three frames; f1 agrees, f2 disagrees on pedestrians, f3 has no label.
+    pd.DataFrame({"sample_data_token": ["f1", "f2", "f3"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["f1", "f2", "f3"],
+            "filename": ["f1.jpg", "f2.jpg", "f3.jpg"],
+            "channel": ["CAM_FRONT"] * 3,
+            "scene_name": ["scene-0001"] * 3,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    pd.DataFrame(
+        [
+            {**base, "sample_data_token": "f1", "cars": 2, "pedestrians": 1},
+            {**base, "sample_data_token": "f2", "cars": 2, "pedestrians": 9},
+        ]
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+
+    def _fake_propose(weights, frames, dataroot, **kwargs):
+        return pd.DataFrame(
+            [
+                {"sample_data_token": "f1", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+                {"sample_data_token": "f1", "category_group": "car",
+                 "x_min": 20.0, "y_min": 0.0, "x_max": 30.0, "y_max": 10.0, "score": 0.8},
+                {"sample_data_token": "f1", "category_group": "pedestrian",
+                 "x_min": 5.0, "y_min": 5.0, "x_max": 9.0, "y_max": 25.0, "score": 0.7},
+                {"sample_data_token": "f2", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+                {"sample_data_token": "f2", "category_group": "car",
+                 "x_min": 20.0, "y_min": 0.0, "x_max": 30.0, "y_max": 10.0, "score": 0.8},
+                {"sample_data_token": "f3", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+            ]
+        )
+
+    monkeypatch.setattr(pl, "propose_boxes", _fake_propose)
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})  # devkit-free
+
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "state": {"dir": str(state)},
+                "pseudo": {"conf": 0.5, "tolerance": 1, "imgsz": 640, "batch": 32},
+                "train": {"imgsz": 640},
+            }
+        )
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    summary = pl.run_pseudo_label(
+        config, weak_config, arm="random", weights=tmp_path / "best.pt",
+        processed_dir=processed, device="cpu",
+    )
+
+    assert summary["n_accepted"] == 1  # only f1
+    assert summary["retention"] == pytest.approx(1 / 3)
+    accepted = pd.read_parquet(state / "random_accepted.parquet")
+    assert list(accepted["sample_data_token"]) == ["f1"]
+    pseudo = pd.read_parquet(state / "random_pseudo_labels.parquet")
+    assert set(pseudo["sample_data_token"]) == {"f1"}  # rejected frames' boxes dropped
+    assert len(pseudo) == 3
+
+
+def test_run_pseudo_label_empty_acceptance_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["f1"]}).to_parquet(state / "random.parquet", index=False)
+    pd.DataFrame(
+        {"sample_data_token": ["f1"], "filename": ["f1.jpg"], "channel": ["CAM_FRONT"],
+         "scene_name": ["scene-0001"]}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    pd.DataFrame(
+        [{"sample_data_token": "f1", "parse_status": "error"}]
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+
+    monkeypatch.setattr(
+        pl, "propose_boxes",
+        lambda *a, **k: pd.DataFrame(
+            [{"sample_data_token": "f1", "category_group": "car",
+              "x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0, "score": 0.9}]
+        ),
+    )
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})  # devkit-free
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="no frames survived"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )
+
+
+def test_run_pseudo_label_rejects_val_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A val frame in the accepted set would corrupt every arm's comparison."""
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["v1"]}).to_parquet(state / "random.parquet", index=False)
+    pd.DataFrame(
+        {"sample_data_token": ["v1"], "filename": ["v1.jpg"], "channel": ["CAM_FRONT"],
+         "scene_name": ["scene-0003"]}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    pd.DataFrame([{**base, "sample_data_token": "v1", "cars": 1}]).to_parquet(
+        weak_state / "labels.parquet", index=False
+    )
+    monkeypatch.setattr(
+        pl, "propose_boxes",
+        lambda *a, **k: pd.DataFrame(
+            [{"sample_data_token": "v1", "category_group": "car",
+              "x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0, "score": 0.9}]
+        ),
+    )
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-0003"})  # v1 IS val
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="val split"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )

@@ -33,6 +33,12 @@ graph_mining:              # graph arms: GDS Louvain over the pool's SIMILAR_TO 
     graph_rate:       {weighting: rate_mass}
     graph_rate_night: {weighting: rate_mass, quotas: {is_night: 375}}
 
+pseudo:                    # weak supervision (docs/superpowers/specs/2026-08-06-vlm-weak-supervision-design.md)
+  conf: 0.5                # detector confidence floor for proposed boxes
+  tolerance: 1             # |detector - VLM| count tolerance, per mapped class
+  imgsz: 640               # proposal inference size (matches the AL arms' training size)
+  batch: 32
+
 train:                     # per-arm training (overlays configs/train.yaml)
   model: yolov8n.pt
   imgsz: 640

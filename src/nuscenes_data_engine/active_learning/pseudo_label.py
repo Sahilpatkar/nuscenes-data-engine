@@ -279,3 +279,121 @@ def run_pseudo_sample(
         arm, len(weak), len(arm_tokens), weak_state / "sample.parquet",
     )
     return summary
+
+
+def _official_val_scenes() -> set[str]:
+    """The nuScenes val scene names (devkit); isolated so tests can monkeypatch it."""
+    from nuscenes.utils.splits import create_splits_scenes
+
+    return set(create_splits_scenes()["val"])
+
+
+def run_pseudo_label(
+    config_path: Path,
+    weak_config_path: Path,
+    *,
+    arm: str,
+    weights: Path,
+    processed_dir: Path | None = None,
+    device: str = "0",
+) -> dict[str, Any]:
+    """Propose boxes for an arm's frames, verify them against VLM counts, write both.
+
+    Writes ``<arm>_pseudo_labels.parquet`` (accepted frames' boxes) and
+    ``<arm>_accepted.parquet`` (the token list both weak arms train on).
+    """
+    from nuscenes_data_engine.config import get_settings, load_yaml
+
+    cfg = load_yaml(config_path)
+    weak_cfg = load_yaml(weak_config_path)
+    settings = get_settings()
+    state_dir = Path(cfg.get("state", {}).get("dir", "data/active_learning"))
+    processed = processed_dir or Path("data/processed")
+    pseudo_cfg = cfg.get("pseudo", {})
+    conf = float(pseudo_cfg.get("conf", 0.5))
+    tolerance = int(pseudo_cfg.get("tolerance", 1))
+    imgsz = int(pseudo_cfg.get("imgsz", cfg.get("train", {}).get("imgsz", 640)))
+    batch_size = int(pseudo_cfg.get("batch", 32))
+    weak_state = Path(weak_cfg.get("state", {}).get("dir", "data/active_learning/autolabel_weak"))
+
+    arm_path = state_dir / f"{arm}.parquet"
+    if not arm_path.is_file():
+        raise ValueError(f"No mined frames for arm {arm!r} at {arm_path}")
+    arm_tokens = set(pd.read_parquet(arm_path)["sample_data_token"])
+
+    samples = pd.read_parquet(processed / "samples.parquet")
+    frames = samples[samples["sample_data_token"].isin(arm_tokens)]
+    if len(frames) != len(arm_tokens):
+        raise ValueError(
+            f"{len(arm_tokens) - len(frames)} arm frames missing from samples.parquet"
+        )
+
+    boxes = propose_boxes(
+        weights, frames, Path(settings.nuscenes_dataroot),
+        conf=conf, imgsz=imgsz, device=device, batch_size=batch_size,
+    )
+    # Frames with no detection still count as candidates (empty label = background).
+    det_counts: dict[str, dict[str, int]] = {token: {} for token in sorted(arm_tokens)}
+    det_counts.update(detection_counts(boxes))
+
+    labels: list[pd.DataFrame] = []
+    for path in (
+        Path(settings.data_dir) / "autolabel" / "labels.parquet",
+        weak_state / "labels.parquet",
+    ):
+        if path.is_file():
+            labels.append(pd.read_parquet(path))
+    if not labels:
+        raise ValueError("No VLM labels found — run `al pseudo-sample` then autolabel first.")
+    all_labels = pd.concat(labels, ignore_index=True).drop_duplicates(
+        subset="sample_data_token", keep="last"
+    )
+    vlm_labels = {
+        str(row["sample_data_token"]): row
+        for row in all_labels.to_dict("records")
+        if str(row["sample_data_token"]) in arm_tokens
+    }
+
+    accepted, diagnostics = verify_frames(det_counts, vlm_labels, tolerance)
+    if not accepted:
+        raise ValueError(
+            f"Verification kept nothing for arm {arm!r}: no frames survived "
+            f"(candidates {diagnostics['n_candidates']}, no-label {diagnostics['n_no_label']}, "
+            f"unparsed {diagnostics['n_unparsed']})"
+        )
+
+    accepted_set = set(accepted)
+    if not accepted_set <= arm_tokens:
+        raise ValueError("accepted frames must come from the arm's mined frames")
+    # Defence in depth: the arm parquet is pool-only by construction (round-1 mining
+    # guards), but a pseudo-labelled val frame would silently corrupt every arm's
+    # comparison, so check it here too rather than trusting an upstream invariant.
+    val_scenes = _official_val_scenes()
+    val_frames = set(samples[samples["scene_name"].isin(val_scenes)]["sample_data_token"])
+    if accepted_set & val_frames:
+        raise ValueError(
+            f"{len(accepted_set & val_frames)} accepted frames are in the val split"
+        )
+
+    pseudo = boxes[boxes["sample_data_token"].isin(accepted_set)].reset_index(drop=True)
+    pd.DataFrame({"sample_data_token": accepted}).to_parquet(
+        state_dir / f"{arm}_accepted.parquet", index=False
+    )
+    pseudo.to_parquet(state_dir / f"{arm}_pseudo_labels.parquet", index=False)
+
+    summary = {
+        "arm": arm,
+        "conf": conf,
+        "tolerance": tolerance,
+        "n_boxes": len(pseudo),
+        "mean_boxes_per_accepted_frame": len(pseudo) / len(accepted),
+        **diagnostics,
+    }
+    logger.info(
+        "Arm %s: %d/%d frames accepted (retention %.2f), %d pseudo boxes; "
+        "rejected by class: %s; accepted mutual-zero by class: %s",
+        arm, diagnostics["n_accepted"], diagnostics["n_candidates"],
+        diagnostics["retention"], len(pseudo), diagnostics["rejected_by_class"],
+        diagnostics["accepted_mutual_zero_by_class"],
+    )
+    return summary

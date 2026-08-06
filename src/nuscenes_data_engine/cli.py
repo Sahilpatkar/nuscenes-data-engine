@@ -623,6 +623,37 @@ def al_pseudo_sample(
     logger.info("Pseudo-sample: %s", summary)
 
 
+@al_app.command("pseudo-label")
+def al_pseudo_label(
+    arm: str = typer.Option(..., "--arm", help="Arm to pseudo-label (e.g. random)."),
+    weights: Path = typer.Option(..., "--weights", help="Baseline best.pt."),
+    config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),
+    weak_config: Path = typer.Option(Path("configs/autolabel_weak.yaml"), "--weak-config"),
+    device: str = typer.Option("0", "--device"),
+    wandb: bool | None = typer.Option(None, "--wandb/--no-wandb", help="W&B run logging."),
+) -> None:
+    """Propose boxes with the baseline detector and keep the VLM-verified frames."""
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_label
+    from nuscenes_data_engine.tracking import wandb_run
+
+    with wandb_run(
+        "al-pseudo-label", name=f"al-pseudo-label-{arm}", config={"arm": arm}, enabled=wandb
+    ) as run:
+        summary = run_pseudo_label(
+            config, weak_config, arm=arm, weights=weights, device=device
+        )
+        if run is not None:
+            # bool is an int subclass — exclude it so flag fields aren't logged as 0/1
+            run.log(
+                {
+                    k: v
+                    for k, v in summary.items()
+                    if isinstance(v, int | float) and not isinstance(v, bool)
+                }
+            )
+    logger.info("Pseudo-label summary: %s", summary)
+
+
 @al_app.command("graph-mine")
 def al_graph_mine(
     arm: str = typer.Option("graph", "--arm", help="graph | graph_rate | graph_rate_night."),
