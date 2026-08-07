@@ -428,13 +428,15 @@ class 6b already knows the VLM under-recalls.
 | `weak_random` | the accepted subset of `random`'s 1,500 frames | pseudo (detector + VLM-verified) |
 | `weak_random_gt` | the *same* accepted subset | ground truth |
 
-The verifier rejects frames, so the added set shrinks below `random`'s 1,500. A
-direct `weak_random` vs `random` comparison would confound two effects at once —
-fewer frames *and* worse labels. The GT twin removes the confound for one extra
-training run: `weak_random_gt` vs `random` isolates the cost of the frames the
-verifier dropped (identical label source, fewer frames); `weak_random` vs
-`weak_random_gt` isolates the cost of losing ground truth (identical frames,
-different label source).
+The verifier rejects frames, so the added set shrinks below `random`'s 1,500 — and
+not by a random 36% (see the crowding finding below: the dropped frames are nearly
+2× as box-dense as the kept ones). A direct `weak_random` vs `random` comparison
+would confound two effects at once — fewer, differently-composed frames *and*
+worse labels. The GT twin removes the second confound for one extra training run:
+`weak_random_gt` vs `random` isolates the cost of the frames the verifier dropped
+(identical label source, but fewer *and* systematically less crowded frames);
+`weak_random` vs `weak_random_gt` isolates the cost of losing ground truth
+(identical frames, different label source).
 
 ### Pipeline and measured verification
 
@@ -459,12 +461,18 @@ Verification (conf 0.5, tolerance ±1, per-frame accept/reject):
   pseudo boxes total on the 958 added frames) — even on frames the VLM endorsed,
   the detector labels only ~52% of the objects GT has. Verification catches
   count *disagreement*, not detector *recall*.
+- **The verifier drops crowded frames, not a random subset**: the 958 accepted
+  frames hold 3,705 GT boxes (3.87/frame); the 542 rejected frames hold 4,122 GT
+  boxes — **7.61/frame, nearly 2×**. That tracks 6b's crowding finding directly
+  (counting MAE 6.67 at GT 10+): VLM counts diverge from the detector's most where
+  crowding makes VLM counting least reliable, so rejection tracks scene density,
+  not chance.
 
 ### Results
 
 Identical 6,019-frame CAM_FRONT val split as every other arm:
 
-| arm | added frames | labels | train imgs | total boxes | overall mAP50-95 | night mAP50-95 |
+| arm | added frames | labels | train imgs | total label boxes (train+val) | overall mAP50-95 | night mAP50-95 |
 |---|---|---|---|---|---|---|
 | baseline | — | — | 7,035 | — | 0.2477 | 0.1667 |
 | random (round 1) | 1,500 | GT | 8,535 | — | 0.2817 (+0.0340) | 0.1619 (−0.0048) |
@@ -474,7 +482,10 @@ Identical 6,019-frame CAM_FRONT val split as every other arm:
 Decomposing GT `random`'s +0.0340 overall gain three ways:
 
 - Dropping the 542 verifier-rejected frames costs 0.0340 − 0.0171 = **0.0169**
-  (~50% of the gain) — `random` vs `weak_random_gt`.
+  (~50% of the gain) — `random` vs `weak_random_gt`. Mechanistically this is the
+  crowding finding above: `weak_random_gt` isn't just training on 542 fewer frames
+  than `random`, it's training on a systematically less object-dense subset of
+  them (kept 3.87 GT boxes/frame vs the dropped set's 7.61).
 - Losing ground truth on the 958 kept frames costs 0.0171 − 0.0062 = **0.0109**
   (~32%) — `weak_random_gt` vs `weak_random`.
 - Weak supervision retains 0.0062 / 0.0340 = **18%** of the GT gain —
@@ -482,14 +493,22 @@ Decomposing GT `random`'s +0.0340 overall gain three ways:
 
 Consistency check: `weak_random_gt` and `weak_random` differ by 68,599 − 66,836 =
 1,763 boxes — exactly 958 × (3.87 − 2.03), i.e. exactly the under-labelling on the
-added frames, with nothing left unexplained.
+added frames, with nothing left unexplained (the identical val-split boxes in both
+totals cancel in the difference).
+
+Noise caveat: single seed per arm; the overall deltas here are the same order as
+the run-to-run variation flagged elsewhere in this doc (the 602-frame night slice,
+round 3's partition noise), so read the ~50%/~32% split as a decomposition of one
+run rather than a precise partition. The night regression (−0.0184, weak_random)
+is comfortably outside that band; `weak_random_gt`'s −0.0099 is borderline.
 
 ### Verdict: it works, but it's expensive
 
 Weak supervision **works but is expensive**: it retains 18% of the GT gain
 (+0.0062 vs +0.0340), and the loss splits roughly **half dropped frames** (~50%)
-and **a third label quality** (~32%). Honest caveat: every arm regresses on the
-602-frame night slice vs baseline, and `weak_random` regresses the most (−0.0184).
+and **a third label quality** (~32%). Honest caveat: all three arms in this
+comparison — `random`, `weak_random_gt`, `weak_random` — regress on the 602-frame
+night slice vs baseline, and `weak_random` regresses the most (−0.0184).
 The 686-of-958 mutual-zero-pedestrian figure above is the mechanism: 6b
 independently measured VLM pedestrian presence recall at **0.58**, so a detector
 and VLM sharing a pedestrian blind spot is expected — those frames teach the model
@@ -514,9 +533,15 @@ scripts/gpu-run.sh al pseudo-sample --arm random
 GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg raw "env PATH=/home/mgaur/sahil/vllm-env/bin:/usr/local/bin:/usr/bin:/bin HF_HOME=<repo>/.cache/huggingface CUDA_VISIBLE_DEVICES=0 /home/mgaur/sahil/vllm-env/bin/vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8399 --max-model-len 8192"
 GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg raw "sh -c 'uv run nuscenes-data-engine autolabel submit -c configs/autolabel_weak.yaml --provider local && uv run nuscenes-data-engine autolabel collect -c configs/autolabel_weak.yaml --provider local'"
 # 3. propose + verify, then train both arms
-scripts/gpu-run.sh al pseudo-label --arm random --weights runs/yolov8n_imgsz640_e20_al-baseline/weights/best.pt --device 2
+GPU_DEVICES=2 scripts/gpu-run.sh al pseudo-label --arm random --weights runs/yolov8n_imgsz640_e20_al-baseline/weights/best.pt
 scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_random && env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_random_gt && uv run nuscenes-data-engine al report'"
 ```
+
+Step 3's first line goes through `gpu-run.sh`'s non-`raw` path, which builds
+`env CUDA_VISIBLE_DEVICES=$GPU_DEVICES uv run ...` (default `GPU_DEVICES=0`) — the
+process then sees exactly **one** GPU, at ordinal 0. `--device` on `al pseudo-label`
+must stay at its default `"0"` (correct inside that filtered environment);
+`GPU_DEVICES=2` is what actually selects the physical card.
 
 The vLLM server needs a 24 GB node — `trinity-2-3`, not the 12 GB `trinity-2-18` —
 and its venv's `bin` must lead `PATH` or vLLM's shell-out to `ninja`

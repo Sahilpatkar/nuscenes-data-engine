@@ -16,8 +16,34 @@ from nuscenes_data_engine.config import load_yaml
 logger = logging.getLogger("nuscenes_data_engine")
 
 
+def _weak_arm_retention(state_dir: Path, arm: str) -> float | None:
+    """Verification retention for a weak-supervision arm, from its pseudo-label summary.
+
+    Both ``weak_random``/``weak_random_gt`` are pseudo-labelled by a single
+    ``al pseudo-label --arm <base>`` run (e.g. ``random``), which writes
+    ``<base>_pseudo_summary.json`` — not ``<arm>_pseudo_summary.json``. ``<base>`` is
+    recovered from ARM_EXTRA_FILE's ``"<base>_accepted.parquet"`` naming (the same map
+    ``resolve_arm_frames``/composition use) rather than assumed, so this only fires for
+    arms actually wired that way. Returns ``None`` (not 0.0) when no summary exists —
+    the report renders that as a blank cell, not a fabricated zero.
+    """
+    extra_file = ARM_EXTRA_FILE.get(arm, "")
+    suffix = "_accepted.parquet"
+    if not extra_file.endswith(suffix):
+        return None
+    base = extra_file[: -len(suffix)]
+    summary_path = state_dir / f"{base}_pseudo_summary.json"
+    if not summary_path.is_file():
+        return None
+    summary = json.loads(summary_path.read_text())
+    retention = summary.get("retention")
+    return round(float(retention), 3) if retention is not None else None
+
+
 def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str, Any]]:
-    """Per-arm mined-set diagnostics: scene spread + night/rain share."""
+    """Per-arm mined-set diagnostics: scene spread + night/rain share, plus
+    verification ``retention`` for weak-supervision arms when their pseudo-label
+    summary is present (see :func:`_weak_arm_retention`)."""
     samples_path = processed_dir / "samples.parquet"
     if not samples_path.is_file():
         return {}
@@ -28,27 +54,29 @@ def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str,
     for arm in ARM_ORDER:
         if arm == "baseline":
             continue
+        entry: dict[str, Any] = {}
         # Most arms' extra-frames file is f"{arm}.parquet"; the weak arms share
         # random_accepted.parquet (see ARM_EXTRA_FILE), so resolve through the same map
         # resolve_arm_frames uses rather than assuming the naming convention.
         path = state_dir / ARM_EXTRA_FILE.get(arm, f"{arm}.parquet")
-        if not path.is_file():
-            continue
-        tokens = pd.read_parquet(path, columns=["sample_data_token"])["sample_data_token"]
-        rows = samples.reindex(tokens).dropna(subset=["scene_name"])
-        if len(rows) < len(tokens):
-            logger.warning(
-                "Arm %s: only %d/%d mined tokens matched samples.parquet; "
-                "composition shares cover the matched subset",
-                arm, len(rows), len(tokens),
-            )
-        if rows.empty:
-            continue
-        composition[arm] = {
-            "n_scenes": int(rows["scene_name"].nunique()),
-            "night_share": round(float(rows["is_night"].mean()), 3),
-            "rain_share": round(float(rows["is_rain"].mean()), 3),
-        }
+        if path.is_file():
+            tokens = pd.read_parquet(path, columns=["sample_data_token"])["sample_data_token"]
+            rows = samples.reindex(tokens).dropna(subset=["scene_name"])
+            if len(rows) < len(tokens):
+                logger.warning(
+                    "Arm %s: only %d/%d mined tokens matched samples.parquet; "
+                    "composition shares cover the matched subset",
+                    arm, len(rows), len(tokens),
+                )
+            if not rows.empty:
+                entry["n_scenes"] = int(rows["scene_name"].nunique())
+                entry["night_share"] = round(float(rows["is_night"].mean()), 3)
+                entry["rain_share"] = round(float(rows["is_rain"].mean()), 3)
+        retention = _weak_arm_retention(state_dir, arm)
+        if retention is not None:
+            entry["retention"] = retention
+        if entry:
+            composition[arm] = entry
     return composition
 
 
@@ -86,6 +114,7 @@ def render_report(
                 "n_scenes": comp.get("n_scenes", ""),
                 "night_share": comp.get("night_share", ""),
                 "rain_share": comp.get("rain_share", ""),
+                "retention": comp.get("retention", ""),
             }
         )
     fragments = [

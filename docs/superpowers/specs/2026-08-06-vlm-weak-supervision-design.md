@@ -110,6 +110,11 @@ scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=<free-gpu> uv run n
 The `sh -c` wrapper is required: a bare `&&` chain leaves later commands outside
 `nohup` and their output unlogged.
 
+*Superseded by the measured runbook in [ACTIVE_LEARNING.md](../../ACTIVE_LEARNING.md)
+— the shipped flow is `al pseudo-sample` → `autolabel submit/collect` →
+`al pseudo-label --weights ...` (the sketch above omits the now-required
+`--weights` and collapses three separate stages into one).*
+
 ## Explicitly out of scope
 
 - No open-vocabulary detector (Grounding DINO / OWL-ViT) — a much larger project with
