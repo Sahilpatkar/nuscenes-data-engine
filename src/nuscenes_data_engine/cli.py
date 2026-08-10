@@ -692,7 +692,8 @@ def al_run(
         "--arm",
         help=(
             "baseline | mined | random | graph | rate | strat | rate_strat"
-            " | graph_rate | graph_rate_night."
+            " | graph_rate | graph_rate_night | weak_* (see WEAK_ARMS for the"
+            " pseudo/GT-twin pairs, e.g. weak_random, weak_graph_rate_night)."
         ),
     ),
     config: Path = typer.Option(Path("configs/active_learning.yaml"), "--config", "-c"),

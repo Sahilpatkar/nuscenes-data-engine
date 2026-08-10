@@ -547,6 +547,94 @@ The vLLM server needs a 24 GB node — `trinity-2-3`, not the 12 GB `trinity-2-1
 and its venv's `bin` must lead `PATH` or vLLM's shell-out to `ninja`
 (torch.compile) fails.
 
+### A second arm: the night champion
+
+`weak_random`/`weak_random_gt` weak-labelled a mined set that was only 12.7%
+night (`random`'s composition). Round 3's `graph_rate_night` is the actual night
+champion — 30.9% night in its mined set vs `random`'s 12.7% — so it's the arm
+that stress-tests weak supervision where it should matter most: if the VLM's
+pedestrian blind spot (6b: presence recall 0.58) concentrates in night frames,
+this is where it would show. Two more arms close the same loop as above:
+`weak_graph_rate_night` (pseudo) and `weak_graph_rate_night_gt` (ground truth on
+the identical accepted set).
+
+**Pre-registered prediction**: retention would *fall* below the random arm's
+0.639, because the VLM's pedestrian blind spot concentrates in night frames.
+Finding 1 below covers why that inverted.
+
+**Pipeline**: 1,172 of `graph_rate_night`'s 1,500 frames needed VLM labels (328
+already covered by earlier runs); labelled at $0 on the same self-hosted
+Qwen2.5-VL via the unchanged 6b path. The weak-labels table now holds 2,444 rows
+across both weak-supervision arms, 2,437 ok / 7 truncated (99.7% parse rate).
+
+Verification (same rule as the random round: conf 0.5, tolerance ±1, per-frame
+accept/reject):
+
+- **Retention 0.734** — 1,101 of 1,500 frames accepted; 0 had no label, 2 were
+  unparsed.
+- **Rejected by class**: car 283, pedestrian 97, truck 67, bicycle 11, bus 7.
+- **Accepted-but-mutually-zero by class** (of 1,101 accepted): bicycle 1,074, bus
+  1,010, pedestrian **870**, truck 863, car 367.
+- **Mean boxes per accepted frame: 1.62 pseudo vs 3.41 ground truth** (47%) —
+  under-labelling is worse here than the random round's 52%.
+- **Crowding**: accepted frames average 3.41 GT boxes/frame; the 399 rejected
+  frames average 6.68 — the verifier again discards the crowded frames (random
+  round: 3.87 vs 7.61; smaller absolute numbers here simply because night frames
+  are sparser overall).
+- **Composition**: the accepted set is 35.3% night vs the mined arm's 30.9% —
+  verification kept a slightly *more* night-heavy subset, not less.
+
+Results, identical 6,019-frame CAM_FRONT val split, 8,136 train images for both
+weak arms:
+
+| arm | overall mAP50-95 | night mAP50-95 |
+|---|---:|---:|
+| baseline | 0.2477 | 0.1667 |
+| `graph_rate_night` (round 3, GT, 1,500 frames) | 0.2731 (+0.0254) | 0.1768 (+0.0101) |
+| `weak_graph_rate_night_gt` (1,101 accepted, GT) | 0.2624 (+0.0147) | 0.1766 (+0.0099) |
+| `weak_graph_rate_night` (1,101 accepted, pseudo) | 0.2577 (+0.0100) | **0.1405 (−0.0262)** |
+
+Decomposing overall mAP50-95's GT gain, night arm beside the earlier random arm:
+
+| arm | dropped-frame cost | label cost | retains |
+|---|---:|---:|---:|
+| `graph_rate_night` (night) | +0.0107 | +0.0047 | **39.4%** of the GT gain |
+| `random` (round 1) | +0.0169 | +0.0109 | 18.2% of the GT gain |
+
+Three findings:
+
+1. **The pre-registered prediction was wrong, informatively.** I predicted
+   retention would *fall* below the random arm's 0.639 because the VLM's
+   pedestrian blind spot concentrates in night frames. It rose instead, to
+   0.734. The reason inverts the metric's meaning: night frames are sparser
+   (3.41 GT boxes/frame vs the random arm's 5.22 arm-wide), and with fewer
+   objects the detector and VLM agree more easily — but much of that agreement
+   is *mutual zero* (both saw nothing), which rose to 870/1,101 = **79.0%** of
+   accepted frames vs the random arm's 686/958 = 71.6%. Under-labelling also got
+   worse (47% of GT boxes vs 52%). **Retention is therefore a misleading health
+   metric on its own** — a higher number can mean emptier frames rather than
+   cleaner labels. The half of the prediction that *did* hold: the mutual-zero
+   pedestrian share rose, exactly as predicted.
+2. **The GT twin isolates the damage precisely, and it is catastrophic for
+   night.** `weak_graph_rate_night_gt` — the same 1,101 accepted frames with
+   ground truth — keeps essentially the entire night gain (+0.0099 vs the full
+   arm's +0.0101). The pseudo-labelled arm collapses to **−0.0262**, the worst
+   night result of any of the 13 arms across all three rounds, and a −0.0361
+   swing against its own twin. So the frames the verifier kept are fine; the
+   *labels* destroy night — the pedestrian blind spot showing up in exactly the
+   metric it was predicted to hurt.
+3. **The paradox worth stating plainly**: on overall mAP, weak supervision is
+   *twice as efficient* here as on the random arm (39.4% of the GT gain retained
+   vs 18.2%), yet it destroys the very night capability this arm was selected
+   for. Sparser night data makes pseudo-labels look better on aggregate metrics
+   while making them worse where it matters.
+
+Noise caveat: single seed per arm, as with the random-round comparison above —
+read the decomposition percentages as one run's split, not a precise partition.
+The −0.0262 night result and the −0.0361 swing against its own twin both sit
+comfortably outside that band, so this finding is not noise even though the
+exact split might be.
+
 Runs: MLflow `nuscenes-yolo` (one `*_al-*` run per trained arm, registry
 untouched) and W&B
-[`al-baseline` / `al-mined` / `al-random` / `al-graph` / `al-rate` / `al-strat` / `al-rate_strat` / `al-weak_random` / `al-weak_random_gt` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).
+[`al-baseline` / `al-mined` / `al-random` / `al-graph` / `al-rate` / `al-strat` / `al-rate_strat` / `al-weak_random` / `al-weak_random_gt` / `al-weak_graph_rate_night` / `al-weak_graph_rate_night_gt` + sweep/mine runs](https://wandb.ai/sahil-patkar88-x/nuscenes-data-engine).

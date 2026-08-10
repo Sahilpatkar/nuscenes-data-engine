@@ -254,8 +254,12 @@ graph-community budgets: `graph_rate_night` posts the project's best night gain,
 docs/ACTIVE_LEARNING.md. Weak supervision — no GT on the added frames, detector
 proposes + VLM verifies — retains 18% of random's GT gain (+0.0062 vs +0.0340);
 three-way decomposition: dropping the 542 verifier-rejected frames costs ~50% of
-the gain, losing GT on the 958 kept frames costs another ~32%. Full breakdown:
-docs/ACTIVE_LEARNING.md, "Weak supervision".)*
+the gain, losing GT on the 958 kept frames costs another ~32%. A second weak arm
+on the night-champion `graph_rate_night` retains overall GT gain *more*
+efficiently (39.4% vs 18.2%) but its night gain inverts, +0.0101 → **−0.0262**,
+with a GT twin proving the damage is the labels, not the dropped frames. Full
+breakdown: docs/ACTIVE_LEARNING.md, "Weak supervision" and "A second arm: the
+night champion".)*
 
 **The random control beat similarity mining** — a negative result worth more than
 a fake win, with a quantified mechanism:
@@ -375,7 +379,15 @@ Ordered roughly by value-per-effort:
    and the loss splits roughly **~50% dropped frames / ~32% label quality** on the
    frames it keeps. Design, pipeline, and the full three-way decomposition:
    docs/ACTIVE_LEARNING.md, "Weak supervision", spec
-   `2026-08-06-vlm-weak-supervision-design.md`.*
+   `2026-08-06-vlm-weak-supervision-design.md`. A second weak-supervision arm on
+   round 3's night champion (`graph_rate_night`, 30.9% night in its mined set)
+   sharpens this into a paradox: it retains **more** of the overall GT gain than
+   the random arm did (39.4% vs 18.2%), because sparser night frames make
+   detector/VLM agreement easier — but the night gain itself *inverts*, from GT's
+   +0.0101 to the pseudo-labelled arm's **−0.0262**. The GT twin
+   (`weak_graph_rate_night_gt`, the identical 1,101 accepted frames) keeps +0.0099
+   of the night gain, proving the damage is the *labels*, not the frames the
+   verifier dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
 5. **Chat agent upgrades** — streaming responses, chart generation from SQL
    results, a saved-questions gallery in Streamlit, and evaluation harness for
    answer correctness (the logged JSONL is already the dataset for it).
