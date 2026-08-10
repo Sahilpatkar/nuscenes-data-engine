@@ -245,12 +245,17 @@ undercounted (recall 0.58). Conclusion: VLM labels are production-useful for
 | baseline (25% of scenes) | 7,035 | 0.2477 | 0.1667 |
 | + 1,500 similarity-mined | 8,535 | 0.2637 (+0.016) | 0.1739 (+0.007) |
 | + 1,500 random (control) | 8,535 | **0.2817 (+0.034)** | 0.1619 (−0.005) |
+| + 958 weak (pseudo, VLM-verified) | 7,993 | 0.2539 (+0.006) | 0.1483 (−0.018) |
 
 *(Round 2 added three acquisition-score arms — best: `rate_strat` at +0.0239
 overall/+0.0069 night; none beat the random gate. Round 3 added rate-weighted
 graph-community budgets: `graph_rate_night` posts the project's best night gain,
 **+0.0101 night mAP50-95**, at +0.0254 overall. Full nine-arm table and analysis:
-docs/ACTIVE_LEARNING.md.)*
+docs/ACTIVE_LEARNING.md. Weak supervision — no GT on the added frames, detector
+proposes + VLM verifies — retains 18% of random's GT gain (+0.0062 vs +0.0340);
+three-way decomposition: dropping the 542 verifier-rejected frames costs ~50% of
+the gain, losing GT on the 958 kept frames costs another ~32%. Full breakdown:
+docs/ACTIVE_LEARNING.md, "Weak supervision".)*
 
 **The random control beat similarity mining** — a negative result worth more than
 a fake win, with a quantified mechanism:
@@ -361,9 +366,16 @@ Ordered roughly by value-per-effort:
 3. **Terraform cloud deployment** (the remaining roadmap item) — lift the compose
    stack to a cloud host; the chat agent's Anthropic flip means no GPU is needed
    for any serving-path component.
-4. **Close the 6b→6d loop** — use VLM labels as *weak supervision*: auto-label
-   mined frames instead of relying on GT, making the engine work on genuinely
-   unlabeled data (the real-world case).
+4. **Close the 6b→6d loop — DONE.** Use VLM labels as *weak supervision*:
+   auto-label mined frames instead of relying on GT, making the engine work on
+   genuinely unlabeled data (the real-world case). *The verifier (detector
+   proposes, VLM confirms within ±1 count per class, frame-level accept/reject)
+   retains **63.9%** of `random`'s 1,500 mined frames (958). Weak supervision
+   retains **18%** of `random`'s GT gain (+0.0062 vs +0.0340 overall mAP50-95),
+   and the loss splits roughly **~50% dropped frames / ~32% label quality** on the
+   frames it keeps. Design, pipeline, and the full three-way decomposition:
+   docs/ACTIVE_LEARNING.md, "Weak supervision", spec
+   `2026-08-06-vlm-weak-supervision-design.md`.*
 5. **Chat agent upgrades** — streaming responses, chart generation from SQL
    results, a saved-questions gallery in Streamlit, and evaluation harness for
    answer correctness (the logged JSONL is already the dataset for it).

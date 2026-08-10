@@ -137,6 +137,87 @@ def test_rebuild_triggered_when_data_changes(tmp_path: Path) -> None:
     assert label.stat().st_mtime_ns != first_mtime
 
 
+def test_stale_train_files_pruned_when_train_frames_shrinks(tmp_path: Path) -> None:
+    """A rebuild must not leave a prior build's images/labels lying around.
+
+    The accepted/train-frame set can shrink between builds (e.g. re-tuning `al
+    pseudo-label`'s conf/tolerance) — a create-only materialize loop would leave the
+    dropped frame's stale .jpg/.txt in place for Ultralytics to glob up, while
+    stats["train_images"] under-reports the true (stale-inflated) image count.
+    """
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    out = tmp_path / "yolo"
+    (dataroot / "samples" / "CAM_FRONT").mkdir(parents=True, exist_ok=True)
+
+    tokens = ["t1", "t2", "t3"]
+    rows_img = []
+    for token in tokens:
+        fname = f"samples/CAM_FRONT/{token}.jpg"
+        (dataroot / fname).write_bytes(b"\xff\xd8\xff")
+        rows_img.append(
+            {
+                "sample_data_token": token,
+                "sample_token": f"s-{token}",
+                "channel": "CAM_FRONT",
+                "filename": fname,
+                "width": 1600,
+                "height": 900,
+                "timestamp": 0,
+                "n_boxes": 0,
+                "scene_token": TRAIN_SCENE,
+                "scene_name": TRAIN_SCENE,
+                "scene_description": "x",
+                "log_token": "l",
+                "location": "singapore-onenorth",
+                "is_night": False,
+                "is_rain": False,
+            }
+        )
+    processed.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows_img).to_parquet(processed / "samples.parquet")
+    # Empty but real-schema annotations (no boxes for any of these frames); numeric
+    # columns need explicit dtypes so an empty frame doesn't come out as `object`.
+    pd.DataFrame(
+        {
+            "annotation_token": pd.Series([], dtype=str),
+            "sample_data_token": pd.Series([], dtype=str),
+            "sample_token": pd.Series([], dtype=str),
+            "channel": pd.Series([], dtype=str),
+            "category_name": pd.Series([], dtype=str),
+            "category_group": pd.Series([], dtype=str),
+            "visibility_token": pd.Series([], dtype=str),
+            "num_lidar_pts": pd.Series([], dtype=int),
+            "num_radar_pts": pd.Series([], dtype=int),
+            "x_min": pd.Series([], dtype=float),
+            "y_min": pd.Series([], dtype=float),
+            "x_max": pd.Series([], dtype=float),
+            "y_max": pd.Series([], dtype=float),
+            "bbox_area": pd.Series([], dtype=float),
+            "scene_token": pd.Series([], dtype=str),
+            "scene_name": pd.Series([], dtype=str),
+            "scene_description": pd.Series([], dtype=str),
+            "log_token": pd.Series([], dtype=str),
+            "location": pd.Series([], dtype=str),
+            "is_night": pd.Series([], dtype=bool),
+            "is_rain": pd.Series([], dtype=bool),
+        }
+    ).to_parquet(processed / "annotations.parquet")
+
+    build_yolo_dataset(processed, dataroot, out, cameras=["CAM_FRONT"], train_frames=set(tokens))
+    assert (out / "images" / "train" / "t3.jpg").is_symlink()
+    assert (out / "labels" / "train" / "t3.txt").is_file()
+
+    # Rebuild with 't3' dropped from the accepted set -> the build key changes (the
+    # train_frames hash differs), so this is a real rebuild, not the up-to-date skip.
+    _, stats = build_yolo_dataset(
+        processed, dataroot, out, cameras=["CAM_FRONT"], train_frames={"t1", "t2"}
+    )
+    assert stats["train_images"] == 2
+    assert not (out / "images" / "train" / "t3.jpg").exists()
+    assert not (out / "labels" / "train" / "t3.txt").exists()
+
+
 def test_compute_data_version_is_stable_and_content_sensitive(tmp_path: Path) -> None:
     processed = tmp_path / "processed"
     dataroot = tmp_path / "nuscenes"

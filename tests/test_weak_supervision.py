@@ -1,0 +1,884 @@
+"""Tests for VLM weak supervision: pure verification core + dataset seam."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import pytest
+
+from nuscenes_data_engine.active_learning.pseudo_label import (
+    VLM_TO_DETECTOR,
+    detection_counts,
+    verify_frames,
+)
+
+
+def test_vlm_to_detector_covers_every_detector_class() -> None:
+    from nuscenes_data_engine.ingestion.categories import DETECTION_CLASSES
+
+    assert set(VLM_TO_DETECTOR.values()) == set(DETECTION_CLASSES)
+    # The five VLM classes with no detector counterpart are deliberately absent.
+    assert "traffic_cones" not in VLM_TO_DETECTOR
+    assert "construction_vehicles" not in VLM_TO_DETECTOR
+
+
+def test_detection_counts_empty_inputs_return_empty() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import detection_counts
+
+    assert detection_counts(pd.DataFrame([])) == {}  # column-less: propose_boxes' empty shape
+    assert detection_counts(pd.DataFrame({"sample_data_token": [], "category_group": []})) == {}
+
+
+def test_detection_counts_per_frame_and_class() -> None:
+    boxes = pd.DataFrame(
+        {
+            "sample_data_token": ["f1", "f1", "f1", "f2"],
+            "category_group": ["car", "car", "pedestrian", "bus"],
+        }
+    )
+    counts = detection_counts(boxes)
+    assert counts["f1"]["car"] == 2
+    assert counts["f1"]["pedestrian"] == 1
+    assert counts["f1"].get("bus", 0) == 0
+    assert counts["f2"]["bus"] == 1
+
+
+def _labels(**counts: int) -> dict[str, Any]:
+    """A parsed VLM label row with all ten count fields (unspecified ones zero)."""
+    row = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    row.update(counts)
+    return row
+
+
+def test_verify_frames_accepts_within_tolerance() -> None:
+    det = {"f1": {"car": 3, "pedestrian": 1}}
+    vlm = {"f1": _labels(cars=4, pedestrians=1)}  # car off by 1 -> still accepted
+    accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
+    assert accepted == ["f1"]
+    assert diagnostics["n_candidates"] == 1 and diagnostics["n_accepted"] == 1
+
+
+def test_verify_frames_rejects_when_any_class_disagrees() -> None:
+    det = {"f1": {"car": 3, "pedestrian": 1}}
+    vlm = {"f1": _labels(cars=3, pedestrians=5)}  # pedestrians off by 4
+    accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
+    assert accepted == []
+    assert diagnostics["rejected_by_class"]["pedestrian"] == 1
+
+
+def test_verify_frames_tolerance_boundary_is_inclusive() -> None:
+    det = {"f1": {"car": 2}}
+    assert verify_frames(det, {"f1": _labels(cars=3)}, tolerance=1)[0] == ["f1"]
+    assert verify_frames(det, {"f1": _labels(cars=4)}, tolerance=1)[0] == []
+
+
+def test_verify_frames_zero_detections_matches_zero_counts() -> None:
+    # A genuine empty frame: detector found nothing, VLM saw nothing -> accept
+    # (an empty label file is a valid background training example).
+    accepted, _ = verify_frames({"f1": {}}, {"f1": _labels()}, tolerance=1)
+    assert accepted == ["f1"]
+
+
+def test_verify_frames_rejects_missing_or_unparsed_labels() -> None:
+    det = {"f1": {"car": 1}, "f2": {"car": 1}, "f3": {"car": 1}}
+    vlm = {"f3": _labels(cars=1, parse_status="error")}  # f1, f2 absent; f3 unparsed
+    accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
+    assert accepted == []
+    assert diagnostics["n_no_label"] == 2
+    assert diagnostics["n_unparsed"] == 1
+
+
+def test_verify_frames_mapping_is_not_permutable() -> None:
+    """Distinct nonzero counts per class, so a swapped mapping cannot pass."""
+    det = {"f1": {"car": 1, "truck": 2, "bus": 3, "pedestrian": 4, "bicycle": 5}}
+    vlm = {"f1": _labels(cars=1, trucks=2, buses=3, pedestrians=4, bicycles=5)}
+    assert verify_frames(det, vlm, tolerance=0)[0] == ["f1"]
+    swapped = {"f1": _labels(cars=1, trucks=3, buses=2, pedestrians=4, bicycles=5)}
+    assert verify_frames(det, swapped, tolerance=0)[0] == []
+
+
+def test_verify_frames_reports_mutual_zero_agreement() -> None:
+    det = {"f1": {"car": 2}, "f2": {"car": 1, "pedestrian": 1}}
+    vlm = {"f1": _labels(cars=2), "f2": _labels(cars=1, pedestrians=1)}
+    accepted, diagnostics = verify_frames(det, vlm, tolerance=1)
+    assert accepted == ["f1", "f2"]
+    # f1 has neither detector nor VLM pedestrians -> the blind-spot bucket; f2 has both.
+    assert diagnostics["accepted_mutual_zero_by_class"]["pedestrian"] == 1
+    assert diagnostics["accepted_mutual_zero_by_class"]["bus"] == 2  # neither frame has buses
+    assert "car" not in diagnostics["accepted_mutual_zero_by_class"]
+
+
+def test_verify_frames_is_deterministic_and_sorted() -> None:
+    det = {t: {"car": 1} for t in ("f3", "f1", "f2")}
+    vlm = {t: _labels(cars=1) for t in ("f3", "f1", "f2")}
+    accepted, _ = verify_frames(det, vlm, tolerance=1)
+    assert accepted == ["f1", "f2", "f3"]
+
+
+def test_boxes_to_rows_projects_to_annotations_schema() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    rows = boxes_to_rows(
+        "f1",
+        np.array([[10.0, 20.0, 110.0, 220.0], [0.0, 0.0, 50.0, 50.0]]),
+        np.array([0, 3]),  # car, pedestrian (CLASS_TO_INDEX order)
+        np.array([0.9, 0.7]),
+    )
+    assert [r["category_group"] for r in rows] == ["car", "pedestrian"]
+    assert rows[0]["sample_data_token"] == "f1"
+    assert (rows[0]["x_min"], rows[0]["y_min"]) == (10.0, 20.0)
+    assert (rows[0]["x_max"], rows[0]["y_max"]) == (110.0, 220.0)
+    assert rows[0]["score"] == pytest.approx(0.9)
+    assert set(rows[0]) == {
+        "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+    }
+
+
+def test_boxes_to_rows_rejects_out_of_taxonomy_class_index() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    with pytest.raises(ValueError, match="wrong weights file"):
+        boxes_to_rows("f1", np.array([[0.0, 0.0, 1.0, 1.0]]), np.array([79]), np.array([0.9]))
+
+
+def test_boxes_to_rows_empty_frame_yields_no_rows() -> None:
+    import numpy as np
+
+    from nuscenes_data_engine.active_learning.pseudo_label import boxes_to_rows
+
+    assert boxes_to_rows("f1", np.zeros((0, 4)), np.zeros(0, int), np.zeros(0)) == []
+
+
+def test_build_weak_sample_selects_only_unlabelled_arm_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b", "c"],
+            "sample_token": ["sa", "sb", "sc"],
+            "channel": ["CAM_FRONT"] * 3,
+            "filename": ["a.jpg", "b.jpg", "c.jpg"],
+            "width": [1600] * 3,
+            "height": [900] * 3,
+            "timestamp": [1, 2, 3],
+            "n_boxes": [1, 2, 3],
+            "scene_token": ["s1"] * 3,
+            "scene_name": ["scene-0001"] * 3,
+            "scene_description": ["x"] * 3,
+            "log_token": ["l1"] * 3,
+            "location": ["boston-seaport"] * 3,
+            "is_night": [False] * 3,
+            "is_rain": [False] * 3,
+        }
+    )
+    arm_tokens = ["a", "b", "c"]
+    already = pd.DataFrame({"sample_data_token": ["b"], "parse_status": ["ok"]})
+
+    weak = build_weak_sample(samples, arm_tokens, already)
+    assert list(weak["sample_data_token"]) == ["a", "c"]  # 'b' already labelled
+    # Columns the 6b submit path reads must all be present.
+    for column in ("filename", "sample_token", "scene_name", "present", "in_opus_subset"):
+        assert column in weak.columns
+    assert weak["present"].all() and not weak["in_opus_subset"].any()
+
+
+def test_build_weak_sample_relabels_unparsed_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    )
+    already = pd.DataFrame({"sample_data_token": ["a"], "parse_status": ["error"]})
+    weak = build_weak_sample(samples, ["a"], already)
+    assert list(weak["sample_data_token"]) == ["a"]  # unparsed -> label again
+
+
+def test_build_weak_sample_excludes_frames_missing_from_availability() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b"], "sample_token": ["sa", "sb"],
+            "channel": ["CAM_FRONT"] * 2, "filename": ["a.jpg", "b.jpg"],
+            "width": [1600] * 2, "height": [900] * 2, "timestamp": [1, 2],
+            "n_boxes": [1, 2], "scene_token": ["s1"] * 2, "scene_name": ["scene-0001"] * 2,
+            "scene_description": ["x"] * 2, "log_token": ["l1"] * 2,
+            "location": ["boston-seaport"] * 2, "is_night": [False] * 2,
+            "is_rain": [False] * 2,
+        }
+    )
+    # 'b' is recorded but its image is not on disk -> must not be sent to the VLM.
+    availability = pd.DataFrame(
+        {"sample_data_token": ["a", "b"], "present": [True, False]}
+    )
+    weak = build_weak_sample(samples, ["a", "b"], None, availability=availability)
+    assert list(weak["sample_data_token"]) == ["a"]
+    assert weak["present"].all()
+
+
+def test_build_weak_sample_without_availability_keeps_all_frames() -> None:
+    from nuscenes_data_engine.active_learning.pseudo_label import build_weak_sample
+
+    samples = pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    )
+    weak = build_weak_sample(samples, ["a"], None)
+    assert list(weak["sample_data_token"]) == ["a"] and weak["present"].all()
+
+
+def test_run_pseudo_sample_writes_sample_and_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_sample
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))  # no 6b labels
+
+    pd.DataFrame({"sample_data_token": ["a", "b"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["a", "b"], "sample_token": ["sa", "sb"],
+            "channel": ["CAM_FRONT"] * 2, "filename": ["a.jpg", "b.jpg"],
+            "width": [1600] * 2, "height": [900] * 2, "timestamp": [1, 2],
+            "n_boxes": [1, 2], "scene_token": ["s1"] * 2, "scene_name": ["scene-0001"] * 2,
+            "scene_description": ["x"] * 2, "log_token": ["l1"] * 2,
+            "location": ["boston-seaport"] * 2, "is_night": [False] * 2,
+            "is_rain": [False] * 2,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+
+    config = tmp_path / "al.yaml"
+    config.write_text(yaml.safe_dump({"state": {"dir": str(state)}}))
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    first = run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+    assert first["n_needing_labels"] == 2
+    assert (weak_state / "sample.parquet").is_file()
+
+    # Simulate a successful collect: 'a' now labelled ok -> only 'b' remains.
+    pd.DataFrame(
+        {"sample_data_token": ["a"], "parse_status": ["ok"]}
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+    second = run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+    assert second["n_needing_labels"] == 1
+
+
+def test_run_pseudo_sample_rejects_tokens_missing_from_samples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning.pseudo_label import run_pseudo_sample
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["a", "ghost"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["a"], "sample_token": ["sa"], "channel": ["CAM_FRONT"],
+            "filename": ["a.jpg"], "width": [1600], "height": [900], "timestamp": [1],
+            "n_boxes": [1], "scene_token": ["s1"], "scene_name": ["scene-0001"],
+            "scene_description": ["x"], "log_token": ["l1"], "location": ["boston-seaport"],
+            "is_night": [False], "is_rain": [False],
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    config = tmp_path / "al.yaml"
+    config.write_text(yaml.safe_dump({"state": {"dir": str(state)}}))
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(tmp_path / "weak")}}))
+
+    with pytest.raises(ValueError, match="missing from samples"):
+        run_pseudo_sample(config, weak_config, arm="random", processed_dir=processed)
+
+
+def test_run_pseudo_label_writes_accepted_and_pseudo_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))  # no 6b labels
+
+    # Arm has three frames; f1 agrees, f2 disagrees on pedestrians, f3 disagrees on cars.
+    # (Every arm frame must carry a label — run_pseudo_label now requires full
+    # coverage before it will spend the GPU — so f3 gets a label too, just one that
+    # disagrees, to keep it rejected for a count reason rather than a coverage gap.)
+    pd.DataFrame({"sample_data_token": ["f1", "f2", "f3"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["f1", "f2", "f3"],
+            "filename": ["f1.jpg", "f2.jpg", "f3.jpg"],
+            "channel": ["CAM_FRONT"] * 3,
+            "scene_name": ["scene-0001"] * 3,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    pd.DataFrame(
+        [
+            {**base, "sample_data_token": "f1", "cars": 2, "pedestrians": 1},
+            {**base, "sample_data_token": "f2", "cars": 2, "pedestrians": 9},
+            {**base, "sample_data_token": "f3", "cars": 9},
+        ]
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+
+    def _fake_propose(weights, frames, dataroot, **kwargs):
+        return pd.DataFrame(
+            [
+                {"sample_data_token": "f1", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+                {"sample_data_token": "f1", "category_group": "car",
+                 "x_min": 20.0, "y_min": 0.0, "x_max": 30.0, "y_max": 10.0, "score": 0.8},
+                {"sample_data_token": "f1", "category_group": "pedestrian",
+                 "x_min": 5.0, "y_min": 5.0, "x_max": 9.0, "y_max": 25.0, "score": 0.7},
+                {"sample_data_token": "f2", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+                {"sample_data_token": "f2", "category_group": "car",
+                 "x_min": 20.0, "y_min": 0.0, "x_max": 30.0, "y_max": 10.0, "score": 0.8},
+                {"sample_data_token": "f3", "category_group": "car",
+                 "x_min": 0.0, "y_min": 0.0, "x_max": 10.0, "y_max": 10.0, "score": 0.9},
+            ]
+        )
+
+    monkeypatch.setattr(pl, "propose_boxes", _fake_propose)
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})  # devkit-free
+
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "state": {"dir": str(state)},
+                "pseudo": {"conf": 0.5, "tolerance": 1, "imgsz": 640, "batch": 32},
+                "train": {"imgsz": 640},
+            }
+        )
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    summary = pl.run_pseudo_label(
+        config, weak_config, arm="random", weights=tmp_path / "best.pt",
+        processed_dir=processed, device="cpu",
+    )
+
+    assert summary["n_accepted"] == 1  # only f1
+    assert summary["retention"] == pytest.approx(1 / 3)
+    accepted = pd.read_parquet(state / "random_accepted.parquet")
+    assert list(accepted["sample_data_token"]) == ["f1"]
+    pseudo = pd.read_parquet(state / "random_pseudo_labels.parquet")
+    assert set(pseudo["sample_data_token"]) == {"f1"}  # rejected frames' boxes dropped
+    assert len(pseudo) == 3
+    assert "score" not in pseudo.columns or pseudo["score"].notna().all()
+
+
+def test_run_pseudo_label_requires_labels_for_every_arm_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running before `autolabel collect` finishes must fail loudly, not silently shrink."""
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["f1", "f2"]}).to_parquet(
+        state / "random.parquet", index=False
+    )
+    pd.DataFrame(
+        {"sample_data_token": ["f1", "f2"], "filename": ["f1.jpg", "f2.jpg"],
+         "channel": ["CAM_FRONT"] * 2, "scene_name": ["scene-0001"] * 2}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    # Only f1 was labelled; f2 is still pending.
+    pd.DataFrame([{**base, "sample_data_token": "f1"}]).to_parquet(
+        weak_state / "labels.parquet", index=False
+    )
+
+    called = []
+    monkeypatch.setattr(pl, "propose_boxes", lambda *a, **k: called.append(1) or pd.DataFrame())
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="have no VLM label"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )
+    assert not called, "must fail before spending the GPU proposal"
+
+
+def test_run_pseudo_label_empty_acceptance_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["f1"]}).to_parquet(state / "random.parquet", index=False)
+    pd.DataFrame(
+        {"sample_data_token": ["f1"], "filename": ["f1.jpg"], "channel": ["CAM_FRONT"],
+         "scene_name": ["scene-0001"]}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    pd.DataFrame(
+        [{"sample_data_token": "f1", "parse_status": "error"}]
+    ).to_parquet(weak_state / "labels.parquet", index=False)
+
+    monkeypatch.setattr(
+        pl, "propose_boxes",
+        lambda *a, **k: pd.DataFrame(
+            [{"sample_data_token": "f1", "category_group": "car",
+              "x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0, "score": 0.9}]
+        ),
+    )
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-9999"})  # devkit-free
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="no frames survived"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )
+
+
+def test_run_pseudo_label_rejects_val_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A val frame in the accepted set would corrupt every arm's comparison."""
+    import yaml
+
+    from nuscenes_data_engine.active_learning import pseudo_label as pl
+
+    state = tmp_path / "state"
+    state.mkdir()
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    weak_state = tmp_path / "weak"
+    weak_state.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "nodata"))
+    pd.DataFrame({"sample_data_token": ["v1"]}).to_parquet(state / "random.parquet", index=False)
+    pd.DataFrame(
+        {"sample_data_token": ["v1"], "filename": ["v1.jpg"], "channel": ["CAM_FRONT"],
+         "scene_name": ["scene-0003"]}
+    ).to_parquet(processed / "samples.parquet", index=False)
+    base = {
+        "cars": 0, "trucks": 0, "buses": 0, "trailers": 0, "construction_vehicles": 0,
+        "motorcycles": 0, "bicycles": 0, "pedestrians": 0, "traffic_cones": 0,
+        "barriers": 0, "parse_status": "ok",
+    }
+    pd.DataFrame([{**base, "sample_data_token": "v1", "cars": 1}]).to_parquet(
+        weak_state / "labels.parquet", index=False
+    )
+    monkeypatch.setattr(
+        pl, "propose_boxes",
+        lambda *a, **k: pd.DataFrame(
+            [{"sample_data_token": "v1", "category_group": "car",
+              "x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0, "score": 0.9}]
+        ),
+    )
+    monkeypatch.setattr(pl, "_official_val_scenes", lambda: {"scene-0003"})  # v1 IS val
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "pseudo": {"conf": 0.5, "tolerance": 1}})
+    )
+    weak_config = tmp_path / "weak.yaml"
+    weak_config.write_text(yaml.safe_dump({"state": {"dir": str(weak_state)}}))
+
+    with pytest.raises(ValueError, match="val split"):
+        pl.run_pseudo_label(
+            config, weak_config, arm="random", weights=tmp_path / "best.pt",
+            processed_dir=processed, device="cpu",
+        )
+
+
+def test_build_key_changes_with_pseudo_labels() -> None:
+    pytest.importorskip("nuscenes")
+    import nuscenes_data_engine.training.dataset as dataset_mod
+    from nuscenes_data_engine.training.dataset import _build_key
+
+    original = dataset_mod.compute_data_version
+    dataset_mod.compute_data_version = lambda _: "v0"  # type: ignore[assignment]
+    try:
+        kwargs: dict[str, Any] = {"cameras": ["CAM_FRONT"], "limit_scenes": None}
+        plain = _build_key(Path("x"), **kwargs)
+        pseudo_a = _build_key(Path("x"), **kwargs, pseudo_labels=pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["car"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        ))
+        pseudo_b = _build_key(Path("x"), **kwargs, pseudo_labels=pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["truck"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        ))
+    finally:
+        dataset_mod.compute_data_version = original  # type: ignore[assignment]
+
+    assert "pseudo_labels" not in plain  # pre-existing manifests keep matching
+    assert pseudo_a["pseudo_labels"] != pseudo_b["pseudo_labels"]  # content-sensitive
+
+
+def test_weak_arms_registered_and_share_accepted_frames(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import ARMS, resolve_arm_frames
+
+    assert {"weak_random", "weak_random_gt"} <= set(ARMS)
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["bl-1", "bl-2", "p-1", "p-2"],
+            "scene_name": ["bl", "bl", "pool", "pool"],
+            "channel": ["CAM_FRONT"] * 4,
+            "filename": ["a.jpg", "b.jpg", "c.jpg", "d.jpg"],
+            "is_night": [False] * 4,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame({"scene_name": ["bl", "pool"], "role": ["baseline", "pool"]}).to_parquet(
+        state / "split.parquet", index=False
+    )
+    pd.DataFrame({"sample_data_token": ["p-1"]}).to_parquet(
+        state / "random_accepted.parquet", index=False
+    )
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    weak = resolve_arm_frames(state, processed, cfg, "weak_random")
+    weak_gt = resolve_arm_frames(state, processed, cfg, "weak_random_gt")
+    assert weak == weak_gt == {"bl-1", "bl-2", "p-1"}  # identical frame sets
+
+
+# ---------------------------------------------------------------------------
+# build_yolo_dataset end-to-end seam: the real builder, not just the helpers.
+#
+# Everything below needs the nuScenes devkit's official train/val scene split, since
+# the builder derives `split` from `create_splits_scenes()` (see dataset.py). scene-0001
+# is an official train scene, scene-0003 an official val scene — same pair test_training.py
+# uses.
+# ---------------------------------------------------------------------------
+
+_SEAM_TRAIN_SCENE = "scene-0001"
+_SEAM_VAL_SCENE = "scene-0003"
+
+
+def _write_seam_fixture(processed_dir: Path, dataroot: Path) -> None:
+    """Real-schema samples/annotations for the pseudo-label seam end-to-end tests.
+
+    Four frames:
+      t-pseudo: train, GT=car, accepted with a pseudo box (truck) -> pseudo wins outright.
+      t-empty:  train, GT=pedestrian, accepted but the detector found nothing -> background.
+      t-plain:  train, GT=bus, not accepted -> GT must survive untouched.
+      v-1:      val, GT=car -> must never be touched by pseudo labels.
+    """
+    frames = [
+        ("t-pseudo", _SEAM_TRAIN_SCENE, "car"),
+        ("t-empty", _SEAM_TRAIN_SCENE, "pedestrian"),
+        ("t-plain", _SEAM_TRAIN_SCENE, "bus"),
+        ("v-1", _SEAM_VAL_SCENE, "car"),
+    ]
+    (dataroot / "samples" / "CAM_FRONT").mkdir(parents=True, exist_ok=True)
+    rows_img, rows_ann = [], []
+    for token, scene, gt_class in frames:
+        fname = f"samples/CAM_FRONT/{token}.jpg"
+        (dataroot / fname).write_bytes(b"\xff\xd8\xff")  # tiny fake jpeg
+        rows_img.append(
+            {
+                "sample_data_token": token, "sample_token": f"s-{token}", "channel": "CAM_FRONT",
+                "filename": fname, "width": 1600, "height": 900, "timestamp": 0, "n_boxes": 1,
+                "scene_token": scene, "scene_name": scene, "scene_description": "x",
+                "log_token": "l", "location": "singapore-onenorth", "is_night": False,
+                "is_rain": False,
+            }
+        )
+        rows_ann.append(
+            {
+                "annotation_token": f"ann-{token}", "sample_data_token": token,
+                "sample_token": f"s-{token}", "channel": "CAM_FRONT",
+                "category_name": f"gt.{gt_class}", "category_group": gt_class,
+                "visibility_token": "4", "num_lidar_pts": 5, "num_radar_pts": 1,
+                "x_min": 100.0, "y_min": 200.0, "x_max": 300.0, "y_max": 400.0,
+                "bbox_area": 40000.0, "scene_token": scene, "scene_name": scene,
+                "scene_description": "x", "log_token": "l", "location": "singapore-onenorth",
+                "is_night": False, "is_rain": False,
+            }
+        )
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows_img).to_parquet(processed_dir / "samples.parquet")
+    pd.DataFrame(rows_ann).to_parquet(processed_dir / "annotations.parquet")
+
+
+def test_build_yolo_dataset_pseudo_seam_end_to_end(tmp_path: Path) -> None:
+    """Builds two REAL datasets (pseudo vs. GT) and inspects the label files on disk.
+
+    Only the dataset-builder helpers (_apply_pseudo_labels, _build_key) are covered by
+    the other tests in this file. If someone moved the _apply_pseudo_labels call to the
+    wrong spot in build_yolo_dataset, or dropped `pseudo_labels=pseudo_labels` from its
+    _build_key(...) call, every one of those helper tests would still pass while the
+    published arm comparison silently used the wrong labels. This test exercises the
+    real seam to catch that class of mistake.
+    """
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.ingestion.categories import CLASS_TO_INDEX
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [50.0], "y_min": [60.0], "x_max": [150.0], "y_max": [260.0],
+            "score": [0.85],
+        }
+    )
+    pseudo_tokens = {"t-pseudo", "t-empty"}  # both accepted; only t-pseudo has detections
+
+    pseudo_out = tmp_path / "yolo_pseudo"
+    _, pseudo_stats = build_yolo_dataset(
+        processed, dataroot, pseudo_out, cameras=["CAM_FRONT"],
+        pseudo_labels=pseudo_labels, pseudo_tokens=pseudo_tokens,
+    )
+    gt_out = tmp_path / "yolo_gt"
+    _, gt_stats = build_yolo_dataset(processed, dataroot, gt_out, cameras=["CAM_FRONT"])
+
+    # Same 4 frames either way (pseudo labels never change which frames are included) —
+    # only t-empty's box count changes (1 GT box -> 0, a background), which is the
+    # measurable effect of "accepted but the detector found nothing".
+    assert pseudo_stats["train_images"] == gt_stats["train_images"] == 3
+    assert pseudo_stats["val_images"] == gt_stats["val_images"] == 1
+    assert pseudo_stats["boxes"] == 3 and gt_stats["boxes"] == 4
+
+    # Accepted frame WITH a pseudo row -> only the pseudo class, no GT (car) lines.
+    pseudo_lines = (pseudo_out / "labels" / "train" / "t-pseudo.txt").read_text().splitlines()
+    assert pseudo_lines  # not empty
+    classes = {line.split()[0] for line in pseudo_lines}
+    assert classes == {str(CLASS_TO_INDEX["truck"])}
+    assert str(CLASS_TO_INDEX["car"]) not in classes
+
+    # Accepted frame with GT but ZERO pseudo rows -> empty label file (background).
+    empty_label = (pseudo_out / "labels" / "train" / "t-empty.txt").read_text()
+    assert empty_label == ""
+
+    # Non-accepted train frame -> GT unchanged (identical to a plain GT build).
+    plain_pseudo = (pseudo_out / "labels" / "train" / "t-plain.txt").read_text()
+    plain_gt = (gt_out / "labels" / "train" / "t-plain.txt").read_text()
+    assert plain_pseudo == plain_gt
+    assert plain_pseudo.split()[0] == str(CLASS_TO_INDEX["bus"])
+
+    # Val must stay byte-identical between the pseudo build and the GT build.
+    val_pseudo = (pseudo_out / "labels" / "val" / "v-1.txt").read_bytes()
+    val_gt = (gt_out / "labels" / "val" / "v-1.txt").read_bytes()
+    assert val_pseudo == val_gt
+
+    # The two builds' manifest keys must differ (distinct cache identity).
+    pseudo_key = json.loads((pseudo_out / ".build_manifest.json").read_text())["key"]
+    gt_key = json.loads((gt_out / ".build_manifest.json").read_text())["key"]
+    assert pseudo_key != gt_key
+    assert "pseudo_labels" in pseudo_key and "pseudo_labels" not in gt_key
+
+
+def test_build_yolo_dataset_pseudo_labels_without_tokens_raises(tmp_path: Path) -> None:
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [0.0], "y_min": [0.0], "x_max": [10.0], "y_max": [10.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="pseudo_tokens"):
+        build_yolo_dataset(
+            processed, dataroot, tmp_path / "yolo_notokens", cameras=["CAM_FRONT"],
+            pseudo_labels=pseudo_labels,
+        )
+
+
+def test_build_yolo_dataset_rejects_val_token_in_pseudo_tokens(tmp_path: Path) -> None:
+    """The val split must stay identical across arms; a val token in pseudo_tokens
+
+    would silently delete that frame's GT in the pseudo build only — merge_results
+    only compares val_images counts, so nothing else would catch this.
+    """
+    pytest.importorskip("nuscenes")
+    from nuscenes_data_engine.training.dataset import build_yolo_dataset
+
+    processed = tmp_path / "processed"
+    dataroot = tmp_path / "nuscenes"
+    _write_seam_fixture(processed, dataroot)
+    pseudo_labels = pd.DataFrame(
+        {
+            "sample_data_token": ["t-pseudo"], "category_group": ["truck"],
+            "x_min": [0.0], "y_min": [0.0], "x_max": [10.0], "y_max": [10.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="val split"):
+        build_yolo_dataset(
+            processed, dataroot, tmp_path / "yolo_leak", cameras=["CAM_FRONT"],
+            pseudo_labels=pseudo_labels, pseudo_tokens={"t-pseudo", "v-1"},
+        )
+
+
+def test_build_key_changes_with_pseudo_tokens() -> None:
+    """Same pseudo table, different accepted set -> different key.
+
+    pseudo_tokens co-determines which GT rows disappear (including accepted-but-empty
+    frames that contribute no rows to pseudo_labels), so it must be hashed into the
+    cache key independently of the table's content hash.
+    """
+    pytest.importorskip("nuscenes")
+    import nuscenes_data_engine.training.dataset as dataset_mod
+    from nuscenes_data_engine.training.dataset import _build_key
+
+    original = dataset_mod.compute_data_version
+    dataset_mod.compute_data_version = lambda _: "v0"  # type: ignore[assignment]
+    try:
+        pseudo = pd.DataFrame(
+            {"sample_data_token": ["f1"], "category_group": ["car"],
+             "x_min": [0.0], "y_min": [0.0], "x_max": [1.0], "y_max": [1.0]}
+        )
+        key_a = _build_key(
+            Path("x"), ["CAM_FRONT"], None, pseudo_labels=pseudo, pseudo_tokens={"f1"}
+        )
+        key_b = _build_key(
+            Path("x"), ["CAM_FRONT"], None, pseudo_labels=pseudo, pseudo_tokens={"f1", "f2"}
+        )
+    finally:
+        dataset_mod.compute_data_version = original  # type: ignore[assignment]
+
+    assert key_a["pseudo_tokens"] != key_b["pseudo_tokens"]
+
+
+def test_apply_pseudo_labels_replaces_gt_for_those_tokens_only() -> None:
+    from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
+
+    gt = pd.DataFrame(
+        {
+            "sample_data_token": ["f1", "f1", "f2"],
+            "category_group": ["car", "pedestrian", "bus"],
+            "x_min": [0.0, 1.0, 2.0], "y_min": [0.0, 1.0, 2.0],
+            "x_max": [10.0, 11.0, 12.0], "y_max": [10.0, 11.0, 12.0],
+        }
+    )
+    pseudo = pd.DataFrame(
+        {
+            "sample_data_token": ["f1"], "category_group": ["truck"],
+            "x_min": [5.0], "y_min": [5.0], "x_max": [15.0], "y_max": [15.0],
+            "score": [0.9],
+        }
+    )
+    merged = _apply_pseudo_labels(gt, pseudo, {"f1"})
+    f1 = merged[merged["sample_data_token"] == "f1"]
+    assert list(f1["category_group"]) == ["truck"]  # GT rows for f1 replaced
+    f2 = merged[merged["sample_data_token"] == "f2"]
+    assert list(f2["category_group"]) == ["bus"]  # untouched
+    assert set(gt.columns) <= set(merged.columns)  # schema preserved for the builder
+
+
+def test_apply_pseudo_labels_accepted_but_empty_frame_loses_its_gt() -> None:
+    """An accepted frame the detector found nothing in must train as a background.
+
+    Its GT must NOT survive: the arm's whole claim is that these frames carry no
+    ground truth. Deriving the replacement key from the pseudo table (which has no
+    rows for such a frame) would silently leave the GT in place.
+    """
+    from nuscenes_data_engine.training.dataset import _apply_pseudo_labels
+
+    gt = pd.DataFrame(
+        {
+            "sample_data_token": ["empty", "other"],
+            "category_group": ["pedestrian", "car"],
+            "x_min": [0.0, 2.0], "y_min": [0.0, 2.0],
+            "x_max": [10.0, 12.0], "y_max": [10.0, 12.0],
+        }
+    )
+    pseudo = pd.DataFrame(
+        {
+            "sample_data_token": pd.Series([], dtype=str),
+            "category_group": pd.Series([], dtype=str),
+            "x_min": pd.Series([], dtype=float), "y_min": pd.Series([], dtype=float),
+            "x_max": pd.Series([], dtype=float), "y_max": pd.Series([], dtype=float),
+        }
+    )
+    merged = _apply_pseudo_labels(gt, pseudo, {"empty"})
+    assert "empty" not in set(merged["sample_data_token"])  # trains as a background
+    assert list(merged[merged["sample_data_token"] == "other"]["category_group"]) == ["car"]

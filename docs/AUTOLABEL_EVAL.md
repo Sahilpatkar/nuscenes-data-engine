@@ -209,3 +209,24 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3 \
 vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8399 --tensor-parallel-size 4 \
   --max-model-len 4096 --gpu-memory-utilization 0.75 --enforce-eager --max-num-seqs 16
 ```
+
+## Reuse for weak supervision
+
+Phase 6d's weak-supervision experiment (docs/ACTIVE_LEARNING.md, "Weak
+supervision") reuses this labeller unchanged — same Qwen2.5-VL-7B model, same
+prompt, same submit/collect path — pointed at a separate state dir via
+[configs/autolabel_weak.yaml](../configs/autolabel_weak.yaml), so the original
+5,000-frame run's sample/batches/results/labels are never touched. 1,272 frames
+(the `random` arm's mined frames not already covered by the original sample) were
+labelled at $0; parse rate 1,267/1,272 = 99.6% ok, 5 truncated — consistent with
+the original run's 99.7%.
+
+What this run's count quality implies for verification: the Findings above show
+presence/condition tagging is reliable (night F1 0.989, rain F1 0.865) while exact
+counts under crowding are not (MAE 6.67 at 10+ objects) — which is exactly why the
+weak-supervision verifier accepts frames on **±1 count tolerance per class**, not
+exact equality. It's also why pedestrian presence recall 0.58 (Findings #3 above)
+shows up downstream as a measured blind spot: 686 of 958 weak-supervision-accepted
+frames have *both* detector and VLM reporting zero pedestrians. See
+docs/ACTIVE_LEARNING.md, "Weak supervision", for the mechanism and its effect on
+night mAP.

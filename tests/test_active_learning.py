@@ -1107,6 +1107,84 @@ def test_arm_composition_reads_state(tmp_path: Path) -> None:
     assert arm_composition(state, tmp_path / "missing") == {}
 
 
+def test_arm_composition_computed_for_weak_arms(tmp_path: Path) -> None:
+    """weak_random/weak_random_gt's frame source is random_accepted.parquet, not
+    f"{arm}.parquet" — composition must resolve that through the same ARM_EXTRA_FILE
+    map resolve_arm_frames uses, or Task 9's write-up gets blank composition cells."""
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
+    processed = tmp_path / "processed"
+    _write_samples(processed, {"s0": False, "s1": True}, rain_scenes={"s1"})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"sample_data_token": ["s0-CAM_FRONT-0", "s1-CAM_FRONT-0", "s1-CAM_FRONT-1"]}
+    ).to_parquet(state / "random_accepted.parquet", index=False)
+
+    composition = arm_composition(state, processed)
+    expected = {"n_scenes": 2, "night_share": round(2 / 3, 3), "rain_share": round(2 / 3, 3)}
+    assert composition["weak_random"] == expected
+    assert composition["weak_random_gt"] == expected  # same accepted set -> same composition
+
+
+def test_arm_composition_surfaces_weak_arm_retention(tmp_path: Path) -> None:
+    """The spec's guard says retention must land in the report table, not just the
+    summary JSON — arm_composition reads <base>_pseudo_summary.json (keyed by the
+    *base* arm `random`, not `weak_random`/`weak_random_gt`) and attaches `retention`
+    to both weak arms. A non-weak arm never gets the key."""
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
+    processed = tmp_path / "processed"
+    _write_samples(processed, {"s0": False, "s1": True}, rain_scenes={"s1"})
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame(
+        {"sample_data_token": ["s0-CAM_FRONT-0", "s1-CAM_FRONT-0", "s1-CAM_FRONT-1"]}
+    ).to_parquet(state / "random_accepted.parquet", index=False)
+    pd.DataFrame({"sample_data_token": ["s0-CAM_FRONT-0"]}).to_parquet(
+        state / "rate.parquet", index=False
+    )
+    (state / "random_pseudo_summary.json").write_text(
+        json.dumps({"arm": "random", "n_accepted": 958, "n_candidates": 1500, "retention": 0.6386666666666667})
+    )
+
+    composition = arm_composition(state, processed)
+    assert composition["weak_random"]["retention"] == 0.639
+    assert composition["weak_random_gt"]["retention"] == 0.639
+    # Not keyed to the weak arm's own name — <weak_random>_pseudo_summary.json is never
+    # written, so this would silently be blank if the base-arm lookup were wrong.
+    assert not (state / "weak_random_pseudo_summary.json").exists()
+    # A non-weak arm resolves through f"{arm}.parquet", not "<x>_accepted.parquet", so
+    # it never even looks for a pseudo summary.
+    assert "retention" not in composition["rate"]
+    # Missing summary file (pseudo-labelling hasn't run yet) -> no key at all, not a
+    # fabricated 0.0.
+    (state / "random_pseudo_summary.json").unlink()
+    composition_no_summary = arm_composition(state, processed)
+    assert "retention" not in composition_no_summary["weak_random"]
+
+
+def test_render_report_shows_retention_column() -> None:
+    """Retention renders in the arm-comparison table for weak arms; other arms (and
+    weak arms before pseudo-labelling has run) get a blank cell, not NaN or a
+    fabricated 0.0 — the spec's guard that retention must appear "in the report
+    table", not just logs."""
+    results = _fake_results()
+    results["weak_random"] = {
+        "n_train_images": 7993,
+        "overall": {"mAP50": 0.4539, "mAP50-95": 0.2539},
+        "night": {"mAP50": 0.32, "mAP50-95": 0.1483},
+    }
+    composition = {"weak_random": {"n_scenes": 400, "retention": 0.639}}
+    markdown = render_report(results, None, composition)
+    assert "retention" in markdown
+    weak_row = next(line for line in markdown.splitlines() if "| weak_random" in line)
+    assert "0.639" in weak_row
+    # Arms with no retention entry (here: every non-weak arm) get a blank cell.
+    random_row = next(line for line in markdown.splitlines() if "| random" in line)
+    assert "nan" not in random_row and "0.639" not in random_row
+
+
 def test_run_report_writes_markdown(tmp_path: Path) -> None:
     from nuscenes_data_engine.active_learning.report import run_report
 

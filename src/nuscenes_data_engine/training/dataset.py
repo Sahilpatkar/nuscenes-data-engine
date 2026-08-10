@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,8 @@ def _build_key(
     cameras: list[str] | None,
     limit_scenes: int | None,
     train_frames: set[str] | None = None,
+    pseudo_labels: pd.DataFrame | None = None,
+    pseudo_tokens: set[str] | None = None,
 ) -> dict[str, Any]:
     """Identity of a YOLO build — everything that determines its contents."""
     key = {
@@ -63,6 +66,22 @@ def _build_key(
         # keep matching and don't trigger a ~400k-file rebuild.
         key["train_frames"] = hashlib.sha256(
             "\n".join(sorted(train_frames)).encode()
+        ).hexdigest()[:16]
+    if pseudo_labels is not None:
+        # Content hash: a pseudo-labelled arm must never reuse a GT-labelled build.
+        columns = ["sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max"]
+        payload = (
+            pseudo_labels[columns]
+            .sort_values(columns, ignore_index=True)
+            .to_csv(index=False)
+            .encode()
+        )
+        key["pseudo_labels"] = hashlib.sha256(payload).hexdigest()[:16]
+    if pseudo_tokens is not None:
+        # pseudo_tokens co-determines the build (it decides which GT rows disappear,
+        # including accepted-but-empty frames that have no rows in pseudo_labels).
+        key["pseudo_tokens"] = hashlib.sha256(
+            "\n".join(sorted(pseudo_tokens)).encode()
         ).hexdigest()[:16]
     return key
 
@@ -85,6 +104,24 @@ def _symlink(target: Path, link: Path) -> None:
     link.symlink_to(target)
 
 
+def _apply_pseudo_labels(
+    annotations: pd.DataFrame,
+    pseudo_labels: pd.DataFrame,
+    pseudo_tokens: set[str],
+) -> pd.DataFrame:
+    """Replace GT rows with pseudo rows for every token in ``pseudo_tokens``.
+
+    Whole-frame replacement (not a merge): a frame is labelled either by ground truth
+    or by the detector, never half of each. The token set is passed explicitly rather
+    than derived from ``pseudo_labels`` because an accepted frame with **zero** detected
+    boxes contributes no rows — deriving the key from the table would leave that frame's
+    ground truth in place and silently break the arm's "no GT" claim.
+    """
+    kept = annotations[~annotations["sample_data_token"].isin(pseudo_tokens)]
+    columns = [c for c in annotations.columns if c in pseudo_labels.columns]
+    return pd.concat([kept, pseudo_labels[columns]], ignore_index=True)
+
+
 def build_yolo_dataset(
     processed_dir: Path,
     dataroot: Path,
@@ -93,6 +130,8 @@ def build_yolo_dataset(
     cameras: list[str] | None = None,
     limit_scenes: int | None = None,
     train_frames: set[str] | None = None,
+    pseudo_labels: pd.DataFrame | None = None,
+    pseudo_tokens: set[str] | None = None,
     force: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Build a YOLO dataset from the processed Parquet; return (data.yaml path, stats).
@@ -111,9 +150,23 @@ def build_yolo_dataset(
         train_frames: Restrict the TRAIN split to these sample_data_tokens (active
             learning arms). The val split is never filtered — it must stay identical
             across experiment arms for comparability.
+        pseudo_labels: Replace ground-truth boxes with these for every token in
+            ``pseudo_tokens`` (weak supervision). The cache key includes their content hash.
+        pseudo_tokens: The frames whose labels come from ``pseudo_labels`` — passed
+            explicitly because an accepted frame with zero detected boxes has no rows in
+            ``pseudo_labels`` and must still lose its ground truth. Also hashed into the
+            cache key (it co-determines the build) and validated disjoint from the val
+            split — a leaked val token would silently corrupt the arm comparison.
         force: Rebuild even if an up-to-date dataset already exists.
     """
-    key = _build_key(processed_dir, cameras, limit_scenes, train_frames)
+    key = _build_key(
+        processed_dir,
+        cameras,
+        limit_scenes,
+        train_frames,
+        pseudo_labels=pseudo_labels,
+        pseudo_tokens=pseudo_tokens,
+    )
     data_yaml = out_dir / "data.yaml"
     manifest = _read_manifest(out_dir)
     if not force and data_yaml.exists() and manifest is not None and manifest.get("key") == key:
@@ -153,6 +206,20 @@ def build_yolo_dataset(
 
     kept_tokens = set(samples["sample_data_token"])
 
+    if pseudo_labels is not None:
+        if pseudo_tokens is None:
+            raise ValueError("pseudo_labels requires pseudo_tokens (empty frames have no rows)")
+        # The val split must stay byte-identical across arms (comparability); a pseudo
+        # row or an accepted token touching a val frame would silently violate that.
+        val_tokens = set(samples[samples["split"] == "val"]["sample_data_token"])
+        leaked = (pseudo_tokens | set(pseudo_labels["sample_data_token"])) & val_tokens
+        if leaked:
+            raise ValueError(
+                f"{len(leaked)} pseudo-labelled frames are in the val split "
+                f"(first: {sorted(leaked)[0]}) — val must stay identical across arms"
+            )
+        annotations = _apply_pseudo_labels(annotations, pseudo_labels, pseudo_tokens)
+
     # Build normalized label lines for detector-class annotations only.
     ann = annotations[annotations["category_group"].notna()].copy()
     ann = ann[ann["sample_data_token"].isin(kept_tokens)]
@@ -176,8 +243,13 @@ def build_yolo_dataset(
         ann.groupby("sample_data_token")["_line"].apply(list).to_dict()
     )
 
-    # Materialize image symlinks + label files.
+    # Materialize image symlinks + label files. Prune any prior build first: the
+    # accepted/train-frame set can shrink between builds (e.g. re-tuning `al
+    # pseudo-label`'s conf/tolerance), and a create-only loop would leave stale
+    # images/labels behind for Ultralytics to glob up, with stats under-reporting them.
     for split in ("train", "val"):
+        shutil.rmtree(out_dir / "images" / split, ignore_errors=True)
+        shutil.rmtree(out_dir / "labels" / split, ignore_errors=True)
         (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
