@@ -350,7 +350,7 @@ Ordered roughly by value-per-effort:
    deterministic via `concurrency: 1`; spec `2026-08-04-al-round-3-design.md`).
    Results: rate-mass weighting alone matches size weighting (+0.0330 vs +0.0344,
    within partition noise) — but `graph_rate_night` delivers **the project's best
-   night gain of all nine arms, +0.0101 night mAP50-95** (0.1768) at ~75% of the
+   night gain of all 13 arms, +0.0101 night mAP50-95** (0.1768) at ~75% of the
    best overall gain. With diversity held by the community floor, an explicit night
    floor finally moves the night slice; the overall/night trade-off is now an
    explicit, tunable choice (docs/ACTIVE_LEARNING.md, "Round 3 results").*
@@ -386,8 +386,10 @@ Ordered roughly by value-per-effort:
    detector/VLM agreement easier — but the night gain itself *inverts*, from GT's
    +0.0101 to the pseudo-labelled arm's **−0.0262**. The GT twin
    (`weak_graph_rate_night_gt`, the identical 1,101 accepted frames) keeps +0.0099
-   of the night gain, proving the damage is the *labels*, not the frames the
-   verifier dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
+   of the night gain, proving — on a single seed, with an effect size (a 0.0361
+   night swing between twins vs a 0.0002 frame cost) far outside the run-to-run
+   noise band — that the damage is the *labels*, not the frames the verifier
+   dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
 5. **Chat agent upgrades** — streaming responses, chart generation from SQL
    results, a saved-questions gallery in Streamlit, and evaluation harness for
    answer correctness (the logged JSONL is already the dataset for it).

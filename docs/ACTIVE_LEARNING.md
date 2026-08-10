@@ -383,12 +383,15 @@ Verdicts:
   diversity is preserved; the coverage floor, not the weighting, carries the arm.
 - **H2 (night floor on top) — confirmed, and it's the project's best night result.**
   `graph_rate_night` posts **+0.0101 night mAP50-95** (0.1768) — the largest night
-  gain of all nine arms across three rounds (previous best: `mined` +0.0072) — at
-  an overall cost of ~0.008 vs `graph_rate` (partition-matched, so this comparison
-  is clean). One community-concentrated night boost (916-frame all-night community,
-  quota 83 → 323) moved the night slice more than any acquisition change before it.
+  gain of all nine acquisition-strategy arms across three rounds (previous best:
+  `mined` +0.0072), and still the largest night *gain* of all 13 arms once the
+  weak-supervision arms are added (see "Weak supervision" below — those arms are
+  worse, not better, on night) — at an overall cost of ~0.008 vs `graph_rate`
+  (partition-matched, so this comparison is clean). One community-concentrated
+  night boost (916-frame all-night community, quota 83 → 323) moved the night
+  slice more than any acquisition change before it.
 - **The overall gate still holds** — nothing beats `graph`/`random` on overall
-  mAP50-95. After nine arms the frontier is clear: **maximum overall** comes from
+  mAP50-95. After nine acquisition arms the frontier is clear: **maximum overall** comes from
   diversity (size-weighted `graph` or plain `random`); **maximum night** comes from
   `graph_rate_night`, which keeps ~75% of the best overall gain while tripling the
   best prior night delta. Given the project's release gate is night mAP (Phase 3),
@@ -526,26 +529,36 @@ above) and measured as-is, not tuned post-hoc to this result.
 
 ### Runbook
 
+Every command below is parameterized by `<base-arm>` — the two runs this project
+has made used `random` (round 1) and `graph_rate_night` (round 3's night
+champion, below); any arm with an `ARM_EXTRA_FILE` entry works the same way:
+
 ```bash
 # 1. sample the arm frames still needing labels (any node)
-scripts/gpu-run.sh al pseudo-sample --arm random
+scripts/gpu-run.sh al pseudo-sample --arm <base-arm>
 # 2. serve the VLM on a free 24GB card, then label via the unchanged 6b path
 GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg raw "env PATH=/home/mgaur/sahil/vllm-env/bin:/usr/local/bin:/usr/bin:/bin HF_HOME=<repo>/.cache/huggingface CUDA_VISIBLE_DEVICES=0 /home/mgaur/sahil/vllm-env/bin/vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8399 --max-model-len 8192"
 GPU_NODE=trinity-2-3 scripts/gpu-run.sh --bg raw "sh -c 'uv run nuscenes-data-engine autolabel submit -c configs/autolabel_weak.yaml --provider local && uv run nuscenes-data-engine autolabel collect -c configs/autolabel_weak.yaml --provider local'"
 # 3. propose + verify, then train both arms
-GPU_DEVICES=2 scripts/gpu-run.sh al pseudo-label --arm random --weights runs/yolov8n_imgsz640_e20_al-baseline/weights/best.pt
-scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_random && env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_random_gt && uv run nuscenes-data-engine al report'"
+GPU_DEVICES=2 scripts/gpu-run.sh al pseudo-label --arm <base-arm> --weights runs/yolov8n_imgsz640_e20_al-baseline/weights/best.pt
+scripts/gpu-run.sh --bg raw "sh -c 'env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_<base-arm> && env CUDA_VISIBLE_DEVICES=2 uv run nuscenes-data-engine al run --arm weak_<base-arm>_gt && uv run nuscenes-data-engine al report'"
 ```
 
 Step 3's first line goes through `gpu-run.sh`'s non-`raw` path, which builds
 `env CUDA_VISIBLE_DEVICES=$GPU_DEVICES uv run ...` (default `GPU_DEVICES=0`) — the
 process then sees exactly **one** GPU, at ordinal 0. `--device` on `al pseudo-label`
 must stay at its default `"0"` (correct inside that filtered environment);
-`GPU_DEVICES=2` is what actually selects the physical card.
+`GPU_DEVICES=2` is what actually selects the physical card. `--weights` always
+points at the same baseline detector regardless of `<base-arm>` — only the
+proposer changes which frames it runs over.
 
 The vLLM server needs a 24 GB node — `trinity-2-3`, not the 12 GB `trinity-2-18` —
 and its venv's `bin` must lead `PATH` or vLLM's shell-out to `ninja`
-(torch.compile) fails.
+(torch.compile) fails. If the usual node is busy, any other 24 GB card works too
+as long as `--gpu-memory-utilization` is capped so the run doesn't crowd out
+whoever else is on it: the `graph_rate_night` labelling run used `trinity-0-3`
+GPU 1 at `--gpu-memory-utilization 0.5` because `trinity-2-3` was fully occupied
+at the time.
 
 ### A second arm: the night champion
 
@@ -558,14 +571,26 @@ this is where it would show. Two more arms close the same loop as above:
 `weak_graph_rate_night` (pseudo) and `weak_graph_rate_night_gt` (ground truth on
 the identical accepted set).
 
-**Pre-registered prediction**: retention would *fall* below the random arm's
-0.639, because the VLM's pedestrian blind spot concentrates in night frames.
-Finding 1 below covers why that inverted.
+**Pre-registered predictions** (three, scored 2/3 below):
+
+- (a) Retention falls below the random arm's 0.639, because the VLM's
+  pedestrian blind spot concentrates in night frames — **wrong**: it rose to
+  0.734.
+- (b) The mutual-zero pedestrian share rises above the random round's 686/958
+  (71.6%) — **held**: it rose to 870/1,101 (79.0%).
+- (c) The night gain is the most likely casualty of the three — **held**, and
+  emphatically: +0.0101 (GT) inverts to −0.0262 (pseudo).
+
+The two that held are the substantive ones; Finding 1 below covers why (a)
+inverted while (b) and (c) landed.
 
 **Pipeline**: 1,172 of `graph_rate_night`'s 1,500 frames needed VLM labels (328
 already covered by earlier runs); labelled at $0 on the same self-hosted
-Qwen2.5-VL via the unchanged 6b path. The weak-labels table now holds 2,444 rows
-across both weak-supervision arms, 2,437 ok / 7 truncated (99.7% parse rate).
+Qwen2.5-VL via the unchanged 6b path. Confirmed against
+`data/active_learning/autolabel_weak/labels.parquet` (synced from TRINITY): the
+cumulative weak-labels table — now spanning both `random`'s and
+`graph_rate_night`'s labelling runs, not just this run's 1,172 — holds 2,444
+rows total, 2,437 ok / 7 truncated (99.7% parse rate).
 
 Verification (same rule as the random round: conf 0.5, tolerance ±1, per-frame
 accept/reject):
@@ -603,31 +628,36 @@ Decomposing overall mAP50-95's GT gain, night arm beside the earlier random arm:
 
 Three findings:
 
-1. **The pre-registered prediction was wrong, informatively.** I predicted
-   retention would *fall* below the random arm's 0.639 because the VLM's
-   pedestrian blind spot concentrates in night frames. It rose instead, to
-   0.734. The reason inverts the metric's meaning: night frames are sparser
-   (3.41 GT boxes/frame vs the random arm's 5.22 arm-wide), and with fewer
-   objects the detector and VLM agree more easily — but much of that agreement
-   is *mutual zero* (both saw nothing), which rose to 870/1,101 = **79.0%** of
-   accepted frames vs the random arm's 686/958 = 71.6%. Under-labelling also got
-   worse (47% of GT boxes vs 52%). **Retention is therefore a misleading health
-   metric on its own** — a higher number can mean emptier frames rather than
-   cleaner labels. The half of the prediction that *did* hold: the mutual-zero
-   pedestrian share rose, exactly as predicted.
+1. **Prediction (a) was wrong, informatively — and the reason it inverted is
+   exactly why (b) held.** Retention rose to 0.734 instead of falling below the
+   random arm's 0.639. The reason: night frames are sparser **arm-wide** — 4.28
+   GT boxes/frame (`graph_rate_night`'s full 1,500-frame candidate pool, the
+   population verification actually ran over) vs the random arm's 5.22, an 18%
+   gap. (The accepted-set means, 3.41 vs the random round's 3.87, look similar
+   but are the weaker comparison here — the accepted set is selected *for*
+   detector/VLM agreement, i.e. selected to already be sparse, so citing it to
+   explain why agreement rose would be partly circular.) With fewer objects the
+   detector and VLM agree more easily — but much of that agreement is *mutual
+   zero* (both saw nothing): prediction (b), and it held, rising to
+   870/1,101 = **79.0%** of accepted frames vs the random arm's 686/958 = 71.6%.
+   Under-labelling also got worse (47% of GT boxes vs 52%). **Retention is
+   therefore a misleading health metric on its own** — a higher number can mean
+   emptier frames rather than cleaner labels.
 2. **The GT twin isolates the damage precisely, and it is catastrophic for
    night.** `weak_graph_rate_night_gt` — the same 1,101 accepted frames with
    ground truth — keeps essentially the entire night gain (+0.0099 vs the full
    arm's +0.0101). The pseudo-labelled arm collapses to **−0.0262**, the worst
-   night result of any of the 13 arms across all three rounds, and a −0.0361
-   swing against its own twin. So the frames the verifier kept are fine; the
+   night result of any of the 13 arms trained in this experiment (rounds 1–3
+   plus the four weak-supervision arms), and a −0.0361 swing against its own
+   twin. So the frames the verifier kept are fine; the
    *labels* destroy night — the pedestrian blind spot showing up in exactly the
    metric it was predicted to hurt.
-3. **The paradox worth stating plainly**: on overall mAP, weak supervision is
-   *twice as efficient* here as on the random arm (39.4% of the GT gain retained
-   vs 18.2%), yet it destroys the very night capability this arm was selected
-   for. Sparser night data makes pseudo-labels look better on aggregate metrics
-   while making them worse where it matters.
+3. **Prediction (c) held, emphatically — the paradox worth stating plainly**:
+   on overall mAP, weak supervision is *twice as efficient* here as on the
+   random arm (39.4% of the GT gain retained vs 18.2%), yet it destroys the
+   very night capability this arm was selected for. Sparser night data makes
+   pseudo-labels look better on aggregate metrics while making them worse where
+   it matters.
 
 Noise caveat: single seed per arm, as with the random-round comparison above —
 read the decomposition percentages as one run's split, not a precise partition.
