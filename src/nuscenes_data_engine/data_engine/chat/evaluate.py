@@ -230,22 +230,45 @@ def _derived_matches(cited: float, observed: set[float]) -> bool:
 # identical constant, checked but never admitted. Widening only the allowlist can remove
 # false grounding failures, never create them — a citation still has to match some
 # admitted value, this only grows the set it may match against.
-_ANY_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_ANY_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 
 def _allowlist_numbers(text: str) -> set[float]:
-    """Numbers a citation may legitimately echo (question constants).
+    """Numbers a citation may legitimately echo (question / schema constants).
 
-    Deliberately more permissive than ``extract_numbers``: it also matches digits
-    adjacent to punctuation such as the hyphen in "the 1-4 scale", which the citation
-    extractor suppresses to avoid phantom values. Widening only the allowlist can
-    remove false grounding failures, never create them.
+    Deliberately more permissive than ``extract_numbers``: it matches digits adjacent
+    to punctuation ("the 1-4 scale") and keeps sign symmetry — schema text saying
+    ``-3.0`` licenses an answer citing ``3.0`` and vice versa (a deceleration cited as
+    a positive magnitude is the same constant). Widening only the allowlist can remove
+    false grounding failures, never create them.
     """
-    return {float(m.group().replace(",", "")) for m in _ANY_NUMBER.finditer(text)}
+    values = {float(m.group().replace(",", "")) for m in _ANY_NUMBER.finditer(text)}
+    return values | {-v for v in values}
+
+
+def _schema_constants(con: Any) -> set[float]:
+    """Numbers in the schema-prompt text the agent's system prompt embeds.
+
+    A model quoting a documented threshold ("hard braking means <= -3.0 m/s2") is
+    reporting what it was shown, not inventing. Extracted from the SAME
+    ``catalog.schema_prompt`` text ``agent.answer`` uses — never a hardcoded list, so
+    it cannot drift. On a connection lacking the catalog views (tests), degrade to
+    whatever extracts rather than raising: grading must never crash on the fixture.
+    """
+    try:
+        return _allowlist_numbers(catalog.schema_prompt(catalog.catalog_tables(con)))
+    except Exception as exc:
+        logger.debug("schema constants unavailable (%s)", exc)
+        return set()
 
 
 def is_grounded(
-    answer: str, con: Any, steps: list[dict[str, Any]], question: str = ""
+    answer: str,
+    con: Any,
+    steps: list[dict[str, Any]],
+    question: str = "",
+    *,
+    n_frames: int = 0,
 ) -> bool:
     """True when every number in the answer traces to the agent's own tool output.
 
@@ -256,12 +279,16 @@ def is_grounded(
     question, is unsupported — being plausible, or even correct, is not being grounded.
     …or one admitted arithmetic step (sum, difference, percentage, m/s↔km/h) from
     observed values — showing your arithmetic is grounded; getting it wrong is not.
+    Also admits schema-prompt constants (numbers the model's own system prompt showed
+    it) and, when ``n_frames`` is given, the count of frames actually attached.
     """
     cited = extract_numbers(answer)
     if not cited:
         return True
     measurements, row_counts = _observed_split(con, steps)
-    allowed = measurements | row_counts | _allowlist_numbers(question)
+    allowed = measurements | row_counts | _allowlist_numbers(question) | _schema_constants(con)
+    if n_frames > 0:
+        allowed.add(float(n_frames))  # "6 examples attached" is tool-visible data
     allowed |= _derived_candidates(measurements)  # derivations draw on measurements ONLY
     return all(
         any(_matches_at_cited_precision(value, seen) for seen in allowed) for value in cited
@@ -357,17 +384,19 @@ def grade_case(
     *,
     answer: str,
     steps: list[dict[str, Any]],
-    frames: list[dict[str, Any]],
+    n_frames: int,
 ) -> dict[str, Any]:
     """Per-check verdicts for one answered case, plus the overall ``passed``.
 
     Checks that do not apply to a case are ABSENT from the dict rather than True, so a
-    case is never credited with a check it never faced.
+    case is never credited with a check it never faced. Takes the frame COUNT rather
+    than the frames themselves — stored eval records only carry ``n_frames`` (see
+    ``regrade``), and grounding needs only the count to admit "N examples attached".
     """
     checks: dict[str, Any] = {
         "english": is_english(answer),
         "tool_use": used_tools(steps),
-        "grounded": is_grounded(answer, con, steps, case.question),
+        "grounded": is_grounded(answer, con, steps, case.question, n_frames=n_frames),
     }
     if case.reference_sql is not None:
         expected = reference_value(con, case)
@@ -376,7 +405,7 @@ def grade_case(
         )
         checks["expected"] = expected
     if case.expect_frames:
-        checks["frames"] = returned_frames(frames)
+        checks["frames"] = n_frames > 0
     checks["passed"] = all(
         value for key, value in checks.items() if isinstance(value, bool)
     )
@@ -444,7 +473,8 @@ def run_eval(
                 case.question, transport=transport, con=con, search_engine=search_engine
             )
             checks = grade_case(
-                con, case, answer=result.answer, steps=result.steps, frames=result.frames
+                con, case, answer=result.answer, steps=result.steps,
+                n_frames=len(result.frames),
             )
             record: dict[str, Any] = {
                 "id": case.id, "question": case.question, "answer": result.answer,

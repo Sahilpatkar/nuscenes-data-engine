@@ -384,7 +384,7 @@ def test_grade_case_reports_each_check(tiny_con: Any) -> None:
     )
     steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
               "output": "1 rows"}]
-    checks = grade_case(tiny_con, case, answer="There are 2 samples.", steps=steps, frames=[])
+    checks = grade_case(tiny_con, case, answer="There are 2 samples.", steps=steps, n_frames=0)
     assert checks["numeric"] is True
     assert checks["english"] is True
     assert checks["tool_use"] is True
@@ -404,7 +404,7 @@ def test_grade_case_marks_the_failing_check(tiny_con: Any) -> None:
         tiny_con, case, answer="There are 99 samples.",
         steps=[{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
                 "output": "1 rows"}],
-        frames=[],
+        n_frames=0,
     )
     assert checks["numeric"] is False and checks["grounded"] is False
     assert checks["passed"] is False
@@ -417,7 +417,7 @@ def test_grade_case_without_reference_skips_numeric(tiny_con: Any) -> None:
     checks = grade_case(
         tiny_con, case, answer="Here are some frames.",
         steps=[{"tool": "search_frames", "input": {"query": "fog"}, "output": "2 frames found"}],
-        frames=[{"sample_data_token": "t1"}],
+        n_frames=1,
     )
     assert "numeric" not in checks  # skipped, not passed
     assert checks["frames"] is True and checks["passed"] is True
@@ -435,7 +435,7 @@ def test_grade_case_passes_the_question_to_grounding(tiny_con: Any) -> None:
         tiny_con, case, answer="2 samples are within 5 metres.",
         steps=[{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
                 "output": "1 rows"}],
-        frames=[],
+        n_frames=0,
     )
     assert checks["grounded"] is True
 
@@ -608,6 +608,48 @@ def test_integer_citations_match_at_one_decimal_not_zero() -> None:
     assert _matches_at_cited_precision(14.0, 13.6) is False    # 0-decimals would admit this
 
 
+def test_allowlist_numbers_captures_signed_and_hyphenated() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import _allowlist_numbers
+
+    allowed = _allowlist_numbers("deceleration <= -3.0 m/s2 within a +-0.5 s window, 1-4 scale")
+    # Sign symmetry: schema text says -3.0, an answer may cite 3.0 (or vice versa).
+    assert {3.0, -3.0, 0.5, -0.5, 1.0, 4.0} <= allowed
+
+
+def test_is_grounded_admits_schema_prompt_constants(tiny_con: Any, monkeypatch: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import evaluate
+
+    monkeypatch.setattr(
+        evaluate, "_schema_constants",
+        lambda con: {3.0, -3.0, 0.5, -0.5},
+    )
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT 94"}, "output": "1 rows"}]
+    assert evaluate.is_grounded(
+        "94 keyframes brake harder than 3.0 m/s2 in the 0.5 s window.", tiny_con, steps
+    ) is True
+
+
+def test_is_grounded_admits_the_attached_frame_count(tiny_con: Any, monkeypatch: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import evaluate
+
+    # Pin schema constants to empty so this test isolates the n_frames mechanism.
+    monkeypatch.setattr(evaluate, "_schema_constants", lambda con: set())
+    steps = [{"tool": "search_frames", "input": {"query": "fog"}, "output": "6 frames found"}]
+    assert evaluate.is_grounded(
+        "I attached 6 example frames.", tiny_con, steps, n_frames=6
+    ) is True
+    assert evaluate.is_grounded(
+        "I attached 6 example frames.", tiny_con, steps, n_frames=0
+    ) is False
+
+
+def test_schema_constants_never_raises_on_a_bare_connection(tiny_con: Any) -> None:
+    """The tiny fixture lacks most catalog views; extraction degrades to a set, not a crash."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import _schema_constants
+
+    assert isinstance(_schema_constants(tiny_con), set)
+
+
 def test_max_instance_keyframes_stays_ungrounded() -> None:
     """Hard negative control: must never pass, whatever the allowlist grows.
 
@@ -633,15 +675,17 @@ def test_max_instance_keyframes_stays_ungrounded() -> None:
     assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False
 
 
-def test_foggy_misty_glare_frames_stays_ungrounded() -> None:
+def test_foggy_flips_via_schema_constants_documented_limitation() -> None:
     """Local, data-dependent; skips in CI (data/ is gitignored).
 
-    Expected to FLIP to grounded once Task 3's schema constants land — see the spec's
-    2026-08-11 pre-registered amendment (§2): its residual citations (5000, 50) collide
-    with the schema-prompt text "5,000 CAM_FRONT frames" and the canbus "50 Hz window",
-    matched units-blind against a hallucinated "~50+" frame estimate. This assertion is
-    intentionally still False here — Commit 2 updates it once the schema-constant code
-    exists, per the pre-registration discipline (predict first, then measure).
+    A units-blind allowlist admits '50 Hz' (canbus schema text) against a hallucinated
+    "~50+" frame count, and '5,000 CAM_FRONT frames' (labels schema text) against the
+    answer's own "5,000 CAM_FRONT frames" restatement — pre-registered as a MISSED
+    prediction, see spec §2 amendment (2026-08-11): admitting schema-prompt constants
+    was projected to flip this record from ungrounded to grounded not because the
+    figures are genuinely supported, but because the check cannot distinguish a
+    hallucinated frame count from a schema constant that happens to share its value.
+    Documented as a limitation of v2's allowlist, not adjusted away.
     """
     import json
     from pathlib import Path
@@ -658,7 +702,7 @@ def test_foggy_misty_glare_frames_stays_ungrounded() -> None:
     con = open_catalog(Path("data/processed"), labels_path=Path("data/autolabel/labels.parquet"))
     records = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
     rec = records["foggy_misty_glare_frames"]
-    assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False
+    assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is True
 
 
 def test_max_instance_keyframes_collision_ceiling_is_bounded() -> None:
