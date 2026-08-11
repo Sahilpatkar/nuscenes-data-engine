@@ -454,18 +454,27 @@ def chat_eval(
     model: str | None = typer.Option(None, "--model", help="Override the chat model."),
     limit: int | None = typer.Option(None, "--limit", help="First N cases (smoke runs)."),
     processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+    regrade_path: Path | None = typer.Option(
+        None, "--regrade",
+        help="Replay a stored results_*.jsonl through the current graders (no LLM calls).",
+    ),
 ) -> None:
     """Score the chat agent's answers against reference SQL (deterministic, no judge)."""
     from nuscenes_data_engine.config import get_settings
     from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
-    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases, run_eval
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases, regrade, run_eval
     from nuscenes_data_engine.data_engine.chat.transports import make_transport
 
     settings = get_settings()
-    transport = make_transport(settings, provider=provider, model=model)
     con = open_catalog(
         processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
     )
+    if regrade_path is not None:
+        summary = regrade(regrade_path, con=con, cases=load_cases(config))
+        logger.info("Regrade summary: %s", summary)
+        return
+
+    transport = make_transport(settings, provider=provider, model=model)
     try:
         from nuscenes_data_engine.data_engine.search import SearchEngine
 
@@ -488,11 +497,13 @@ def chat_eval(
     # a flagless run under CHAT_PROVIDER=anthropic must not write results_default.jsonl
     # (a later flagless run under default settings would then silently overwrite it
     # with local results — exactly the collision the provider suffix exists to avoid).
-    resolved_provider = provider or settings.chat_provider
+    label = provider or settings.chat_provider
+    if model is not None:
+        label = f"{label}_{model.replace(':', '-').replace('/', '-')}"
     summary = run_eval(
         load_cases(config), con=con, transport=transport, search_engine=engine,
         out_dir=Path(settings.data_dir) / "chat" / "eval",
-        provider=resolved_provider, limit=limit,
+        provider=label, limit=limit,
     )
     logger.info("Eval summary: %s", summary)
 
