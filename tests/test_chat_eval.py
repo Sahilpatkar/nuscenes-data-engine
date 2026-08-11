@@ -608,8 +608,13 @@ def test_integer_citations_match_at_one_decimal_not_zero() -> None:
     assert _matches_at_cited_precision(14.0, 13.6) is False    # 0-decimals would admit this
 
 
-def test_negative_controls_stay_ungrounded_on_real_records() -> None:
-    """The two pre-registered invention cases must never pass, whatever the allowlist grows."""
+def test_max_instance_keyframes_stays_ungrounded() -> None:
+    """Hard negative control: must never pass, whatever the allowlist grows.
+
+    Local, data-dependent; skips in CI (data/ is gitignored). Its residual citation
+    (20, from "~20 s at 2 Hz") is nuScenes domain knowledge recalled from model memory
+    — absent from both the observed values and the schema-prompt constants.
+    """
     import json
     from pathlib import Path
 
@@ -624,19 +629,49 @@ def test_negative_controls_stay_ungrounded_on_real_records() -> None:
 
     con = open_catalog(Path("data/processed"), labels_path=Path("data/autolabel/labels.parquet"))
     records = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
-    for case_id in ("max_instance_keyframes", "foggy_misty_glare_frames"):
-        rec = records[case_id]
-        assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False, case_id
+    rec = records["max_instance_keyframes"]
+    assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False
+
+
+def test_foggy_misty_glare_frames_stays_ungrounded() -> None:
+    """Local, data-dependent; skips in CI (data/ is gitignored).
+
+    Expected to FLIP to grounded once Task 3's schema constants land — see the spec's
+    2026-08-11 pre-registered amendment (§2): its residual citations (5000, 50) collide
+    with the schema-prompt text "5,000 CAM_FRONT frames" and the canbus "50 Hz window",
+    matched units-blind against a hallucinated "~50+" frame estimate. This assertion is
+    intentionally still False here — Commit 2 updates it once the schema-constant code
+    exists, per the pre-registration discipline (predict first, then measure).
+    """
+    import json
+    from pathlib import Path
+
+    path = Path("data/chat/eval/results_anthropic.jsonl")
+    if not path.is_file():
+        pytest.skip("no stored anthropic run in this checkout")
+    if not Path("data/processed").is_dir():
+        pytest.skip("no data/processed in this checkout")
+    pytest.importorskip("duckdb")
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    con = open_catalog(Path("data/processed"), labels_path=Path("data/autolabel/labels.parquet"))
+    records = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
+    rec = records["foggy_misty_glare_frames"]
+    assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False
 
 
 def test_max_instance_keyframes_collision_ceiling_is_bounded() -> None:
-    """CI-enforced ceiling on the pre-registered collision probe (integers 1..200), not
-    just an eyeballed assertion. Pre-fix this record admitted 68/200 (34%); post-fix
-    (row-count exclusion, percentage-share guard, truncation skip) it measures 48/200
-    (24%) — the residual is genuine sum/difference collisions among the record's own
-    close-together keyframe counts (34..41), the documented one-step-derivation
-    trade-off, not a bug. Ceiling is set with modest headroom (+6pp) over that measured
-    rate so the guards are enforced without the test being a tautology.
+    """Local, data-dependent ceiling on the pre-registered collision probe (integers
+    1..200); skips in CI (data/ is gitignored), so it is NOT CI-enforced — see
+    ``test_max_instance_keyframes_collision_ceiling_is_ci_enforced`` below for the
+    committed-literal variant that actually runs in CI. Pre-fix this record admitted
+    68/200 (34%); post-fix (row-count exclusion, percentage-share guard, truncation
+    skip) it measures 48/200 (24%) — the residual is genuine sum/difference collisions
+    among the record's own close-together keyframe counts (34..41), the documented
+    one-step-derivation trade-off, not a bug. Ceiling is set with modest headroom
+    (+6pp) over that measured rate so the guards are enforced without the test being a
+    tautology.
     """
     import json
     from pathlib import Path
@@ -665,6 +700,40 @@ def test_max_instance_keyframes_collision_ceiling_is_bounded() -> None:
         1
         for n in range(1, 201)
         if any(_matches_at_cited_precision(float(n), seen) for seen in allowed | derived)
+    )
+    rate = admitted / 200
+    assert rate < 0.30, f"collision rate {rate:.1%} exceeds the enforced ceiling"
+
+
+def test_max_instance_keyframes_collision_ceiling_is_ci_enforced(
+    tiny_con: Any, monkeypatch: Any
+) -> None:
+    """CI-enforced version of the ceiling above: a committed literal of the real
+    ``max_instance_keyframes`` observed sets (extracted once from
+    ``data/chat/eval/results_anthropic.jsonl`` via the real catalog — see the sibling
+    test for the live extraction), exercised through the PUBLIC ``is_grounded`` with
+    ``_observed_split`` monkeypatched so it needs no ``data/`` checkout and runs in CI.
+
+    Because this still goes through the real wiring (``_allowlist_numbers``,
+    ``_derived_candidates``, ``is_grounded`` itself), a wiring regression — e.g. row
+    counts leaking back into derivations — shows up as a shift in the measured
+    admitted fraction, not just as a change to a mocked return value.
+    """
+    from nuscenes_data_engine.data_engine.chat import evaluate
+
+    measurements = {
+        34.0, 35.0, 36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 300.0, 410.0, 631.0, 636.0,
+        658.0, 680.0, 720.0, 1344.0, 1894.0, 4051.0, 10614.0,
+    }
+    row_counts = {8.0, 10.0}
+    monkeypatch.setattr(
+        evaluate, "_observed_split", lambda con, steps: (measurements, row_counts)
+    )
+    dummy_steps = [{"tool": "run_sql", "input": {"sql": "SELECT 1"}, "output": "1 rows"}]
+    admitted = sum(
+        1
+        for n in range(1, 201)
+        if evaluate.is_grounded(f"The value is {n}.", tiny_con, dummy_steps)
     )
     rate = admitted / 200
     assert rate < 0.30, f"collision rate {rate:.1%} exceeds the enforced ceiling"

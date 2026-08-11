@@ -147,7 +147,7 @@ def _observed_split(con: Any, steps: list[dict[str, Any]]) -> tuple[set[float], 
                         columns.setdefault(index, []).append(float(cell))
         for cells in columns.values():
             measurements.update(cells)
-            if len(cells) >= 2 and not result["truncated"]:
+            if len(cells) >= 2 and not result.get("truncated"):
                 measurements.add(sum(cells))  # answers often total a result column
     return measurements, row_counts
 
@@ -209,10 +209,8 @@ def _derived_candidates(observed: set[float]) -> set[float]:
             candidates.add(a + b)
             candidates.add(a - b)
             candidates.add(b - a)
-            if b >= 10 and a <= b:
-                candidates.add(a / b * 100.0)  # a as a share of total b
-            if a >= 10 and b <= a:
-                candidates.add(b / a * 100.0)
+            if b >= 10 and a <= b:  # a<b always holds here; kept for readability
+                candidates.add(a / b * 100.0)  # a as a share of a plausible total only
     return candidates
 
 
@@ -264,10 +262,9 @@ def is_grounded(
         return True
     measurements, row_counts = _observed_split(con, steps)
     allowed = measurements | row_counts | _allowlist_numbers(question)
-    derived = _derived_candidates(measurements)  # derivations draw on measurements ONLY
+    allowed |= _derived_candidates(measurements)  # derivations draw on measurements ONLY
     return all(
-        any(_matches_at_cited_precision(value, seen) for seen in allowed | derived)
-        for value in cited
+        any(_matches_at_cited_precision(value, seen) for seen in allowed) for value in cited
     )
 
 

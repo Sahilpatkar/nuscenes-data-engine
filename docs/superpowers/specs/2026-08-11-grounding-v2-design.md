@@ -75,6 +75,17 @@ data, it is reported as a v2 limitation, not silently accepted.
 Whatever the replay actually shows is the reported result. If a prediction is wrong,
 the discrepancy is documented — the instrument is not adjusted again to meet it.
 
+**Amendment (2026-08-11, pre-registered before Task 3 landed):** the Tasks-1-2 review
+projected — by extracting the real schema-prompt constants — that §1 rule 3 will admit
+both residual numbers of `foggy_misty_glare_frames` (5000, and 50 via the schema text
+"50 Hz", matched units-blind against a hallucinated frame count). Prediction 1 is
+therefore expected to be MISSED for `foggy` once schema constants land: it will flip
+to grounded as a *documented limitation of a units-blind allowlist*, not a collision.
+`max_instance_keyframes` stands as the surviving negative control (its residual 20 is
+not a schema constant). Recorded here before Task 6 measures it, per this spec's own
+rule that the instrument is not adjusted to meet predictions — nor predictions quietly
+rewritten after the data is in.
+
 ## 3. Offline replay re-grade — `chat-eval --regrade <results.jsonl>`
 
 Re-grades a stored run's answers+steps with the **current** grader. No LLM calls, no
