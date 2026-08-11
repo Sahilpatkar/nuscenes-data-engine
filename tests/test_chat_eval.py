@@ -258,3 +258,96 @@ def test_reference_value_raises_on_broken_reference_sql(tiny_con: Any) -> None:
     case = EvalCase(id="bad", question="q", reference_sql="SELECT * FROM nope")
     with pytest.raises(ValueError, match="reference SQL"):
         reference_value(tiny_con, case)
+
+
+def test_is_grounded_accepts_a_correctly_rounded_citation(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT 16.25118931104633"},
+              "output": "1 rows"}]
+    assert is_grounded("The average speed is about 16.3 km/h.", tiny_con, steps) is True
+    assert is_grounded("The average speed is about 16.25 km/h.", tiny_con, steps) is True
+    # A different value at the same precision is still ungrounded.
+    assert is_grounded("The average speed is about 19.4 km/h.", tiny_con, steps) is False
+
+
+def test_is_grounded_accepts_a_constant_echoed_from_the_question(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+              "output": "1 rows"}]
+    assert is_grounded(
+        "2 pedestrians come within 5 metres of the ego vehicle.",
+        tiny_con, steps, question="How many pedestrians come within 5 metres at night?",
+    ) is True
+
+
+def test_reference_value_rejects_multiple_rows(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, reference_value
+
+    case = EvalCase(
+        id="multi-row", question="q", reference_sql="SELECT is_night FROM samples"
+    )
+    with pytest.raises(ValueError, match="exactly one cell"):
+        reference_value(tiny_con, case)
+
+
+def test_reference_value_rejects_multiple_columns(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, reference_value
+
+    case = EvalCase(
+        id="multi-col", question="q",
+        reference_sql="SELECT count(*), count(DISTINCT location) FROM samples",
+    )
+    with pytest.raises(ValueError, match="exactly one cell"):
+        reference_value(tiny_con, case)
+
+
+def test_validate_cases_passes_for_a_good_case_list(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, validate_cases
+
+    cases = [
+        EvalCase(id="a", question="q", reference_sql="SELECT count(*) FROM samples"),
+        EvalCase(id="b", question="q", expect_frames=True),
+    ]
+    validate_cases(tiny_con, cases)  # must not raise
+
+
+def test_validate_cases_raises_naming_the_case_id_on_broken_sql(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, validate_cases
+
+    cases = [EvalCase(id="broken", question="q", reference_sql="SELECT * FROM nope")]
+    with pytest.raises(ValueError, match="broken"):
+        validate_cases(tiny_con, cases)
+
+
+def test_validate_cases_raises_when_a_case_has_neither_reference_nor_frames(
+    tiny_con: Any,
+) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, validate_cases
+
+    cases = [EvalCase(id="vacuous", question="q")]
+    with pytest.raises(ValueError, match="neither reference_sql nor expect_frames"):
+        validate_cases(tiny_con, cases)
+
+
+def test_load_cases_rejects_a_case_missing_id(tmp_path: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+
+    path = tmp_path / "cases.yaml"
+    path.write_text(yaml.safe_dump({"cases": [{"question": "q"}]}))
+    with pytest.raises(ValueError, match="id"):
+        load_cases(path)
+
+
+def test_load_cases_rejects_a_case_missing_question(tmp_path: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+
+    path = tmp_path / "cases.yaml"
+    path.write_text(yaml.safe_dump({"cases": [{"id": "a"}]}))
+    with pytest.raises(ValueError, match="question"):
+        load_cases(path)

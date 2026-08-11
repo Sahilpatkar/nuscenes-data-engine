@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-08-11-chat-eval-harness-design.md).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import unicodedata
@@ -104,7 +105,10 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
 
     ``steps`` records tool output as a summary string, not rows, so the SQL is
     re-executed through the same guarded catalog to recover the values. Steps that are
-    not ``run_sql``, or whose SQL errors, contribute nothing.
+    not ``run_sql``, or whose SQL errors, contribute nothing. DuckDB types a plain
+    decimal literal (e.g. from a ``run_sql`` that echoes a value back) as DECIMAL, not
+    DOUBLE; ``catalog._clip`` stringifies that (it isn't ``bool``/``int``/``float``), so
+    a numeric-looking string cell is parsed too rather than silently dropped.
     """
     values: set[float] = set()
     for step in steps:
@@ -124,21 +128,47 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
                     continue  # bools are ints in Python; never a cited figure
                 if isinstance(cell, int | float):
                     values.add(float(cell))
+                elif isinstance(cell, str):
+                    # Not a numeric-looking string (category name, token, ...) is fine.
+                    with contextlib.suppress(ValueError):
+                        values.add(float(cell))
     return values
 
 
-def is_grounded(answer: str, con: Any, steps: list[dict[str, Any]]) -> bool:
-    """True when every number in the answer appears in the agent's own tool output.
+def _matches_at_cited_precision(cited: float, observed: float) -> bool:
+    """True when ``cited`` is ``observed`` rounded to the precision the answer used.
 
-    A number that happens to equal the reference but was never retrieved still fails —
-    being right by luck is not being grounded. An answer citing no numbers is grounded
-    vacuously.
+    An agent writing "about 16.3 km/h" for a retrieved 16.25118931104633 is grounded —
+    it is reporting the value it saw at a sensible precision, not inventing one. An
+    exact comparison here would contradict the numeric check, which tolerates the same
+    rounding, and would penalise whichever model rounds more sensibly.
+    """
+    if abs(cited - observed) <= 1e-6:
+        return True
+    text = f"{cited}"
+    decimals = len(text.split(".")[1]) if "." in text else 0
+    return abs(cited - round(observed, decimals)) <= 1e-6
+
+
+def is_grounded(
+    answer: str, con: Any, steps: list[dict[str, Any]], question: str = ""
+) -> bool:
+    """True when every number in the answer traces to the agent's own tool output.
+
+    Grounded means "derived from what was retrieved", so it accepts a value rounded to
+    the precision the answer states, and accepts constants restated from the question
+    itself (a question asking about 5 metres invites an answer that says 5). A number
+    that is neither retrieved, nor a rounding of a retrieved value, nor present in the
+    question, is unsupported — being plausible, or even correct, is not being grounded.
     """
     cited = extract_numbers(answer)
     if not cited:
         return True
-    observed = observed_numbers(con, steps)
-    return all(any(abs(value - seen) <= 1e-6 for seen in observed) for value in cited)
+    observed = observed_numbers(con, steps) | set(extract_numbers(question))
+    return all(
+        any(_matches_at_cited_precision(value, seen) for seen in observed)
+        for value in cited
+    )
 
 
 @dataclass
@@ -161,10 +191,14 @@ def load_cases(path: Path) -> list[EvalCase]:
     cases: list[EvalCase] = []
     seen: set[str] = set()
     for entry in raw:
+        if "id" not in entry:
+            raise ValueError(f"case missing required field 'id' in {path}: {entry!r}")
         case_id = str(entry["id"])
         if case_id in seen:
             raise ValueError(f"duplicate case id {case_id!r} in {path}")
         seen.add(case_id)
+        if "question" not in entry:
+            raise ValueError(f"case {case_id!r} missing required field 'question' in {path}")
         tolerance = entry.get("tolerance")
         tolerance_pct = entry.get("tolerance_pct")
         if tolerance is not None and tolerance_pct is not None:
@@ -195,11 +229,26 @@ def reference_value(con: Any, case: EvalCase) -> float:
     result = catalog.run_sql(con, case.reference_sql)
     if "error" in result:
         raise ValueError(f"case {case.id!r}: reference SQL failed — {result['error']}")
-    if not result["rows"] or not result["rows"][0]:
-        raise ValueError(f"case {case.id!r}: reference SQL returned no rows")
+    if len(result["rows"]) != 1 or len(result["rows"][0]) != 1:
+        raise ValueError(
+            f"case {case.id!r}: reference SQL must return exactly one cell, got "
+            f"{len(result['rows'])} rows x {len(result['rows'][0]) if result['rows'] else 0} cols"
+        )
     cell = result["rows"][0][0]
     if isinstance(cell, bool) or not isinstance(cell, int | float):
         raise ValueError(
             f"case {case.id!r}: reference SQL must return a number, got {cell!r}"
         )
     return float(cell)
+
+
+def validate_cases(con: Any, cases: list[EvalCase]) -> None:
+    """Resolve every reference up front so a harness bug never scores as agent failure."""
+    for case in cases:
+        if case.reference_sql is not None:
+            reference_value(con, case)  # raises with the case id on any problem
+        elif not case.expect_frames:
+            raise ValueError(
+                f"case {case.id!r} has neither reference_sql nor expect_frames — "
+                "it would pass on english/tool_use alone"
+            )

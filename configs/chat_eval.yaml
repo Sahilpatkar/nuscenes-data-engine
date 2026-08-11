@@ -11,9 +11,13 @@
 #     a practically useless ±0.1pp band; 5% relative of a 99.7% rate is needlessly
 #     tight). The absolute band is sized to the value: small shares get a tighter
 #     absolute band than the near-100% agreement rate.
-#   - Physical-magnitude averages with no natural 0-100 scale (speed in m/s or km/h,
-#     the 1-4 visibility score): tolerance_pct: 5 — relative tolerance scales correctly
-#     regardless of the unit, and covers an agent rounding to 1-2 significant figures.
+#   - Physical-magnitude averages with no natural 0-100 scale and a wide range (speed
+#     in m/s or km/h): tolerance_pct: 5 — relative tolerance scales correctly regardless
+#     of the unit, and covers an agent rounding to 1-2 significant figures.
+#   - Averages on a narrow fixed scale (the 1-4 visibility score) get a tight absolute
+#     tolerance instead: relative tolerance on a narrow range is too forgiving — 5% of
+#     ~3.6 covers most of the scale's other category-level averages, so a wrong-category
+#     answer could still land inside the band.
 cases:
   # --- samples (frame/scene metadata) ---
   - id: night_scenes_hollandvillage
@@ -60,7 +64,10 @@ cases:
     reference_sql: >
       SELECT avg(CAST(visibility_token AS INT)) FROM annotations
       WHERE category_group = 'pedestrian' AND is_night
-    tolerance_pct: 5
+    # A tight absolute band, not tolerance_pct: 5% relative (~[3.459, 3.823]) covers 6
+    # of the 10 category x night/day visibility averages, so an agent answering about
+    # the wrong category would still score correct.
+    tolerance: 0.05
 
   - id: bike_bus_singapore_night_count
     question: >
@@ -156,11 +163,6 @@ cases:
       Are any referenced camera files missing from disk? Check the availability
       manifest for CAM channels only.
     reference_sql: "SELECT count(*) FROM availability WHERE channel LIKE 'CAM%' AND NOT present"
-    tolerance: 0
-
-  - id: missing_radar_files
-    question: "How many referenced RADAR sensor files are missing from disk?"
-    reference_sql: "SELECT count(*) FROM availability WHERE modality = 'radar' AND NOT present"
     tolerance: 0
 
   # --- retrieval-only cases (no single ground-truth number; graded on frames returned) ---
