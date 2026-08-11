@@ -21,6 +21,9 @@
 
 **Real numbers used by the tests below (from the final-review failure categorisation — treat as given):**
 - `labels_parse_ok_count`: answer cites 5,000 (schema constant) and 14 = 5000 − 4986 (derived difference).
+  **Correction (2026-08-11, before Task 6 ran):** review measurement showed 5000
+  is a schema constant, not an observed value, so `labels_parse_ok_count` stays
+  ungrounded under §1 rule 2 — the line above is superseded.
 - `labels_night_agreement_pct` (Claude run): observed includes 4,969 and 4,986; the answer's 99.66 = 4969/4986×100.
 - Historical log record 5 (the miscalculation): observed = {4213, 756, 4986}; the answer said 98.5%, which is not reachable by any single admitted operation on those values (the correct path is two steps: 4213+756=4969, then 4969/4986×100=99.66 — v2 is one-step only, so even the correct value would fail *from those inputs*; from {4969, 4986} it passes).
 - `ego_pose_avg_speed_onenorth`: 18.4 = 5.104916902905238 × 3.6 at 1-decimal cited precision.
@@ -34,7 +37,7 @@
 - Modify: `src/nuscenes_data_engine/data_engine/chat/evaluate.py:106-138`
 - Test: `tests/test_chat_eval.py`
 
-- [ ] **Step 1: Write the failing test** (append to `tests/test_chat_eval.py`):
+- [x] **Step 1: Write the failing test** (append to `tests/test_chat_eval.py`):
 
 ```python
 def test_observed_numbers_includes_per_column_sums(tiny_con: Any) -> None:
@@ -50,9 +53,9 @@ def test_observed_numbers_includes_per_column_sums(tiny_con: Any) -> None:
     assert 3.0 in observed                   # row_count, as before
 ```
 
-- [ ] **Step 2:** `uv run pytest tests/test_chat_eval.py::test_observed_numbers_includes_per_column_sums -v` → FAIL (60.0 not in the set).
+- [x] **Step 2:** `uv run pytest tests/test_chat_eval.py::test_observed_numbers_includes_per_column_sums -v` → FAIL (60.0 not in the set).
 
-- [ ] **Step 3: Implement.** Replace the row loop in `observed_numbers` (keep the docstring's first two paragraphs; extend it with the column-sum sentence shown):
+- [x] **Step 3: Implement.** Replace the row loop in `observed_numbers` (keep the docstring's first two paragraphs; extend it with the column-sum sentence shown):
 
 ```python
     values: set[float] = set()
@@ -87,9 +90,9 @@ def test_observed_numbers_includes_per_column_sums(tiny_con: Any) -> None:
 
 Docstring addition: "Each numeric result column also contributes its sum — an answer totalling the per-channel counts it retrieved is reporting tool-derived data."
 
-- [ ] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (47).
+- [x] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (47).
 
-- [ ] **Step 5: Commit:** `git add -u && git add tests/test_chat_eval.py && git commit -m "grounding v2: per-column sums join the observed set"`
+- [x] **Step 5: Commit:** `git add -u && git add tests/test_chat_eval.py && git commit -m "grounding v2: per-column sums join the observed set"`
 
 ---
 
@@ -99,7 +102,7 @@ Docstring addition: "Each numeric result column also contributes its sum — an 
 - Modify: `src/nuscenes_data_engine/data_engine/chat/evaluate.py` (new helper after `_matches_at_cited_precision`; rewire `is_grounded`)
 - Test: `tests/test_chat_eval.py`
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_derived_matches_admits_the_four_taxonomy_rules() -> None:
@@ -146,9 +149,9 @@ def test_is_grounded_accepts_a_derived_difference(tiny_con: Any) -> None:
     assert is_grounded("4986 parsed, so 15 failed and 77 crashed.", tiny_con, steps) is False
 ```
 
-- [ ] **Step 2:** Run them → FAIL (ImportError for `_derived_matches`).
+- [x] **Step 2:** Run them → FAIL (ImportError for `_derived_matches`).
 
-- [ ] **Step 3: Implement.** Insert after `_matches_at_cited_precision`:
+- [x] **Step 3: Implement.** Insert after `_matches_at_cited_precision`:
 
 ```python
 # One-step derivations the grounding check admits, each motivated by a real failure
@@ -194,9 +197,9 @@ Rewire `is_grounded`'s return (keep the signature for now; Task 3 extends it):
 
 Extend `is_grounded`'s docstring: "…or one admitted arithmetic step (sum, difference, percentage, m/s↔km/h) from observed values — showing your arithmetic is grounded; getting it wrong is not."
 
-- [ ] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (51). All pre-existing `is_grounded` tests must pass unchanged — if one now passes/fails differently, STOP and report (it would mean a derivation collides with an existing fixture).
+- [x] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (51). All pre-existing `is_grounded` tests must pass unchanged — if one now passes/fails differently, STOP and report (it would mean a derivation collides with an existing fixture).
 
-- [ ] **Step 5: Commit:** `git commit -am "grounding v2: one-step targeted derivations (sum/diff/pct/unit)"`
+- [x] **Step 5: Commit:** `git commit -am "grounding v2: one-step targeted derivations (sum/diff/pct/unit)"`
 
 ---
 
@@ -206,7 +209,7 @@ Extend `is_grounded`'s docstring: "…or one admitted arithmetic step (sum, diff
 - Modify: `src/nuscenes_data_engine/data_engine/chat/evaluate.py` (`_ANY_NUMBER`, new `_schema_constants`, `is_grounded` signature, `grade_case`, `run_eval` call site)
 - Test: `tests/test_chat_eval.py` (new tests + mechanical updates to the four existing `grade_case` tests)
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_allowlist_numbers_captures_signed_and_hyphenated() -> None:
@@ -247,9 +250,9 @@ def test_schema_constants_never_raises_on_a_bare_connection(tiny_con: Any) -> No
     assert isinstance(_schema_constants(tiny_con), set)
 ```
 
-- [ ] **Step 2:** Run them → FAIL (`_schema_constants` missing; `n_frames` unexpected keyword).
+- [x] **Step 2:** Run them → FAIL (`_schema_constants` missing; `n_frames` unexpected keyword).
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
 (a) Give `_ANY_NUMBER` an optional sign and symmetrize the allowlist:
 
@@ -340,9 +343,9 @@ with `"grounded": is_grounded(answer, con, steps, case.question, n_frames=n_fram
 
 (e) Mechanically update the four existing `grade_case` tests: `frames=[]` → `n_frames=0`; `frames=[{"sample_data_token": "t1"}]` → `n_frames=1`.
 
-- [ ] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (55). Then `uv run pytest -q` (suite) and `uv run mypy` — the signature change must not break other callers (grep `grade_case(` to confirm only `run_eval` + tests call it).
+- [x] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (55). Then `uv run pytest -q` (suite) and `uv run mypy` — the signature change must not break other callers (grep `grade_case(` to confirm only `run_eval` + tests call it).
 
-- [ ] **Step 5: Commit:** `git commit -am "grounding v2: schema-prompt constants, frame count, signed allowlist"`
+- [x] **Step 5: Commit:** `git commit -am "grounding v2: schema-prompt constants, frame count, signed allowlist"`
 
 ---
 
@@ -352,7 +355,7 @@ with `"grounded": is_grounded(answer, con, steps, case.question, n_frames=n_fram
 - Modify: `src/nuscenes_data_engine/data_engine/chat/evaluate.py` (new function after `run_eval`; add `replace` to the dataclasses import)
 - Test: `tests/test_chat_eval.py`
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_regrade_replays_stored_records_without_llm(tmp_path: Path, tiny_con: Any) -> None:
@@ -407,9 +410,9 @@ def test_regrade_uses_the_stored_question_not_the_configs(tmp_path: Path, tiny_c
     assert summary["n_passed"] == 1   # the echoed 5 is grounded via the STORED question
 ```
 
-- [ ] **Step 2:** Run them → FAIL (ImportError for `regrade`).
+- [x] **Step 2:** Run them → FAIL (ImportError for `regrade`).
 
-- [ ] **Step 3: Implement** (import: `from dataclasses import dataclass, replace`):
+- [x] **Step 3: Implement** (import: `from dataclasses import dataclass, replace`):
 
 ```python
 def regrade(
@@ -470,9 +473,9 @@ def regrade(
     return summary
 ```
 
-- [ ] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (57).
+- [x] **Step 4:** `uv run pytest tests/test_chat_eval.py -q` → all pass (57).
 
-- [ ] **Step 5: Commit:** `git commit -am "grounding v2: offline replay re-grade (regrade())"`
+- [x] **Step 5: Commit:** `git commit -am "grounding v2: offline replay re-grade (regrade())"`
 
 ---
 
@@ -481,7 +484,7 @@ def regrade(
 **Files:**
 - Modify: `src/nuscenes_data_engine/cli.py:450-497` (the `chat_eval` command)
 
-- [ ] **Step 1: Modify the command.** Add two behaviors, reading the current body first (it changed during review fixes — trust the file, not this plan, for surrounding lines):
+- [x] **Step 1: Modify the command.** Add two behaviors, reading the current body first (it changed during review fixes — trust the file, not this plan, for surrounding lines):
 
 ```python
 @app.command("chat-eval")
@@ -527,7 +530,7 @@ The transport and SearchEngine construction move BELOW the `--regrade` branch (a
 
 (`run_eval` uses `provider` only for filenames and the report header, so `results_local_qwen2.5-32b.jsonl` comes out of the existing plumbing; without `--model`, filenames are unchanged.)
 
-- [ ] **Step 2: Verify:** `uv run nuscenes-data-engine chat-eval --help` shows `--regrade`; then a smoke replay against the fixture-free real artifact:
+- [x] **Step 2: Verify:** `uv run nuscenes-data-engine chat-eval --help` shows `--regrade`; then a smoke replay against the fixture-free real artifact:
 
 ```bash
 uv run nuscenes-data-engine chat-eval --regrade data/chat/eval/results_local.jsonl
@@ -536,22 +539,22 @@ ls data/chat/eval/ | grep _v2
 
 Both `results_local_v2.jsonl` and `results_local_v2.md` must appear; the command must run with NO Ollama and NO `ANTHROPIC_API_KEY` needed. (This also produces the first half of Task 6's measurement — fine; Task 6 interprets it.)
 
-- [ ] **Step 3: CI parity:** `uv run pytest -q` (report the exact count), `uv run ruff check .`, `uv run mypy` — all clean.
+- [x] **Step 3: CI parity:** `uv run pytest -q` (report the exact count), `uv run ruff check .`, `uv run mypy` — all clean.
 
-- [ ] **Step 4: Commit:** `git commit -am "grounding v2: --regrade CLI + model-suffixed artifacts"`
+- [x] **Step 4: Commit:** `git commit -am "grounding v2: --regrade CLI + model-suffixed artifacts"`
 
 ---
 
 ### Task 6: Replay both stored runs; score the pre-registered predictions (operational)
 
-- [ ] **Step 1:** Replay both:
+- [x] **Step 1:** Replay both:
 
 ```bash
 uv run nuscenes-data-engine chat-eval --regrade data/chat/eval/results_local.jsonl
 uv run nuscenes-data-engine chat-eval --regrade data/chat/eval/results_anthropic.jsonl
 ```
 
-- [ ] **Step 2:** Score against the spec §2 predictions — do this mechanically, per case:
+- [x] **Step 2:** Score against the spec §2 predictions — do this mechanically, per case:
 
 ```bash
 uv run python -c "
@@ -572,23 +575,23 @@ Predictions to check (from the spec — report each as HELD or MISSED with the a
 3. Local composite barely moves; its two v1 `grounded` failures flip.
 4. No case's `grounded` goes from True to False (v2 only widens).
 
-- [ ] **Step 3:** Also run the record-5 sanity check against the historical log (the graded suite doesn't include it): confirm via a small script that the 98.5% answer still fails `is_grounded` under v2, and paste the result.
+- [x] **Step 3:** Also run the record-5 sanity check against the historical log (the graded suite doesn't include it): confirm via a small script that the 98.5% answer still fails `is_grounded` under v2, and paste the result.
 
-- [ ] **Step 4:** Report all numbers verbatim. A MISSED prediction is a finding to report, not a bug to fix — do NOT touch the graders in this task. If a prediction missed because of an implementation defect (not a design miss), STOP and report BLOCKED with the evidence instead.
+- [x] **Step 4:** Report all numbers verbatim. A MISSED prediction is a finding to report, not a bug to fix — do NOT touch the graders in this task. If a prediction missed because of an implementation defect (not a design miss), STOP and report BLOCKED with the evidence instead.
 
 ---
 
 ### Task 7: Live `qwen2.5:32b` run (operational)
 
-- [ ] **Step 1:** `ollama list` must show `qwen2.5:32b` (a background pull was started; if absent, `ollama pull qwen2.5:32b` first). Confirm Ollama is serving (`curl -s localhost:11434/api/tags`).
-- [ ] **Step 2:** Run the suite — 32b on CPU/Metal is slow (expect 30-90 s/case, i.e. 15-30 min total), so run it in the background and poll, do not block a 10-minute Bash timeout on it:
+- [x] **Step 1:** `ollama list` must show `qwen2.5:32b` (a background pull was started; if absent, `ollama pull qwen2.5:32b` first). Confirm Ollama is serving (`curl -s localhost:11434/api/tags`).
+- [x] **Step 2:** Run the suite — 32b on CPU/Metal is slow (expect 30-90 s/case, i.e. 15-30 min total), so run it in the background and poll, do not block a 10-minute Bash timeout on it:
 
 ```bash
 uv run nuscenes-data-engine chat-eval --provider local --model qwen2.5:32b
 ```
 
 Artifacts must land as `results_local_qwen2.5-32b.jsonl` / `report_local_qwen2.5-32b.md` (the Task 5 suffix at work — verify, and verify `results_local.jsonl` was NOT overwritten).
-- [ ] **Step 3:** Report: composite, per-check rates, median latency, and the language-drift count (english failures) side by side with the 14b v2 replay. The comparison question is pre-registered in the spec: does 32b clear the bar or not — either answer is the finding.
+- [x] **Step 3:** Report: composite, per-check rates, median latency, and the language-drift count (english failures) side by side with the 14b v2 replay. The comparison question is pre-registered in the spec: does 32b clear the bar or not — either answer is the finding.
 
 ---
 
@@ -596,10 +599,10 @@ Artifacts must land as `results_local_qwen2.5-32b.jsonl` / `report_local_qwen2.5
 
 **Files:** `docs/DATASET_CHAT.md`, `docs/PROJECT.md`
 
-- [ ] **Step 1:** In `docs/DATASET_CHAT.md`'s "Answer-correctness evaluation" section: replace the v1 results table with the v2 table (columns: check × {14b v2 replay, 32b live, claude v2 replay}); update the `grounded` check's one-line description (one-step derivations, schema constants, frame count — and what still correctly fails: memory facts, hedged estimates, wrong arithmetic); replace the "pre-registered future fix" paragraph with the outcome — each §2 prediction marked held/missed with actuals; keep the v1 numbers in a brief "v1 (superseded)" note so the correction is visible rather than overwritten; add the `--regrade` runbook line and the model-sweep decision rule with the 32b verdict.
-- [ ] **Step 2:** `docs/PROJECT.md`: update the chat-eval lines in §5/§9 with the v2 headline numbers and the 32b verdict.
-- [ ] **Step 3:** Verify every number you write against the artifacts (`results_*_v2.jsonl`, `report_local_qwen2.5-32b.md`) — no number in the docs may lack an artifact. `uv run pytest -q` still green.
-- [ ] **Step 4:** `git add docs && git commit -m "grounding v2: docs (replayed + 32b results, prediction outcomes)"`
+- [x] **Step 1:** In `docs/DATASET_CHAT.md`'s "Answer-correctness evaluation" section: replace the v1 results table with the v2 table (columns: check × {14b v2 replay, 32b live, claude v2 replay}); update the `grounded` check's one-line description (one-step derivations, schema constants, frame count — and what still correctly fails: memory facts, hedged estimates, wrong arithmetic); replace the "pre-registered future fix" paragraph with the outcome — each §2 prediction marked held/missed with actuals; keep the v1 numbers in a brief "v1 (superseded)" note so the correction is visible rather than overwritten; add the `--regrade` runbook line and the model-sweep decision rule with the 32b verdict.
+- [x] **Step 2:** `docs/PROJECT.md`: update the chat-eval lines in §5/§9 with the v2 headline numbers and the 32b verdict.
+- [x] **Step 3:** Verify every number you write against the artifacts (`results_*_v2.jsonl`, `report_local_qwen2.5-32b.md`) — no number in the docs may lack an artifact. `uv run pytest -q` still green.
+- [x] **Step 4:** `git add docs && git commit -m "grounding v2: docs (replayed + 32b results, prediction outcomes)"`
 
 ---
 

@@ -285,7 +285,9 @@ A 20-case answer-correctness eval, regraded under **grounding v2** (2026-08-11),
 gives the real local/cloud picture: **Claude 17/20** (replayed), **`qwen2.5:32b`
 12/20** (live), **`qwen2.5:14b` 4/20** (replayed) — doubling the local model to
 32b eliminates its language drift (8/20→0/20) and tool-call failures (3→0) at $0,
-making it the new local default. v1's grounding check had penalised Claude for
+making it the recommended local model (the config default stays `qwen2.5:14b`;
+flipping it is a deployment decision — 32b needs ~20 GB RAM and 2.2x latency).
+v1's grounding check had penalised Claude for
 showing its arithmetic (11/20 vs local's vacuous 18/20); the pre-registered v2 fix
 corrected it exactly as predicted (Claude 18/20 grounded, composite 17/20). Full
 results: docs/DATASET_CHAT.md.
@@ -400,8 +402,10 @@ Ordered roughly by value-per-effort:
    harness — DONE; grounding v2 — DONE (2026-08-11).** A 20-case set (reference
    SQL, no LLM judge) swept across three models: **Claude 17/20** (replayed),
    **`qwen2.5:32b` 12/20** (live), **`qwen2.5:14b` 4/20** (replayed) — 32b
-   eliminates 14b's language-drift and tool-call failures at $0, so it is now the
-   local default. v1's `grounded` check had penalised Claude for showing correct
+   eliminates 14b's language-drift and tool-call failures at $0, making it the
+   recommended local model (config default stays `qwen2.5:14b`; flipping it is a
+   deployment decision — 32b needs ~20 GB RAM and 2.2x latency). v1's `grounded`
+   check had penalised Claude for showing correct
    arithmetic (11/20 vs local's vacuous 18/20); the pre-registered v2 fix resolved
    it exactly as predicted (Claude 18/20 grounded), with one documented
    composition miss. Full results and the prediction scorecard:

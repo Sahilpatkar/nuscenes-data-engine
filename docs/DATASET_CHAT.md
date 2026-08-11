@@ -241,6 +241,12 @@ both worked before this fix); the guard now tokenizes and checks all three forms
 | frames | 1/3 | 0/3 | 3/3 |
 | median latency | 10.8s | 23.6s | 8.0s |
 
+**The `frames` row is not comparable across columns** — the live (`qwen2.5:32b`)
+run had frame *attachment* disabled entirely, not just semantic search; see the
+caveat below. The comparable subset, the 17 cases that do not depend on the
+attachment tool: **`qwen2.5:14b` 3/17, `qwen2.5:32b` 12/17, `claude-opus-4-8`
+14/17.**
+
 `qwen2.5:14b` and `claude-opus-4-8` are the original 2026-08-11 runs **replayed**
 through the current grader, $0 and LLM-free (`chat-eval --regrade`, §3 of the
 design spec) — same stored answers as the original run, only the instrument
@@ -277,38 +283,67 @@ Same answers throughout; only the grader changed.
 
 **32b headline:** doubling the local model to `qwen2.5:32b` eliminates the two
 dominant `qwen2.5:14b` failure modes — language drift 8/20 → 0/20, unusable tool
-calls 3/20 → 0/20 — at $0, for 2.2× the median latency (10.8s → 23.6s). Its
-residual gaps are numeric accuracy (13/17) and all three `frames` cases (0/3),
-which — like every `frames` result in this eval, see the caveat below — measure
-the broken local `search_frames` tool, not the model. **Decision rule: the
-cheapest local model that clears the bar.** `qwen2.5:32b` is now the clear local
-default — the drift and tool-call failures that made `14b` unusable in production
-are gone. Whether its 12/20 composite "clears the bar" is a judgment call, but an
-honest one: 32b triples 14b's composite (4/20 → 12/20) and its residual failures
-are two measurement-environment artifacts (the `frames` cases) plus a real but
-narrower numeric-accuracy gap — not language or tooling breakdowns.
-**Recommendation: local default = `qwen2.5:32b`**; `qwen2.5:14b` is no longer
-defensible except for latency-critical demos.
+calls 3/20 → 0/20 — at $0, for 2.2× the median latency (10.8s → 23.6s). Its 8
+residual failures break down as **4 numeric-accuracy misses**, **1 `grounded`
+miss** (`labels_night_agreement_pct`), and **3 `frames` misses** that — per the
+caveat below — were structurally unattainable in this run, not a model gap.
+**Decision rule: the cheapest local model that clears the bar.** On the comparable
+17-case subset above, 32b (12/17) still trails Claude (14/17) but by a much
+narrower margin than the raw 12/20-vs-17/20 composite suggests, since the raw
+composite also charges 32b for 3 `frames` cases it could not structurally pass.
+Whether 32b "clears the bar" is a judgment call, but an honest one: it triples
+14b's composite (4/20 → 12/20) and its residual failures are mostly measurement
+artifacts (3 `frames`) plus a real but narrower numeric-accuracy gap — not
+language or tooling breakdowns. **Recommended local model: `qwen2.5:32b`** — the
+config default (`chat_model` in `config.py`) stays `qwen2.5:14b`; flipping it is a
+deployment decision, not made here, since 32b needs ~20 GB RAM and runs at 2.2×
+the latency. `qwen2.5:14b` remains the config default and is still the right
+choice for latency-critical demos; `qwen2.5:32b` is the right choice whenever
+reliability matters more than the extra ~13 seconds.
 
-**Caveat on the `frames` row**: `search_frames` failed on *every* call in *all
-three* runs, always with the same error — `search failed: No module named 'torch'`
-(the Mac this eval ran on has no torch install; see `SearchEngine._encoder`). So
-`frames` does not measure semantic retrieval at all here — it measures recovery via
-SQL fallback against `labels`/`annotations_3d` after the vector-search tool errored
-out. Claude reached frames in all three retrieval cases via that SQL fallback:
-immediately for `bike_bus_singapore_night_frames` (never called `search_frames` at
-all), after one failed attempt for `construction_cones_night_frames`, and after
-two — the second with a reworded query — for `foggy_misty_glare_frames`.
-`qwen2.5:32b` also *attempted* a SQL fallback in all three cases (it called
-`run_sql` and `show_frames` after `search_frames` errored), but never actually
-attached a real frame: `bike_bus_singapore_night_frames`'s answer prints markdown
-image links to a literal `fakeurl` placeholder, and the other two cite
-`sample_data_token`-shaped strings in prose without a frame attached — so `frames`
-measures fallback *robustness*, not just fallback *attempt*, and 32b's attempts
-don't clear that bar. None of the measured numbers change because of this — it is
-a property of the environment the eval ran in, not the grading logic — but this run
-says nothing about semantic search quality specifically, only about fallback
-robustness when the search tool is unavailable.
+**Caveat on the `frames` row — the live column carries no model signal.** The
+error text and mechanism differ *by run*, not just by provider, because a probe
+added partway through this branch's history (`cli.py`, commit `e110706`, 12:32)
+changed what "vector search is unavailable" *means* for `chat-eval`:
+
+- **`qwen2.5:14b` (11:34) and `claude-opus-4-8` (11:56) — both before the probe
+  existed.** `chat-eval` built a real `SearchEngine` object unconditionally
+  (construction alone never touches the encoder). `search_frames` failed
+  *per call* with `search failed: No module named 'torch'` (the Mac this eval ran
+  on has no torch install), but `show_frames` — which only looks up already-known
+  `sample_data_token`s and never touches the encoder — kept working. Both models'
+  answers show this: `search_frames` errors, then a SQL fallback finds tokens,
+  then `show_frames` succeeds ("6 frames attached"). Claude reached frames in all
+  three retrieval cases this way: immediately for `bike_bus_singapore_night_frames`
+  (never called `search_frames` at all), after one failed attempt for
+  `construction_cones_night_frames`, and after two — the second with a reworded
+  query — for `foggy_misty_glare_frames`.
+- **`qwen2.5:32b` (14:49) — after the probe landed.** `chat-eval` now calls
+  `search_text` once *before* the run starts; that call raises (still no torch),
+  so the CLI sets `search_engine=None` for the *entire* run. With the engine
+  `None`, `agent.py` fails **both** `search_frames` *and* `show_frames` for every
+  call, always with `Vector search is not available (LanceDB store not found)` —
+  frame attachment was disabled outright, independent of anything the model did.
+  For 2 of its 3 frames cases (`construction_cones_night_frames`,
+  `foggy_misty_glare_frames`) 32b did exactly what Claude did — SQL fallback to 6
+  valid `sample_data_token`s, then `show_frames` — and the tool call still failed,
+  because the tool itself was off. Only `bike_bus_singapore_night_frames` is a
+  genuine model failure: 32b fabricated markdown image links to a literal
+  `fakeurl` placeholder instead of reporting that attachment had failed.
+
+So **the live column ran with the frame-attachment tool disabled entirely, so its
+`frames` row carries no model signal** — an instrument asymmetry of exactly the
+kind this branch exists to correct, caught in final review. The comparable subset
+above (17/20 cases, `frames` excluded) is the fair local/cloud comparison; the
+`frames` row itself says nothing about 32b's retrieval ability, only that the
+probe's all-or-nothing fallback ran during its eval and not the other two. (Not
+implemented here, flagged as a follow-up: the probe should disable only
+`search_text`, leaving token-based frame attachment available regardless of torch,
+matching what the pre-probe runs actually exercised.) None of the measured
+numbers change because of this — it is a property of the environment the eval ran
+in, not the grading logic — but this run says nothing about semantic search
+quality specifically, only about fallback robustness, and for `qwen2.5:32b`, about
+an instrument change mid-branch.
 
 **Finding 1 — language drift is far worse than the live transcripts suggest, and it
 is model-scale-bound, not a property of local serving.** 8 of 20 `qwen2.5:14b`
@@ -322,9 +357,11 @@ emitted a usable call (20/20 `tool_use`). **`qwen2.5:32b` eliminates both failur
 modes**: drift 8/20 → 0/20, unusable tool calls 3/20 → 0/20 (see the "32b
 headline" note above), for the same $0 and 2.2× the latency — the limitation was a capacity
 ceiling of the 14b weights, not something local-first serving structurally can't
-fix. Local-model recommendation: default to `qwen2.5:32b`; `qwen2.5:14b` remains
-useful only where latency matters more than reliability (a live demo where drift
-can be caught and retried on the spot).
+fix. Recommended local model: `qwen2.5:32b` (the config default, `chat_model` in
+`config.py`, stays `qwen2.5:14b` — flipping it is a deployment decision, not made
+here, given the ~20 GB RAM and 2.2× latency cost); `qwen2.5:14b` remains useful
+only where latency matters more than reliability (a live demo where drift can be
+caught and retried on the spot).
 
 **Finding 2 (v1, resolved by v2) — the v1 grounding check penalised the stronger
 model.** Claude was far more accurate (`numeric` 16/17 vs 7/17) yet scored *worse*
@@ -356,10 +393,13 @@ answers, new grader):
   the aggregate counts.
 - Record 5 of the historical log (the 98.5%-for-99.66% miscalculation) still
   fails `grounded`: **HELD**.
-- **COMPOSITION MISS** (both halves pre-registered *before* the replay ran): the
-  predicted surviving-ungrounded pair was `{max_instance_keyframes,
-  foggy_misty_glare_frames}`; the actual survivors are `{max_instance_keyframes,
-  labels_parse_ok_count}`.
+- **COMPOSITION MISS**: the predicted surviving-ungrounded pair was
+  `{max_instance_keyframes, foggy_misty_glare_frames}`; the actual survivors are
+  `{max_instance_keyframes, labels_parse_ok_count}`. One half of this was
+  pre-registered in the committed spec amendment *before* the replay ran (the
+  `foggy` flip, below); the other was caught in review before measurement but
+  never committed as a dated artifact at the time — the plan line has since been
+  corrected (`docs/superpowers/plans/2026-08-11-grounding-v2.md`).
   - `foggy_misty_glare_frames` flipped to grounded — its residual "~50+" figure
     matched the schema text "50 Hz" (from the `canbus` table), units-blind against
     a hallucinated frame count that has nothing to do with sample rate. This was
@@ -399,14 +439,21 @@ answers, new grader):
   (`test_production_schema_constants_are_pinned`) makes that a visible CI diff
   instead of a silent instrument change — e.g. "(Phase 6b)" contributes `6.0`,
   "50 Hz" contributes `50.0`.
-- **Measured collision cost of the derivation rules** — the fraction of arbitrary
-  integers 1–200 a record's own observed/derived/echoed values would admit, so a
-  wrong figure can get lucky: mean **1.9%** across all 68 stored records (the v1
-  local + Claude runs plus the 28-entry historical log), **9.1%** on the 8 records
-  with ≥6 measurements, worst case **24.5%** (`max_instance_keyframes`, whose
-  19 close-together keyframe counts manufacture the most sum/difference
-  collisions) — CI-enforced under a 30% ceiling using the full production
-  schema-constant set.
+- **Measured collision cost** — the fraction of arbitrary integers 1–200 a
+  record's own allowed values would admit, so a wrong figure can get lucky,
+  measured across all 68 stored records (the v1 local + Claude runs plus the
+  28-entry historical log) two ways, since the basis matters:
+
+  | basis | mean | on the 8 records with ≥6 measurements | worst case |
+  |---|---|---|---|
+  | derivation rules alone (observed + one-step derivations + echoes, no schema constants) | 1.89% | 9.12% | 24.0% |
+  | **full production allowlist (+ schema constants) — what the shipped grader actually uses** | 5.32% | 11.50% | **24.5%** |
+
+  The shipped grader always includes schema constants, so the second row is the
+  one that matters: **24.5% < the 30% CI-enforced ceiling**, worst case at
+  `max_instance_keyframes`. Its 19 observed keyframe counts span 34..10614; only
+  8 of them (34–41) are close together, and it's those 8 that manufacture almost
+  all of the sum/difference collisions.
 
 The 18/20-vs-20/20 `grounded` inversion (Claude vs `qwen2.5:14b`) that remains
 under v2 is understood, not a grader bug: `is_grounded` returns True vacuously
