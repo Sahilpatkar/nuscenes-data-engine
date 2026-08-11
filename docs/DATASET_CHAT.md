@@ -183,12 +183,23 @@ Five checks, each a pure function over the agent's own output (`chat/evaluate.py
   explicit heuristic, not a language model, sized to catch wholesale script drift.
 - **`tool_use`** — the agent called at least one tool rather than answering from
   memory.
-- **`grounded`** — every number cited in the answer traces to the agent's own tool
-  output, accepting values rounded to the precision the answer states and constants
-  echoed back from the question. `grounded` re-executes the agent's own SQL from
-  its logged steps, because `ChatResult.steps` stores tool-output *summary strings*,
-  not the underlying rows — so this check also independently verifies the query
-  really produces what the prose claims, not just that the prose looks plausible.
+- **`grounded`** (**v2**, 2026-08-11) — every number cited in the answer, at the
+  precision the answer states, must match one of: an **observed value** (any cell,
+  or per-column sum, from re-executing the answer's own SQL — excluded when the
+  result was truncated); **one arithmetic step** over two observed measurements
+  (`a+b`, `a−b`, a share-percentage `a/b×100` only when the denominator is ≥10 and
+  ≥ the numerator, or an m/s↔km/h `×÷3.6` conversion — row counts are citable but
+  never feed a derivation, since a `LIMIT 8`'s 8 is a property of the query text,
+  not the world); a **schema-prompt constant** (extracted live from the same schema
+  text the agent's system prompt embeds); or a **question echo** / the
+  **attached-frame count**. Wrong arithmetic still fails: the historical log's
+  98.5%-agreement answer, whose own retrieved counts give 99.66%, still fails
+  `grounded` under v2 — a required regression, not an aspiration. `grounded`
+  re-executes the agent's own SQL from its logged steps, because `ChatResult.steps`
+  stores tool-output *summary strings*, not the underlying rows — so this check
+  also independently verifies the query really produces what the prose claims, not
+  just that the prose looks plausible. Design and the full rule taxonomy:
+  `docs/superpowers/specs/2026-08-11-grounding-v2-design.md`.
 - **`frames`** — retrieval-only cases returned at least one example frame.
 
 **The case set**: `configs/chat_eval.yaml`, 20 cases (17 numeric + 3 retrieval),
@@ -218,7 +229,25 @@ string just as readily (`SELECT * FROM "x.parquet"`, `SELECT * FROM $$x.parquet$
 both worked before this fix); the guard now tokenizes and checks all three forms
 (`chat/catalog.py`).
 
-### Results (2026-08-11, 20 cases, identical suite both providers)
+### Results (2026-08-11 sweep, v2 grader, 20 identical cases)
+
+| check | qwen2.5:14b (replay) | qwen2.5:32b (live) | claude-opus-4-8 (replay) |
+|---|---|---|---|
+| **composite** | **4/20** | **12/20** | **17/20** |
+| numeric | 7/17 | 13/17 | 16/17 |
+| english | 12/20 | **20/20** | 20/20 |
+| tool_use | 17/20 | **20/20** | 20/20 |
+| grounded | 20/20 | 19/20 | 18/20 |
+| frames | 1/3 | 0/3 | 3/3 |
+| median latency | 10.8s | 23.6s | 8.0s |
+
+`qwen2.5:14b` and `claude-opus-4-8` are the original 2026-08-11 runs **replayed**
+through the current grader, $0 and LLM-free (`chat-eval --regrade`, §3 of the
+design spec) — same stored answers as the original run, only the instrument
+changed. `qwen2.5:32b` is a fresh **live** run under the same grader.
+
+<details>
+<summary><b>v1 grader (superseded 2026-08-11)</b> — the original 2-provider table, for reference</summary>
 
 | check | local (`qwen2.5:14b`) | anthropic (`claude-opus-4-8`) |
 |---|---|---|
@@ -230,97 +259,165 @@ both worked before this fix); the guard now tokenizes and checks all three forms
 | frames | 1/3 | 3/3 |
 | median latency | 10.8s | 8.0s |
 
-**Caveat on the `frames` row**: `search_frames` failed on *every* call in *both*
-runs, always with the same error — `search failed: No module named 'torch'` (the
-Mac this eval ran on has no torch install; see `SearchEngine._encoder`). So `frames`
-does not measure semantic retrieval at all here — it measures recovery via SQL
-fallback against `labels`/`annotations_3d` after the vector-search tool errored out.
-Claude reached frames in all three retrieval cases via that SQL fallback:
+Only `grounded`/composite changed under v2 — `numeric`/`english`/`tool_use`/`frames`
+are grader-invariant and identical above. Under v1, `grounded` ran the wrong way
+(18/20 local vs 11/20 Claude): see "Prediction scorecard" below for why, and how v2
+fixes it.
+
+</details>
+
+**Three-point instrument comparison** (same stored Claude answers, three grader
+states — isolates grader effect from model effect): `grounded` **11/20** under the
+grader active when the run happened → **12/20** replayed at v2 development's start
+(the delta is one case, `avg_visibility_pedestrian_night`, flipped by an
+already-landed fix widening the question-echo extractor to catch hyphenated
+constants like "the 1-4 scale" — its `numeric` still fails, so composite is
+unaffected) → **18/20** under the full v2 rule set. Composite: **11 → 11 → 17**.
+Same answers throughout; only the grader changed.
+
+**32b headline:** doubling the local model to `qwen2.5:32b` eliminates the two
+dominant `qwen2.5:14b` failure modes — language drift 8/20 → 0/20, unusable tool
+calls 3/20 → 0/20 — at $0, for 2.2× the median latency (10.8s → 23.6s). Its
+residual gaps are numeric accuracy (13/17) and all three `frames` cases (0/3),
+which — like every `frames` result in this eval, see the caveat below — measure
+the broken local `search_frames` tool, not the model. **Decision rule: the
+cheapest local model that clears the bar.** `qwen2.5:32b` is now the clear local
+default — the drift and tool-call failures that made `14b` unusable in production
+are gone. Whether its 12/20 composite "clears the bar" is a judgment call, but an
+honest one: 32b triples 14b's composite (4/20 → 12/20) and its residual failures
+are two measurement-environment artifacts (the `frames` cases) plus a real but
+narrower numeric-accuracy gap — not language or tooling breakdowns.
+**Recommendation: local default = `qwen2.5:32b`**; `qwen2.5:14b` is no longer
+defensible except for latency-critical demos.
+
+**Caveat on the `frames` row**: `search_frames` failed on *every* call in *all
+three* runs, always with the same error — `search failed: No module named 'torch'`
+(the Mac this eval ran on has no torch install; see `SearchEngine._encoder`). So
+`frames` does not measure semantic retrieval at all here — it measures recovery via
+SQL fallback against `labels`/`annotations_3d` after the vector-search tool errored
+out. Claude reached frames in all three retrieval cases via that SQL fallback:
 immediately for `bike_bus_singapore_night_frames` (never called `search_frames` at
 all), after one failed attempt for `construction_cones_night_frames`, and after
 two — the second with a reworded query — for `foggy_misty_glare_frames`.
-`foggy_misty_glare_frames` — one of the seven fail-both cases below — never found a
-working path for local: one failed `search_frames` call, no SQL fallback attempted,
-so `frames` failed too (it fails overall for Claude as well, on `grounded`, despite
-successfully attaching frames via fallback). None of the measured numbers change
-because of this — it is a property of the environment the eval ran in, not the
-grading logic — but this run says nothing about semantic search quality
-specifically, only about fallback robustness when it is unavailable.
+`qwen2.5:32b` also *attempted* a SQL fallback in all three cases (it called
+`run_sql` and `show_frames` after `search_frames` errored), but never actually
+attached a real frame: `bike_bus_singapore_night_frames`'s answer prints markdown
+image links to a literal `fakeurl` placeholder, and the other two cite
+`sample_data_token`-shaped strings in prose without a frame attached — so `frames`
+measures fallback *robustness*, not just fallback *attempt*, and 32b's attempts
+don't clear that bar. None of the measured numbers change because of this — it is
+a property of the environment the eval ran in, not the grading logic — but this run
+says nothing about semantic search quality specifically, only about fallback
+robustness when the search tool is unavailable.
 
-2 cases pass under both providers; 9 pass only under Claude; 2 pass only under
-local. 7 cases fail under both: `avg_visibility_pedestrian_night`,
-`canbus_hard_braking_count`, `foggy_misty_glare_frames`,
-`hard_braking_near_pedestrian_10m`, `labels_night_agreement_pct`,
-`max_instance_keyframes`, `missing_cam_files`.
+**Finding 1 — language drift is far worse than the live transcripts suggest, and it
+is model-scale-bound, not a property of local serving.** 8 of 20 `qwen2.5:14b`
+answers (40%) came back in a non-Latin script, including simple questions like "how
+many night scenes in holland village." Claude: 20/20 English. 3 local answers also
+failed to emit a usable tool call, so no query ran — none of the three recalled or
+fabricated a statistic instead: one is a Thai refusal that echoes the question
+back, one prints SQL in a fenced block without calling it, and one is a malformed
+tool call (the double-escaped tool-argument bug documented above). Claude always
+emitted a usable call (20/20 `tool_use`). **`qwen2.5:32b` eliminates both failure
+modes**: drift 8/20 → 0/20, unusable tool calls 3/20 → 0/20 (see the "32b
+headline" note above), for the same $0 and 2.2× the latency — the limitation was a capacity
+ceiling of the 14b weights, not something local-first serving structurally can't
+fix. Local-model recommendation: default to `qwen2.5:32b`; `qwen2.5:14b` remains
+useful only where latency matters more than reliability (a live demo where drift
+can be caught and retried on the spot).
 
-**Finding 1 — language drift is far worse than the live transcripts suggest.** 8
-of 20 local answers (40%) came back in a non-Latin script, including simple
-questions like "how many night scenes in holland village." Claude: 20/20 English.
-3 local answers also failed to emit a usable tool call, so no query ran — none of
-the three recalled or fabricated a statistic instead: one is a Thai refusal that
-echoes the question back, one prints SQL in a fenced block without calling it, and
-one is a malformed tool call (the double-escaped tool-argument bug documented
-above). Claude always emitted a usable call (20/20 `tool_use`).
+**Finding 2 (v1, resolved by v2) — the v1 grounding check penalised the stronger
+model.** Claude was far more accurate (`numeric` 16/17 vs 7/17) yet scored *worse*
+on `grounded` (11/20 vs 18/20 local) under v1, because its 9 grounding failures
+were legitimate but not literally present in tool output — derived arithmetic
+("4,986 of 5,000, so 14 failed"), computed percentages ("99.66% = 4,969/4,986"),
+and schema-quoted constants ("≤ −3.0 m/s² within ±0.5 s"). To be explicit about
+what this project did and did not do: **the grader was not loosened after seeing
+these results.** A principled fix was pre-registered *before* any re-run — admit
+numbers derivable from observed values by simple arithmetic, and seed the allowed
+set with schema-prompt constants — and its predicted effect was checked before it
+was measured (`docs/superpowers/specs/2026-08-11-grounding-v2-design.md`, §2). The
+scorecard below is that pre-registration graded against what the replay actually
+showed.
 
-**Finding 2 — the grounding check penalises the stronger model, and that is a
-harness limitation, not a model defect.** Claude is far more accurate (`numeric`
-16/17 vs 7/17) yet scores *worse* on `grounded` (11/20 vs 18/20). Inspecting its 9
-grounding failures shows why — the cited numbers are legitimate but not literally
-present in tool output:
+**Prediction scorecard** (spec §2 + its dated amendment; replay = same stored
+answers, new grader):
 
-- derived arithmetic: "**4,986** of the VLM-labeled frames parsed successfully
-  (out of 5,000 total, so 14 failed to parse)" — 14 = 5000 − 4986, computed, never
-  retrieved;
-- computed percentages: "**Agreement rate: 99.66%** (4,969 of 4,986 usable
-  VLM-labeled frames)" — 99.66 derived from two retrieved counts;
-- constants quoted from the schema prompt: "**94 keyframes** show hard braking
-  (where `is_hard_braking` is true, meaning peak longitudinal deceleration ≤ −3.0
-  m/s² within the ±0.5 s CAN-bus window)" — those thresholds come from the
-  documented schema, not from a query.
+- Claude `grounded` 11 → **18/20**: **HELD** exactly.
+- Claude composite 11 → **17/20** (pre-registered as 17, not 18 — the ninth
+  grounding fix, `avg_visibility_pedestrian_night`, still fails `numeric`): **HELD**
+  exactly.
+- Local (`qwen2.5:14b`) composite 4/20 → 4/20, "barely moves": **HELD** — its
+  `grounded` goes 18 → **20/20**, both v1 failures artifacts of the same mechanism
+  as predicted (a schema constant echoed in Chinese; a stray `1` scraped from
+  printed-but-uncalled SQL).
+- No case flips `grounded` True → False under v2 (v2 only widens the allowlist,
+  never narrows it): **HELD**, both providers — verified case-by-case, not just by
+  the aggregate counts.
+- Record 5 of the historical log (the 98.5%-for-99.66% miscalculation) still
+  fails `grounded`: **HELD**.
+- **COMPOSITION MISS** (both halves pre-registered *before* the replay ran): the
+  predicted surviving-ungrounded pair was `{max_instance_keyframes,
+  foggy_misty_glare_frames}`; the actual survivors are `{max_instance_keyframes,
+  labels_parse_ok_count}`.
+  - `foggy_misty_glare_frames` flipped to grounded — its residual "~50+" figure
+    matched the schema text "50 Hz" (from the `canbus` table), units-blind against
+    a hallucinated frame count that has nothing to do with sample rate. This was
+    itself pre-registered as a MISSED prediction in the spec's dated amendment,
+    *before* the schema-constant rule landed, from a live read of the extracted
+    constants — so it is a documented limitation of a units-blind allowlist, not
+    an unexpected collision.
+  - `labels_parse_ok_count` stayed ungrounded because its cited 14 needs
+    `5000 − 4986`, and 5000 is only a schema constant here (the case's own SQL
+    never queries a row total) — derivations deliberately draw only on *observed*
+    values, never on the constants pool. The original plan's claim that both
+    operands were observed was simply wrong; caught in review, before measurement,
+    not after.
+- **ATTRIBUTION**: the frame-count rule (`len(frames)`) changed **zero** verdicts
+  on real records (checked across all v2 runs) — every case citing "N examples
+  attached" was already admitted by a schema constant. The "6 examples" citations
+  in particular are admitted by schema constant `6.0`, which comes from the string
+  "(Phase 6b)" in the `labels` table's schema prose, not from the frame-count rule
+  at all. Stated plainly so the frame-count rule isn't credited for something a
+  different rule already did.
 
-In each of those three examples `numeric` passed (the headline figure was right)
-while `grounded` failed. So the composite "passed" column **understates the
-stronger model**: a capable agent that shows its arithmetic and explains its
-thresholds is penalised for doing so. Claude's one genuine `numeric` miss,
-`avg_visibility_pedestrian_night` (2.78 vs. the reference's 3.64), arguably is not
-one either: Claude read `annotations_3d` (2.78 — confirmed by querying it
-directly), the reference reads the 2D `annotations` table (3.64), and both are
-real, correct averages of a real `visibility_token` column on different tables —
-the case question has since been reworded to say which table is meant
-(`configs/chat_eval.yaml`). So Claude's 16/17 `numeric` likely understates it too.
+### Known limitations of grounding v2
 
-To be explicit about what this project did and did not do: **the grader was not
-loosened after seeing these results.** Changing a measurement instrument to
-flatter an outcome is exactly what this project avoids elsewhere (see the AL
-random-control gate). This is recorded as a known limitation, with a principled
-fix for a future round, pre-registered here before any re-run: admit numbers
-derivable from observed values by simple arithmetic, and seed the observed set
-with constants from the schema prompt, the same way question-echoed constants are
-already admitted. Pre-registering a fix rather than applying it quietly means
-checking whether it would actually work: it would flip 7 of the 9 Claude failures
-above to grounded — not all 9. It would not fix `max_instance_keyframes`, whose
-unsupported values ("~20 s", "2 Hz") are nuScenes domain facts from the model's
-own memory, nowhere in the schema prompt or in any retrieved row. Nor does it
-change the outcome for `avg_visibility_pedestrian_night` — its ungrounded
-citation ("4", for "fully visible") is exactly this kind of schema constant, but
-the case still fails `numeric` for the table-ambiguity reason above, so fixing its
-grounding would not flip its overall result either way.
+- **Units-blind constants.** A schema constant is matched on value alone, not
+  units or meaning — the `foggy_misty_glare_frames` flip above (a hallucinated
+  "~50 frames" admitted by "50 Hz") is the concrete case. A number that happens to
+  equal a documented constant is treated as grounded whether or not the model
+  actually meant that constant.
+- **One-step derivations only.** Sum, difference, one guarded percentage form, and
+  the m/s↔km/h conversion — no chains (a derived value is never re-derived), no
+  products, no other quotients. This is a deliberate bound, not an oversight: it
+  keeps the allowlist small enough to reason about and to bound collision risk
+  (below).
+- **The schema prose *is* the allowlist.** `catalog.schema_prompt()`'s text is
+  parsed live for constants — editing a table docstring (adding, rewording, or
+  removing a number) silently changes what `grounded` admits. A pinned test
+  (`test_production_schema_constants_are_pinned`) makes that a visible CI diff
+  instead of a silent instrument change — e.g. "(Phase 6b)" contributes `6.0`,
+  "50 Hz" contributes `50.0`.
+- **Measured collision cost of the derivation rules** — the fraction of arbitrary
+  integers 1–200 a record's own observed/derived/echoed values would admit, so a
+  wrong figure can get lucky: mean **1.9%** across all 68 stored records (the v1
+  local + Claude runs plus the 28-entry historical log), **9.1%** on the 8 records
+  with ≥6 measurements, worst case **24.5%** (`max_instance_keyframes`, whose
+  19 close-together keyframe counts manufacture the most sum/difference
+  collisions) — CI-enforced under a 30% ceiling using the full production
+  schema-constant set.
 
-The honest reading of the 18/20-vs-11/20 `grounded` split runs the other way from
-"it caught the local model's mistakes." `is_grounded` returns True vacuously when
-an answer cites no numbers at all, and 8 of the local model's 20 answers do
-exactly that — a free pass, not a demonstration of care. Across all 20 questions
-the local model cites 27 numbers in total; Claude cites 99, with no number-free
-answer among them — a model that commits to fewer specifics is structurally harder
-to catch being wrong about one. Local's own two `grounded` failures are not
-invention either: one cites "4" for "fully visible" — the same schema constant
-used to excuse Claude above, just echoed in Chinese ("其中 4 表示完全可见"); the
-other is a stray "1" pulled out of `THEN 1 END` inside a SQL query the model
-printed in prose but never actually called (that answer made no statistical claim
-tied to it at all). `grounded` is a real signal in general — a number nowhere in
-the agent's own retrieved data or the question is unsupported, whichever model
-states it — but nothing in this run shows it catching a local-model invention; on
-this run it mostly rewards saying less.
+The 18/20-vs-20/20 `grounded` inversion (Claude vs `qwen2.5:14b`) that remains
+under v2 is understood, not a grader bug: `is_grounded` returns True vacuously
+when an answer cites no numbers at all, and 8 of the local model's 20 v1 answers
+do exactly that — a free pass, not a demonstration of care. Across all 20
+questions the local model cites 27 numbers in total; Claude cites 99, with no
+number-free answer among them — a model that commits to fewer specifics is
+structurally harder to catch being wrong about one. `grounded` is a real signal in
+general — a number nowhere in the agent's own retrieved data, the question, or the
+schema is unsupported, whichever model states it — but this comparison mostly
+rewards Claude for stating more and local for stating less.
 
 ### Running it
 
@@ -328,4 +425,18 @@ this run it mostly rewards saying less.
 uv run nuscenes-data-engine chat-eval --provider local       # Ollama, $0
 uv run nuscenes-data-engine chat-eval --provider anthropic   # needs ANTHROPIC_API_KEY
 # artifacts: data/chat/eval/{results,report}_<provider>.{jsonl,md}
+
+# Re-grade a stored run's answers with the CURRENT grader — no LLM calls, no cost:
+uv run nuscenes-data-engine chat-eval --regrade data/chat/eval/results_local.jsonl
+# writes <stem>_v2.jsonl / <stem>_v2.md next to the input, never overwrites it
+
+# Run against a specific model — output filenames gain a model slug, so sweep runs
+# don't clobber each other or the default artifacts:
+uv run nuscenes-data-engine chat-eval --provider local --model qwen2.5:32b
+# -> results_local_qwen2.5-32b.jsonl, report_local_qwen2.5-32b.md
 ```
+
+Regrade reports carry grader provenance (the schema-constant count and the tables
+it was built from, appended after the case table) so a replay run in a checkout
+with different/missing data is visibly a different instrument, not a silent
+number change.

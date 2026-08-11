@@ -281,14 +281,14 @@ a fake win, with a quantified mechanism:
 matching the analytics docs, a 98.5% VLM-vs-GT night agreement (independently
 consistent with 6b's F1 0.989), semantic retrieval of construction zones and
 foggy frames with attached thumbnails, and self-repair through SQL binder errors.
-Documented limitations of the local model — language drift, one subtly
-misinterpreted statistic, hallucinated frame tokens (safely dropped) — are exactly
-why the Claude flip exists, and a 20-case answer-correctness eval measures the gap
-directly: **local 4/20 (20%) vs Claude 11/20 (55%)**, with 40% of local answers
-drifting out of English (vs 0% for Claude). The `grounded` check runs the other
-way (18/20 local vs 11/20 Claude) — inspection shows this rewards the local
-model's vagueness rather than penalising Claude's accuracy, a recorded harness
-limitation, not a re-tuned grader. Full transcripts and the eval: docs/DATASET_CHAT.md.
+A 20-case answer-correctness eval, regraded under **grounding v2** (2026-08-11),
+gives the real local/cloud picture: **Claude 17/20** (replayed), **`qwen2.5:32b`
+12/20** (live), **`qwen2.5:14b` 4/20** (replayed) — doubling the local model to
+32b eliminates its language drift (8/20→0/20) and tool-call failures (3→0) at $0,
+making it the new local default. v1's grounding check had penalised Claude for
+showing its arithmetic (11/20 vs local's vacuous 18/20); the pre-registered v2 fix
+corrected it exactly as predicted (Claude 18/20 grounded, composite 17/20). Full
+results: docs/DATASET_CHAT.md.
 
 ## 6. What we achieved
 
@@ -397,14 +397,14 @@ Ordered roughly by value-per-effort:
    dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
 5. **Chat agent upgrades** — streaming responses, chart generation from SQL
    results, and a saved-questions gallery in Streamlit remain open. **Evaluation
-   harness for answer correctness — DONE.** A 20-case set (reference SQL, no LLM
-   judge) scored both providers on the identical suite: **local `qwen2.5:14b`
-   4/20 (20%) vs `claude-opus-4-8` 11/20 (55%)**, driven by 40% of local answers
-   drifting into a non-Latin script (vs 0% for Claude). The `grounded` check
-   inverts the ranking (18/20 local vs 11/20 Claude) — a harness limitation, not
-   a capability gap: Claude's failures are legitimate derived arithmetic and
-   schema-quoted constants that the grader doesn't yet credit, not invented
-   numbers. Full results, per-check breakdown, and the pre-registered grader fix:
+   harness — DONE; grounding v2 — DONE (2026-08-11).** A 20-case set (reference
+   SQL, no LLM judge) swept across three models: **Claude 17/20** (replayed),
+   **`qwen2.5:32b` 12/20** (live), **`qwen2.5:14b` 4/20** (replayed) — 32b
+   eliminates 14b's language-drift and tool-call failures at $0, so it is now the
+   local default. v1's `grounded` check had penalised Claude for showing correct
+   arithmetic (11/20 vs local's vacuous 18/20); the pre-registered v2 fix resolved
+   it exactly as predicted (Claude 18/20 grounded), with one documented
+   composition miss. Full results and the prediction scorecard:
    docs/DATASET_CHAT.md, "Answer-correctness evaluation".
 6. **Richer monitoring** — score production captures with the drift job on a
    schedule, alert on night-share/brightness shifts, and correlate drift windows
