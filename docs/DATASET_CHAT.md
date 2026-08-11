@@ -215,7 +215,7 @@ percentages in prose instead of retrieving them directly; fixed by matching each
 | tool_use | 17/20 | 20/20 |
 | grounded | 18/20 | 11/20 |
 | frames | 1/3 | 3/3 |
-| median latency | 11.4s | 8.0s |
+| median latency | 10.8s | 8.0s |
 
 2 cases pass under both providers; 9 pass only under Claude; 2 pass only under
 local. 7 cases fail under both: `avg_visibility_pedestrian_night`,
