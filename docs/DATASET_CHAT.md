@@ -446,8 +446,14 @@ answers, new grader):
 
   | basis | mean | on the 8 records with ≥6 measurements | worst case |
   |---|---|---|---|
-  | derivation rules alone (observed + one-step derivations + echoes, no schema constants) | 1.89% | 9.12% | 24.0% |
-  | **full production allowlist (+ schema constants) — what the shipped grader actually uses** | 5.32% | 11.50% | **24.5%** |
+  | derivation rules alone (observed + one-step derivations + echoes, no schema constants) | 1.9% | 9.1% | 24.0% |
+  | **full production allowlist (+ schema constants) — what the shipped grader actually uses** | 5.3% | 11.5% | **24.5%** |
+
+  (Figures are one-decimal because one stored record's SQL — an unordered
+  aggregate over a join — re-executes non-deterministically, moving the corpus
+  means by ~±0.02pp between probe runs. The instability never touches a cited
+  number: replayed verdicts are byte-identical across runs; only this 1..200
+  integer sweep is sensitive.)
 
   The shipped grader always includes schema constants, so the second row is the
   one that matters: **24.5% < the 30% CI-enforced ceiling**, worst case at
