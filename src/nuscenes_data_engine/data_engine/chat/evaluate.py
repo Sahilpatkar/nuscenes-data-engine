@@ -111,7 +111,9 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
     not ``run_sql``, or whose SQL errors, contribute nothing. DuckDB types a plain
     decimal literal (e.g. from a ``run_sql`` that echoes a value back) as DECIMAL, not
     DOUBLE; ``catalog._clip`` stringifies that (it isn't ``bool``/``int``/``float``), so
-    a numeric-looking string cell is parsed too rather than silently dropped.
+    a numeric-looking string cell is parsed too rather than silently dropped. Each
+    numeric result column also contributes its sum — an answer totalling the
+    per-channel counts it retrieved is reporting tool-derived data.
     """
     values: set[float] = set()
     for step in steps:
@@ -125,16 +127,21 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
             logger.debug("grounding: step SQL failed (%s)", result["error"])
             continue
         values.add(float(result["row_count"]))
+        columns: dict[int, list[float]] = {}
         for row in result["rows"]:
-            for cell in row:
+            for index, cell in enumerate(row):
                 if isinstance(cell, bool):
                     continue  # bools are ints in Python; never a cited figure
                 if isinstance(cell, int | float):
-                    values.add(float(cell))
+                    columns.setdefault(index, []).append(float(cell))
                 elif isinstance(cell, str):
                     # Not a numeric-looking string (category name, token, ...) is fine.
                     with contextlib.suppress(ValueError):
-                        values.add(float(cell))
+                        columns.setdefault(index, []).append(float(cell))
+        for cells in columns.values():
+            values.update(cells)
+            if len(cells) >= 2:
+                values.add(sum(cells))  # answers often total a result column
     return values
 
 

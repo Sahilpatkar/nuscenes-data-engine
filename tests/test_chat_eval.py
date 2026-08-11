@@ -498,6 +498,19 @@ def test_run_eval_end_to_end_with_a_stub_transport(tmp_path: Path, tiny_con: Any
     assert "stub-model" in (tmp_path / "eval" / "report_stub.md").read_text()
 
 
+def test_observed_numbers_includes_per_column_sums(tiny_con: Any) -> None:
+    """An answer totalling a result column cites tool-derived data (missing_cam_files)."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import observed_numbers
+
+    steps = [{"tool": "run_sql",
+              "input": {"sql": "SELECT * FROM (VALUES (10, 'a'), (20, 'b'), (30, 'c')) t(n, s)"},
+              "output": "3 rows"}]
+    observed = observed_numbers(tiny_con, steps)
+    assert {10.0, 20.0, 30.0} <= observed   # cells, as before
+    assert 60.0 in observed                  # the column sum
+    assert 3.0 in observed                   # row_count, as before
+
+
 def test_run_eval_records_a_failing_case_without_aborting(tmp_path: Path, tiny_con: Any) -> None:
     from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, run_eval
 
