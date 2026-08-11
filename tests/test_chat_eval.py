@@ -433,3 +433,68 @@ def test_render_report_summarises_pass_rates() -> None:
     assert "qwen2.5:14b" in markdown
     assert "1/2" in markdown or "50" in markdown
     assert "numeric" in markdown and "| a " in markdown and "| b " in markdown
+
+
+def test_run_eval_end_to_end_with_a_stub_transport(tmp_path: Path, tiny_con: Any) -> None:
+    """The whole loop: answer -> grade -> artifacts, with a scripted transport."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, run_eval
+
+    class _StubTransport:
+        model = "stub-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "function": {
+                                "name": "run_sql",
+                                "arguments": '{"sql": "SELECT count(*) FROM samples"}',
+                            },
+                        }
+                    ],
+                }
+            return {"content": "There are 2 samples.", "tool_calls": []}
+
+    cases = [
+        EvalCase(id="a", question="How many samples?",
+                 reference_sql="SELECT count(*) FROM samples", tolerance=0)
+    ]
+    summary = run_eval(
+        cases, con=tiny_con, transport=_StubTransport(), search_engine=None,
+        out_dir=tmp_path / "eval", provider="stub",
+    )
+    assert summary["n_cases"] == 1 and summary["n_passed"] == 1
+    assert summary["pass_rate"] == 1.0
+    assert (tmp_path / "eval" / "results_stub.jsonl").is_file()
+    assert "stub-model" in (tmp_path / "eval" / "report_stub.md").read_text()
+
+
+def test_run_eval_records_a_failing_case_without_aborting(tmp_path: Path, tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, run_eval
+
+    class _BoomTransport:
+        model = "stub-model"
+
+        def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]):
+            raise RuntimeError("transport exploded")
+
+    # Both cases must satisfy validate_cases (neither ref_sql nor expect_frames is
+    # rejected up front), so this exercises a mid-suite transport failure rather than
+    # a harness/config error — expect_frames=True is enough to pass validation without
+    # pretending either case has a numeric reference.
+    cases = [
+        EvalCase(id="a", question="q1", expect_frames=True),
+        EvalCase(id="b", question="q2", expect_frames=True),
+    ]
+    summary = run_eval(
+        cases, con=tiny_con, transport=_BoomTransport(), search_engine=None,
+        out_dir=tmp_path / "eval", provider="stub",
+    )
+    assert summary["n_cases"] == 2 and summary["n_passed"] == 0

@@ -447,6 +447,44 @@ def chat(
         graph_connection.close(graph_driver)
 
 
+@app.command("chat-eval")
+def chat_eval(
+    config: Path = typer.Option(Path("configs/chat_eval.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="local | anthropic."),
+    model: str | None = typer.Option(None, "--model", help="Override the chat model."),
+    limit: int | None = typer.Option(None, "--limit", help="First N cases (smoke runs)."),
+    processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+) -> None:
+    """Score the chat agent's answers against reference SQL (deterministic, no judge)."""
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases, run_eval
+    from nuscenes_data_engine.data_engine.chat.transports import make_transport
+
+    settings = get_settings()
+    transport = make_transport(settings, provider=provider, model=model)
+    con = open_catalog(
+        processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
+    )
+    try:
+        from nuscenes_data_engine.data_engine.search import SearchEngine
+
+        engine: Any | None = SearchEngine(
+            Path(settings.search_lancedb_path), settings.search_table,
+            settings.search_model_name, device=settings.search_device,
+        )
+    except (ImportError, FileNotFoundError) as exc:
+        logger.warning("Vector search unavailable (%s) — SQL-only eval.", exc)
+        engine = None
+
+    summary = run_eval(
+        load_cases(config), con=con, transport=transport, search_engine=engine,
+        out_dir=Path(settings.data_dir) / "chat" / "eval",
+        provider=provider or "default", limit=limit,
+    )
+    logger.info("Eval summary: %s", summary)
+
+
 autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")
 app.add_typer(autolabel_app, name="autolabel")
 
