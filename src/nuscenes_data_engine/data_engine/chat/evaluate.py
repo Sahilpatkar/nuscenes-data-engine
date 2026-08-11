@@ -14,6 +14,8 @@ import re
 import unicodedata
 from typing import Any
 
+from nuscenes_data_engine.data_engine.chat import catalog
+
 logger = logging.getLogger("nuscenes_data_engine")
 
 # A standalone number: 1,234 | 12.5 | -0.0262 | 45%. The boundaries matter — without
@@ -93,3 +95,45 @@ def used_tools(steps: list[dict[str, Any]]) -> bool:
 def returned_frames(frames: list[dict[str, Any]]) -> bool:
     """True when the agent attached at least one example frame."""
     return bool(frames)
+
+
+def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
+    """Every numeric value the agent's own SQL actually returns, plus row counts.
+
+    ``steps`` records tool output as a summary string, not rows, so the SQL is
+    re-executed through the same guarded catalog to recover the values. Steps that are
+    not ``run_sql``, or whose SQL errors, contribute nothing.
+    """
+    values: set[float] = set()
+    for step in steps:
+        if step.get("tool") != "run_sql":
+            continue
+        sql = (step.get("input") or {}).get("sql")
+        if not sql:
+            continue
+        result = catalog.run_sql(con, sql)
+        if "error" in result:
+            logger.debug("grounding: step SQL failed (%s)", result["error"])
+            continue
+        values.add(float(result["row_count"]))
+        for row in result["rows"]:
+            for cell in row:
+                if isinstance(cell, bool):
+                    continue  # bools are ints in Python; never a cited figure
+                if isinstance(cell, int | float):
+                    values.add(float(cell))
+    return values
+
+
+def is_grounded(answer: str, con: Any, steps: list[dict[str, Any]]) -> bool:
+    """True when every number in the answer appears in the agent's own tool output.
+
+    A number that happens to equal the reference but was never retrieved still fails —
+    being right by luck is not being grounded. An answer citing no numbers is grounded
+    vacuously.
+    """
+    cited = extract_numbers(answer)
+    if not cited:
+        return True
+    observed = observed_numbers(con, steps)
+    return all(any(abs(value - seen) <= 1e-6 for seen in observed) for value in cited)

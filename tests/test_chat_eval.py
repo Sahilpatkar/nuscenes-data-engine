@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from nuscenes_data_engine.data_engine.chat.evaluate import (
@@ -131,3 +134,59 @@ def test_returned_frames() -> None:
 
     assert returned_frames([{"sample_data_token": "t1"}]) is True
     assert returned_frames([]) is False
+
+
+@pytest.fixture()
+def tiny_con() -> Any:
+    """A real DuckDB catalog over a two-row samples table."""
+    pytest.importorskip("duckdb")
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE VIEW samples AS SELECT * FROM (VALUES "
+        "('t1','boston-seaport',TRUE), ('t2','singapore-onenorth',FALSE)) "
+        "AS s(sample_data_token, location, is_night)"
+    )
+    return con
+
+
+def test_observed_numbers_reexecutes_sql_steps(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import observed_numbers
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+              "output": "1 rows"}]
+    assert 2.0 in observed_numbers(tiny_con, steps)
+
+
+def test_observed_numbers_skips_non_sql_and_bad_sql(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import observed_numbers
+
+    steps = [
+        {"tool": "search_frames", "input": {"query": "foggy"}, "output": "3 frames found"},
+        {"tool": "run_sql", "input": {"sql": "SELECT * FROM nope"}, "output": "error: x"},
+    ]
+    assert observed_numbers(tiny_con, steps) == set()
+
+
+def test_is_grounded_passes_when_every_number_was_observed(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+              "output": "1 rows"}]
+    assert is_grounded("There are 2 frames.", tiny_con, steps) is True
+
+
+def test_is_grounded_fails_on_a_number_never_observed(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+              "output": "1 rows"}]
+    # 99 appears nowhere in the tool output: being plausible is not being grounded.
+    assert is_grounded("There are 2 frames, 99 of them at night.", tiny_con, steps) is False
+
+
+def test_is_grounded_answer_without_numbers_is_grounded(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    assert is_grounded("I could not find any matching frames.", tiny_con, []) is True
