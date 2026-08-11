@@ -351,3 +351,85 @@ def test_load_cases_rejects_a_case_missing_question(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump({"cases": [{"id": "a"}]}))
     with pytest.raises(ValueError, match="question"):
         load_cases(path)
+
+
+def test_grade_case_reports_each_check(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, grade_case
+
+    case = EvalCase(
+        id="a", question="How many?",
+        reference_sql="SELECT count(*) FROM samples", tolerance=0,
+    )
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+              "output": "1 rows"}]
+    checks = grade_case(tiny_con, case, answer="There are 2 samples.", steps=steps, frames=[])
+    assert checks["numeric"] is True
+    assert checks["english"] is True
+    assert checks["tool_use"] is True
+    assert checks["grounded"] is True
+    assert "frames" not in checks  # only for expect_frames cases
+    assert checks["passed"] is True
+
+
+def test_grade_case_marks_the_failing_check(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, grade_case
+
+    case = EvalCase(
+        id="a", question="How many?",
+        reference_sql="SELECT count(*) FROM samples", tolerance=0,
+    )
+    checks = grade_case(
+        tiny_con, case, answer="There are 99 samples.",
+        steps=[{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+                "output": "1 rows"}],
+        frames=[],
+    )
+    assert checks["numeric"] is False and checks["grounded"] is False
+    assert checks["passed"] is False
+
+
+def test_grade_case_without_reference_skips_numeric(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, grade_case
+
+    case = EvalCase(id="f", question="Show frames.", expect_frames=True)
+    checks = grade_case(
+        tiny_con, case, answer="Here are some frames.",
+        steps=[{"tool": "search_frames", "input": {"query": "fog"}, "output": "2 frames found"}],
+        frames=[{"sample_data_token": "t1"}],
+    )
+    assert "numeric" not in checks  # skipped, not passed
+    assert checks["frames"] is True and checks["passed"] is True
+
+
+def test_grade_case_passes_the_question_to_grounding(tiny_con: Any) -> None:
+    """A constant echoed from the question must not count as ungrounded."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, grade_case
+
+    case = EvalCase(
+        id="a", question="How many samples are within 5 metres?",
+        reference_sql="SELECT count(*) FROM samples", tolerance=0,
+    )
+    checks = grade_case(
+        tiny_con, case, answer="2 samples are within 5 metres.",
+        steps=[{"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM samples"},
+                "output": "1 rows"}],
+        frames=[],
+    )
+    assert checks["grounded"] is True
+
+
+def test_render_report_summarises_pass_rates() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import render_report
+
+    records = [
+        {"id": "a", "question": "q1", "latency_s": 1.0,
+         "checks": {"numeric": True, "english": True, "tool_use": True,
+                    "grounded": True, "passed": True}},
+        {"id": "b", "question": "q2", "latency_s": 3.0,
+         "checks": {"numeric": False, "english": True, "tool_use": True,
+                    "grounded": True, "passed": False}},
+    ]
+    markdown = render_report(records, model="qwen2.5:14b", provider="local")
+    assert "qwen2.5:14b" in markdown
+    assert "1/2" in markdown or "50" in markdown
+    assert "numeric" in markdown and "| a " in markdown and "| b " in markdown

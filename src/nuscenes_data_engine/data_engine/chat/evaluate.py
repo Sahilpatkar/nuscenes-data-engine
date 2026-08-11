@@ -10,8 +10,11 @@ docs/superpowers/specs/2026-08-11-chat-eval-harness-design.md).
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import re
+import statistics
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -252,3 +255,138 @@ def validate_cases(con: Any, cases: list[EvalCase]) -> None:
                 f"case {case.id!r} has neither reference_sql nor expect_frames — "
                 "it would pass on english/tool_use alone"
             )
+
+
+def grade_case(
+    con: Any,
+    case: EvalCase,
+    *,
+    answer: str,
+    steps: list[dict[str, Any]],
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Per-check verdicts for one answered case, plus the overall ``passed``.
+
+    Checks that do not apply to a case are ABSENT from the dict rather than True, so a
+    case is never credited with a check it never faced.
+    """
+    checks: dict[str, Any] = {
+        "english": is_english(answer),
+        "tool_use": used_tools(steps),
+        "grounded": is_grounded(answer, con, steps, case.question),
+    }
+    if case.reference_sql is not None:
+        expected = reference_value(con, case)
+        checks["numeric"] = numeric_matches(
+            extract_numbers(answer), expected, case.tolerance, case.tolerance_pct
+        )
+        checks["expected"] = expected
+    if case.expect_frames:
+        checks["frames"] = returned_frames(frames)
+    checks["passed"] = all(
+        value for key, value in checks.items() if isinstance(value, bool)
+    )
+    return checks
+
+
+CHECK_NAMES = ("numeric", "english", "tool_use", "grounded", "frames")
+
+
+def render_report(records: list[dict[str, Any]], *, model: str, provider: str) -> str:
+    """Markdown summary: overall + per-check pass rates, then a per-case table."""
+    total = len(records)
+    passed = sum(1 for record in records if record["checks"].get("passed"))
+    lines = [
+        "# Chat-agent eval report\n",
+        f"- provider: `{provider}`  model: `{model}`",
+        f"- cases: **{passed}/{total} passed**"
+        + (f" ({100.0 * passed / total:.0f}%)" if total else ""),
+    ]
+    latencies = [record["latency_s"] for record in records if record.get("latency_s")]
+    if latencies:
+        lines.append(f"- median latency: {statistics.median(latencies):.1f}s")
+    lines.append("\n## Per-check pass rates\n")
+    lines.append("| check | passed | applicable |")
+    lines.append("|---|---:|---:|")
+    for name in CHECK_NAMES:
+        applicable = [r for r in records if name in r["checks"]]
+        if not applicable:
+            continue
+        ok = sum(1 for r in applicable if r["checks"][name])
+        lines.append(f"| {name} | {ok} | {len(applicable)} |")
+    lines.append("\n## Cases\n")
+    lines.append("| id | passed | failed checks | question |")
+    lines.append("|---|---|---|---|")
+    for record in records:
+        checks = record["checks"]
+        failed = ", ".join(
+            name for name in CHECK_NAMES if name in checks and not checks[name]
+        ) or "—"
+        mark = "✅" if checks.get("passed") else "❌"
+        lines.append(f"| {record['id']} | {mark} | {failed} | {record['question']} |")
+    return "\n".join(lines) + "\n"
+
+
+def run_eval(
+    cases: list[EvalCase],
+    *,
+    con: Any,
+    transport: Any,
+    search_engine: Any | None,
+    out_dir: Path,
+    provider: str,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Answer every case, grade it, and write results.jsonl + report.md."""
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    selected = cases[:limit] if limit else cases
+    validate_cases(con, selected)  # a harness bug must never score as an agent failure
+    records: list[dict[str, Any]] = []
+    for index, case in enumerate(selected, start=1):
+        started = time.time()
+        try:
+            result = agent.answer(
+                case.question, transport=transport, con=con, search_engine=search_engine
+            )
+            checks = grade_case(
+                con, case, answer=result.answer, steps=result.steps, frames=result.frames
+            )
+            record: dict[str, Any] = {
+                "id": case.id, "question": case.question, "answer": result.answer,
+                "model": result.model, "steps": result.steps,
+                "n_frames": len(result.frames), "checks": checks,
+                "latency_s": round(time.time() - started, 2),
+            }
+        except Exception as exc:  # a broken case must not abort the suite
+            logger.warning("case %s raised: %s", case.id, exc)
+            record = {
+                "id": case.id, "question": case.question, "answer": "",
+                "model": getattr(transport, "model", "unknown"), "steps": [],
+                "n_frames": 0, "error": str(exc), "checks": {"passed": False},
+                "latency_s": round(time.time() - started, 2),
+            }
+        records.append(record)
+        logger.info(
+            "[%d/%d] %s: %s", index, len(selected), case.id,
+            "pass" if record["checks"].get("passed") else "FAIL",
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model = records[0]["model"] if records else getattr(transport, "model", "unknown")
+    results_path = out_dir / f"results_{provider}.jsonl"
+    with open(results_path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, default=str) + "\n")
+    report_path = out_dir / f"report_{provider}.md"
+    report_path.write_text(render_report(records, model=model, provider=provider))
+
+    passed = sum(1 for record in records if record["checks"].get("passed"))
+    summary = {
+        "provider": provider, "model": model, "n_cases": len(records),
+        "n_passed": passed,
+        "pass_rate": round(passed / len(records), 3) if records else 0.0,
+        "results": str(results_path), "report": str(report_path),
+    }
+    logger.info("Eval: %d/%d passed -> %s", passed, len(records), report_path)
+    return summary
