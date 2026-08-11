@@ -992,3 +992,54 @@ def test_regrade_raises_a_valueerror_naming_the_line_on_malformed_json(
     cases = [EvalCase(id="a", question="q", expect_frames=True)]
     with pytest.raises(ValueError, match="line 2"):
         regrade(src, con=tiny_con, cases=cases)
+
+
+def test_cli_regrade_never_builds_a_transport(tmp_path: Path, monkeypatch: Any) -> None:
+    """The whole point of ``--regrade`` is $0/no-key/no-network: it must short-circuit
+    BEFORE ``make_transport`` is ever called, not just avoid calling the LLM. Exercised
+    through the actual Typer command (not just the ``regrade()`` function) so a future
+    edit to ``cli.py``'s branch order — e.g. moving the transport construction earlier —
+    fails this test instead of silently costing an API key/network call. ``open_catalog``
+    tolerates a processed-dir with no Parquet files (it only creates a view per table
+    that actually exists on disk), so this needs no ``data/`` checkout: an empty
+    ``tmp_path`` stands in for both ``--processed-dir`` and ``DATA_DIR`` (the labels-path
+    lookup lives under ``DATA_DIR``, and must not resolve to this checkout's real
+    ``data/autolabel/labels.parquet``, or the test would silently depend on repo state).
+    """
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from nuscenes_data_engine.cli import app
+    from nuscenes_data_engine.data_engine.chat import transports
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("transport must not be built under --regrade")
+
+    monkeypatch.setattr(transports, "make_transport", _boom)
+
+    results_path = tmp_path / "results_stub.jsonl"
+    results_path.write_text(
+        _json.dumps({
+            "id": "a", "question": "How many samples?", "answer": "no idea",
+            "model": "stub", "steps": [], "n_frames": 0, "checks": {}, "latency_s": 1.0,
+        }) + "\n"
+    )
+    config_path = tmp_path / "chat_eval.yaml"
+    config_path.write_text(
+        "cases:\n  - id: a\n    question: \"How many samples?\"\n    expect_frames: true\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "chat-eval",
+        "--regrade", str(results_path),
+        "--config", str(config_path),
+        "--processed-dir", str(tmp_path / "processed"),  # need not exist
+    ])
+
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    out_jsonl = tmp_path / "results_stub_v2.jsonl"
+    assert out_jsonl.is_file()  # the regrade actually ran, not just "didn't crash"

@@ -463,7 +463,12 @@ def run_eval(
     provider: str,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Answer every case, grade it, and write results.jsonl + report.md."""
+    """Answer every case, grade it, and write ``results_<provider>.jsonl`` +
+    ``report_<provider>.md`` under ``out_dir``. ``provider`` is a filename label, not
+    necessarily a bare provider name — the CLI passes it already model-suffixed
+    (``local_qwen2.5-32b``) when ``--model`` is given, so a sweep run's artifacts
+    never clobber another run's.
+    """
     from nuscenes_data_engine.data_engine.chat import agent
 
     selected = cases[:limit] if limit else cases

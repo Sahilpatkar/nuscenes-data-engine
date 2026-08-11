@@ -455,7 +455,7 @@ def chat_eval(
     limit: int | None = typer.Option(None, "--limit", help="First N cases (smoke runs)."),
     processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
     regrade_path: Path | None = typer.Option(
-        None, "--regrade",
+        None, "--regrade", exists=True, dir_okay=False,
         help="Replay a stored results_*.jsonl through the current graders (no LLM calls).",
     ),
 ) -> None:
