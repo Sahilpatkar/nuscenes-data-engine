@@ -58,9 +58,13 @@ cases:
     tolerance: 0
 
   - id: avg_visibility_pedestrian_night
+    # "Using the 2D annotations table" disambiguates against annotations_3d, which
+    # also carries visibility_token but reads ~2.78 there vs ~3.64 here — both are
+    # real, correct readings of real tables, not an error either way (see
+    # docs/DATASET_CHAT.md, "Answer-correctness evaluation").
     question: >
-      What is the average visibility (on the 1-4 scale) of pedestrian annotations
-      at night?
+      Using the 2D annotations table, what is the average visibility (on the 1-4
+      scale) of pedestrian annotations at night?
     reference_sql: >
       SELECT avg(CAST(visibility_token AS INT)) FROM annotations
       WHERE category_group = 'pedestrian' AND is_night

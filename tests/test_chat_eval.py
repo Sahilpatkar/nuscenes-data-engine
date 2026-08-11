@@ -282,6 +282,28 @@ def test_is_grounded_accepts_a_constant_echoed_from_the_question(tiny_con: Any) 
     ) is True
 
 
+def test_is_grounded_accepts_a_question_constant_next_to_an_ascii_hyphen(
+    tiny_con: Any,
+) -> None:
+    """A question's "1-4" (plain ASCII hyphen) must echo "4" as reliably as an answer's
+    "1-4" written with a non-ASCII dash already does.
+
+    ``extract_numbers`` deliberately suppresses hyphen-adjacent digits everywhere (so
+    "Scene-0992" doesn't yield -992), but that suppression must not carry over to the
+    allowlist: a question phrased with an ASCII hyphen ("the 1-4 scale") has to admit
+    "4" as an echoable constant just like an answer citing the same range with a
+    non-ASCII dash does, or the same constant is checked on one side and silently
+    dropped on the other.
+    """
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT 2"}, "output": "1 rows"}]
+    assert is_grounded(
+        "the scale runs 1–4 and the mean is 2",  # noqa: RUF001 - en dash, as models render it
+        tiny_con, steps, question="What is the mean on the 1-4 scale?",
+    ) is True
+
+
 def test_reference_value_rejects_multiple_rows(tiny_con: Any) -> None:
     from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, reference_value
 

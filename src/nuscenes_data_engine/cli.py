@@ -469,18 +469,30 @@ def chat_eval(
     try:
         from nuscenes_data_engine.data_engine.search import SearchEngine
 
-        engine: Any | None = SearchEngine(
+        probe = SearchEngine(
             Path(settings.search_lancedb_path), settings.search_table,
             settings.search_model_name, device=settings.search_device,
         )
-    except (ImportError, FileNotFoundError) as exc:
+        # Construction alone never touches the encoder (search_similar works without
+        # it), so a missing torch previously surfaced only mid-eval, per case, inside
+        # search_frames's own try/except, as a silent "search failed: ..." tool error
+        # — every retrieval case degraded to SQL fallback with no warning that search
+        # itself was unavailable. Probe it here so that degradation is up front instead.
+        probe.search_text("probe", k=1)
+        engine: Any | None = probe
+    except Exception as exc:
         logger.warning("Vector search unavailable (%s) — SQL-only eval.", exc)
         engine = None
 
+    # Resolved the same way make_transport resolves the model, not the raw CLI flag:
+    # a flagless run under CHAT_PROVIDER=anthropic must not write results_default.jsonl
+    # (a later flagless run under default settings would then silently overwrite it
+    # with local results — exactly the collision the provider suffix exists to avoid).
+    resolved_provider = provider or settings.chat_provider
     summary = run_eval(
         load_cases(config), con=con, transport=transport, search_engine=engine,
         out_dir=Path(settings.data_dir) / "chat" / "eval",
-        provider=provider or "default", limit=limit,
+        provider=resolved_provider, limit=limit,
     )
     logger.info("Eval summary: %s", summary)
 

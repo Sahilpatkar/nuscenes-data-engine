@@ -3,9 +3,11 @@
 The views are lazy Parquet scans (nothing loads until queried), the same tables the
 `query` CLI exposes, plus the Phase 6b VLM labels when present. The guard admits
 exactly one SELECT statement per call and layers a denylist on top: DuckDB parses
-PRAGMA as a SELECT-typed statement and lets a bare SELECT read arbitrary files
-(``read_parquet('/any/path')``, ``FROM 'x.parquet'``), so statement type alone is
-not enough. COPY / DDL / DML / multi-statement payloads are rejected by type.
+PRAGMA as a SELECT-typed statement and lets a bare SELECT read arbitrary files via a
+string literal, a double-quoted identifier, or a dollar-quoted string
+(``read_parquet('/any/path')``, ``FROM 'x.parquet'``, ``FROM "x.parquet"``,
+``FROM $$x.parquet$$``), so statement type alone is not enough. COPY / DDL / DML /
+multi-statement payloads are rejected by type.
 """
 
 from __future__ import annotations
@@ -32,26 +34,33 @@ _DENIED_KEYWORDS = re.compile(
     r"parquet_scan|glob|getenv)\b",
     re.IGNORECASE,
 )
-# String literals that look like file paths (DuckDB treats 'x.parquet' as a table).
-# Matched in two steps — tokenize every `'...'` literal, then test each one on its
-# own — rather than one denylist regex scanning the whole statement. A single regex
-# like r"'[^']*(?:/|\.ext)[^']*'" is unanchored to real literal boundaries: it can pair
-# the CLOSING quote of one literal with the OPENING quote of a later, unrelated one and
+# Quoted tokens that look like file paths (DuckDB treats 'x.parquet', "x.parquet", and
+# $$x.parquet$$ all as valid ways to name a file to read — a single-quoted string, a
+# double-quoted identifier, and a dollar-quoted string are interchangeable there).
+# Matched in two steps — tokenize every quoted span, then test each one on its own —
+# rather than one denylist regex scanning the whole statement. A single regex like
+# r"'[^']*(?:/|\.ext)[^']*'" is unanchored to real literal boundaries: it can pair the
+# CLOSING quote of one literal with the OPENING quote of a later, unrelated one and
 # match everything in between (including SQL code, not literal content) as long as a
 # "/" appears somewhere in that span. That falsely rejected legitimate SQL dividing
 # between two literals, e.g. `count(*) FILTER (WHERE a='x') / count(*) ... WHERE b='y'`
 # — narrowing the run of characters allowed before the "/"/extension does not fix this,
 # since the run *after* it is still unbounded up to the next quote, wherever that falls.
-# Scanning literal-by-literal is immune: each match is anchored to one real `'...'` span.
-_STRING_LITERAL = re.compile(r"'[^']*'")
+# Scanning literal-by-literal is immune: each match is anchored to one real quoted span.
+_QUOTED_TOKEN = re.compile(
+    r"'[^']*'"  # 'x.parquet' — a string literal
+    r'|"[^"]*"'  # "x.parquet" — a quoted identifier (DuckDB reads files through these too)
+    r"|\$(\w*)\$.*?\$\1\$",  # $$x.parquet$$ / $tag$x.parquet$tag$ — dollar-quoted string
+    re.DOTALL,
+)
 _PATH_LIKE = re.compile(r"/|\\|\.(?:parquet|csv|json|jsonl|txt|db|duckdb)", re.IGNORECASE)
 
 
 def _fileish_literal(sql: str) -> re.Match[str] | None:
-    """The first single-quoted literal that looks like a file path, if any."""
-    for literal in _STRING_LITERAL.finditer(sql):
-        if _PATH_LIKE.search(literal.group()):
-            return literal
+    """The first quoted literal/identifier that looks like a file path, if any."""
+    for token in _QUOTED_TOKEN.finditer(sql):
+        if _PATH_LIKE.search(token.group()):
+            return token
     return None
 
 

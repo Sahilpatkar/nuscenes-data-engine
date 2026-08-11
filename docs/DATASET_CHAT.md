@@ -146,8 +146,11 @@ that are crowded). Kept here deliberately — see limitations.
   like "how many night scenes in holland village." This is not the occasional
   glitch the live transcripts above might suggest: pinning the reply language at
   the top of the system prompt reduces it but is nowhere near sufficient; see the
-  eval below. 3 of 20 answers also called no tool at all, answering from memory
-  instead of querying — Claude never did either (20/20 English, 20/20 tool-using).
+  eval below. 3 of 20 answers also failed to emit a usable tool call — not recalled
+  statistics; a Thai refusal that echoes the question back, an answer that prints
+  the SQL in prose without calling it, and one instance of the double-escaped
+  tool-call bug below — so no tool ran. Claude never failed to emit a usable call
+  (20/20 English, 20/20 tool-using).
 - **Loose terminology**: it sometimes labels image counts as "scenes" — the SQL in
   the steps expander is the ground truth for what was actually counted.
 - **Double-escaped SQL**: the model sometimes emits literal `\n` inside tool-call
@@ -189,21 +192,31 @@ Five checks, each a pure function over the agent's own output (`chat/evaluate.py
 - **`frames`** — retrieval-only cases returned at least one example frame.
 
 **The case set**: `configs/chat_eval.yaml`, 20 cases (17 numeric + 3 retrieval),
-seeded from the real questions in `data/chat/log.jsonl`, covering `samples`,
-`annotations`, `labels`, `canbus`, `ego_pose`, `annotations_3d`/`instances`, and
-`availability`. Two references cross-check against numbers documented independently
-elsewhere: "pedestrians within 5 m of ego at night" (183) and "hard braking with a
-pedestrian within 10 m" (30) both reproduce docs/GRAPH.md's SQL/Cypher parity
-results.
+seeded from, and extended beyond, the logged questions in `data/chat/log.jsonl`
+(6 of the 20 case questions match a logged question verbatim; the rest cover the
+same tables and question shapes), covering `samples`, `annotations`, `labels`,
+`canbus`, `ego_pose`, `annotations_3d`/`instances`, and `availability`. Two
+references cross-check against numbers documented independently elsewhere:
+"pedestrians within 5 m of ego at night" (183) and "hard braking with a pedestrian
+within 10 m" (30) both reproduce docs/GRAPH.md's SQL/Cypher parity results.
 
-One infrastructure fix came out of building this harness: the SQL guard's
-file-path denylist had a false positive on legitimate SQL that divides between two
-string literals — exactly the shape of a filtered percentage
+Two infrastructure fixes came out of building this harness, both in the SQL guard.
+First, the file-path denylist had a false positive on legitimate SQL that divides
+between two string literals — exactly the shape of a filtered percentage
 (`count(*) FILTER (WHERE a='x') / count(*) ... WHERE b='y'`) — because the old
 single regex could pair the closing quote of one literal with the opening quote of
-an unrelated later one. That was silently pushing the agent toward computing
-percentages in prose instead of retrieving them directly; fixed by matching each
-`'...'` literal on its own rather than scanning the whole statement (`chat/catalog.py`).
+an unrelated later one. On this shape the guard would have rejected the natural
+form of a filtered-percentage query, pushing the agent toward computing the
+percentage in prose instead of retrieving it directly — though no logged run
+actually hit the rejection (`data/chat/log.jsonl` has no `Disallowed token` error;
+this is a mechanism the fix pre-empted, not a failure caught in the wild). Fixed by
+matching each `'...'` literal on its own rather than scanning the whole statement.
+Second, and unrelated — a pre-existing gap, not a regression introduced by the
+first fix — the denylist only ever tokenized single-quoted `'...'` literals, but
+DuckDB reads a file path out of a double-quoted identifier or a `$$...$$`-quoted
+string just as readily (`SELECT * FROM "x.parquet"`, `SELECT * FROM $$x.parquet$$`
+both worked before this fix); the guard now tokenizes and checks all three forms
+(`chat/catalog.py`).
 
 ### Results (2026-08-11, 20 cases, identical suite both providers)
 
@@ -217,6 +230,23 @@ percentages in prose instead of retrieving them directly; fixed by matching each
 | frames | 1/3 | 3/3 |
 | median latency | 10.8s | 8.0s |
 
+**Caveat on the `frames` row**: `search_frames` failed on *every* call in *both*
+runs, always with the same error — `search failed: No module named 'torch'` (the
+Mac this eval ran on has no torch install; see `SearchEngine._encoder`). So `frames`
+does not measure semantic retrieval at all here — it measures recovery via SQL
+fallback against `labels`/`annotations_3d` after the vector-search tool errored out.
+Claude reached frames in all three retrieval cases via that SQL fallback:
+immediately for `bike_bus_singapore_night_frames` (never called `search_frames` at
+all), after one failed attempt for `construction_cones_night_frames`, and after
+two — the second with a reworded query — for `foggy_misty_glare_frames`.
+`foggy_misty_glare_frames` — one of the seven fail-both cases below — never found a
+working path for local: one failed `search_frames` call, no SQL fallback attempted,
+so `frames` failed too (it fails overall for Claude as well, on `grounded`, despite
+successfully attaching frames via fallback). None of the measured numbers change
+because of this — it is a property of the environment the eval ran in, not the
+grading logic — but this run says nothing about semantic search quality
+specifically, only about fallback robustness when it is unavailable.
+
 2 cases pass under both providers; 9 pass only under Claude; 2 pass only under
 local. 7 cases fail under both: `avg_visibility_pedestrian_night`,
 `canbus_hard_braking_count`, `foggy_misty_glare_frames`,
@@ -226,8 +256,11 @@ local. 7 cases fail under both: `avg_visibility_pedestrian_night`,
 **Finding 1 — language drift is far worse than the live transcripts suggest.** 8
 of 20 local answers (40%) came back in a non-Latin script, including simple
 questions like "how many night scenes in holland village." Claude: 20/20 English.
-3 local answers also called no tool at all, answering from memory; Claude always
-queried (20/20 `tool_use`).
+3 local answers also failed to emit a usable tool call, so no query ran — none of
+the three recalled or fabricated a statistic instead: one is a Thai refusal that
+echoes the question back, one prints SQL in a fenced block without calling it, and
+one is a malformed tool call (the double-escaped tool-argument bug documented
+above). Claude always emitted a usable call (20/20 `tool_use`).
 
 **Finding 2 — the grounding check penalises the stronger model, and that is a
 harness limitation, not a model defect.** Claude is far more accurate (`numeric`
@@ -236,18 +269,25 @@ grounding failures shows why — the cited numbers are legitimate but not litera
 present in tool output:
 
 - derived arithmetic: "**4,986** of the VLM-labeled frames parsed successfully
-  (out of 5,000 total, so **14** failed to parse)" — 14 = 5000 − 4986, computed,
-  never retrieved;
+  (out of 5,000 total, so 14 failed to parse)" — 14 = 5000 − 4986, computed, never
+  retrieved;
 - computed percentages: "**Agreement rate: 99.66%** (4,969 of 4,986 usable
-  frames)" — 99.66 derived from two retrieved counts;
-- constants quoted from the schema prompt: "94 keyframes show hard braking (peak
-  deceleration ≤ **−3.0** m/s² within the **±0.5** s window)" — those thresholds
-  come from the documented schema, not from a query.
+  VLM-labeled frames)" — 99.66 derived from two retrieved counts;
+- constants quoted from the schema prompt: "**94 keyframes** show hard braking
+  (where `is_hard_braking` is true, meaning peak longitudinal deceleration ≤ −3.0
+  m/s² within the ±0.5 s CAN-bus window)" — those thresholds come from the
+  documented schema, not from a query.
 
 In each of those three examples `numeric` passed (the headline figure was right)
 while `grounded` failed. So the composite "passed" column **understates the
 stronger model**: a capable agent that shows its arithmetic and explains its
-thresholds is penalised for doing so.
+thresholds is penalised for doing so. Claude's one genuine `numeric` miss,
+`avg_visibility_pedestrian_night` (2.78 vs. the reference's 3.64), arguably is not
+one either: Claude read `annotations_3d` (2.78 — confirmed by querying it
+directly), the reference reads the 2D `annotations` table (3.64), and both are
+real, correct averages of a real `visibility_token` column on different tables —
+the case question has since been reworded to say which table is meant
+(`configs/chat_eval.yaml`). So Claude's 16/17 `numeric` likely understates it too.
 
 To be explicit about what this project did and did not do: **the grader was not
 loosened after seeing these results.** Changing a measurement instrument to
@@ -256,8 +296,31 @@ random-control gate). This is recorded as a known limitation, with a principled
 fix for a future round, pre-registered here before any re-run: admit numbers
 derivable from observed values by simple arithmetic, and seed the observed set
 with constants from the schema prompt, the same way question-echoed constants are
-already admitted. `grounded` remains a real signal for the local model, though —
-where it caught genuine invention, not just unretrieved-but-correct arithmetic.
+already admitted. Pre-registering a fix rather than applying it quietly means
+checking whether it would actually work: it would flip 7 of the 9 Claude failures
+above to grounded — not all 9. It would not fix `max_instance_keyframes`, whose
+unsupported values ("~20 s", "2 Hz") are nuScenes domain facts from the model's
+own memory, nowhere in the schema prompt or in any retrieved row. Nor does it
+change the outcome for `avg_visibility_pedestrian_night` — its ungrounded
+citation ("4", for "fully visible") is exactly this kind of schema constant, but
+the case still fails `numeric` for the table-ambiguity reason above, so fixing its
+grounding would not flip its overall result either way.
+
+The honest reading of the 18/20-vs-11/20 `grounded` split runs the other way from
+"it caught the local model's mistakes." `is_grounded` returns True vacuously when
+an answer cites no numbers at all, and 8 of the local model's 20 answers do
+exactly that — a free pass, not a demonstration of care. Across all 20 questions
+the local model cites 27 numbers in total; Claude cites 99, with no number-free
+answer among them — a model that commits to fewer specifics is structurally harder
+to catch being wrong about one. Local's own two `grounded` failures are not
+invention either: one cites "4" for "fully visible" — the same schema constant
+used to excuse Claude above, just echoed in Chinese ("其中 4 表示完全可见"); the
+other is a stray "1" pulled out of `THEN 1 END` inside a SQL query the model
+printed in prose but never actually called (that answer made no statistical claim
+tied to it at all). `grounded` is a real signal in general — a number nowhere in
+the agent's own retrieved data or the question is unsupported, whichever model
+states it — but nothing in this run shows it catching a local-model invention; on
+this run it mostly rewards saying less.
 
 ### Running it
 

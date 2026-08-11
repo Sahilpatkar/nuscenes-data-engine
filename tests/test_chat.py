@@ -110,10 +110,15 @@ def test_run_sql_allows_division_between_two_string_literals(con: Any) -> None:
 
 
 def test_run_sql_still_blocks_a_real_file_path_literal(con: Any) -> None:
-    """The guard must still reject genuine file-reading attempts."""
+    """The guard must still reject genuine file-reading attempts, in every quoting form
+    DuckDB accepts in a FROM clause: single-quoted string, double-quoted identifier, and
+    dollar-quoted string (untagged and tagged)."""
     assert "error" in catalog.run_sql(con, "SELECT * FROM '/etc/passwd'")
     assert "error" in catalog.run_sql(con, "SELECT * FROM 'data/processed/samples.parquet'")
     assert "error" in catalog.run_sql(con, "SELECT * FROM read_parquet('/any/path.parquet')")
+    assert "error" in catalog.run_sql(con, 'SELECT * FROM "data/processed/samples.parquet"')
+    assert "error" in catalog.run_sql(con, "SELECT * FROM $$/etc/passwd$$")
+    assert "error" in catalog.run_sql(con, "SELECT * FROM $tag$data/processed/samples.parquet$tag$")
 
 
 def test_run_sql_row_cap_and_errors(con: Any) -> None:

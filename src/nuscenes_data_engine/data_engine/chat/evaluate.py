@@ -153,6 +153,29 @@ def _matches_at_cited_precision(cited: float, observed: float) -> bool:
     return abs(cited - round(observed, decimals)) <= 1e-6
 
 
+# A permissive extractor used ONLY for the question side of grounding (the allowlist),
+# never for the answer's own citations. `_NUMBER` (above) suppresses digits adjacent to
+# a hyphen so identifiers like "Scene-0992" don't yield phantom values — but that same
+# suppression means a question phrased "the 1-4 scale" (plain ASCII hyphen) never yields
+# "4" as an echoable constant, even though the same constant cited with a non-ASCII dash
+# (e.g. an en dash, as answers often render it) extracts fine from the answer side: the
+# identical constant, checked but never admitted. Widening only the allowlist can remove
+# false grounding failures, never create them — a citation still has to match some
+# admitted value, this only grows the set it may match against.
+_ANY_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _allowlist_numbers(text: str) -> set[float]:
+    """Numbers a citation may legitimately echo (question constants).
+
+    Deliberately more permissive than ``extract_numbers``: it also matches digits
+    adjacent to punctuation such as the hyphen in "the 1-4 scale", which the citation
+    extractor suppresses to avoid phantom values. Widening only the allowlist can
+    remove false grounding failures, never create them.
+    """
+    return {float(m.group().replace(",", "")) for m in _ANY_NUMBER.finditer(text)}
+
+
 def is_grounded(
     answer: str, con: Any, steps: list[dict[str, Any]], question: str = ""
 ) -> bool:
@@ -167,7 +190,7 @@ def is_grounded(
     cited = extract_numbers(answer)
     if not cited:
         return True
-    observed = observed_numbers(con, steps) | set(extract_numbers(question))
+    observed = observed_numbers(con, steps) | _allowlist_numbers(question)
     return all(
         any(_matches_at_cited_precision(value, seen) for seen in observed)
         for value in cited
