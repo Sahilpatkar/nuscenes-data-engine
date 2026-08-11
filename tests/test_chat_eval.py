@@ -190,3 +190,71 @@ def test_is_grounded_answer_without_numbers_is_grounded(tiny_con: Any) -> None:
     from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
 
     assert is_grounded("I could not find any matching frames.", tiny_con, []) is True
+
+
+def test_load_cases_parses_and_defaults(tmp_path: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+
+    path = tmp_path / "cases.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "cases": [
+                    {"id": "a", "question": "How many?", "reference_sql": "SELECT 1",
+                     "tolerance": 2},
+                    {"id": "b", "question": "Show frames.", "expect_frames": True},
+                ]
+            }
+        )
+    )
+    cases = load_cases(path)
+    assert [c.id for c in cases] == ["a", "b"]
+    assert cases[0].tolerance == 2.0 and cases[0].tolerance_pct is None
+    assert cases[1].reference_sql is None and cases[1].expect_frames is True
+
+
+def test_load_cases_rejects_both_tolerances(tmp_path: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+
+    path = tmp_path / "cases.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"cases": [{"id": "a", "question": "q", "reference_sql": "SELECT 1",
+                        "tolerance": 1, "tolerance_pct": 5}]}
+        )
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        load_cases(path)
+
+
+def test_load_cases_rejects_duplicate_ids(tmp_path: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+
+    path = tmp_path / "cases.yaml"
+    path.write_text(
+        yaml.safe_dump({"cases": [{"id": "a", "question": "q1"},
+                                  {"id": "a", "question": "q2"}]})
+    )
+    with pytest.raises(ValueError, match="duplicate case id"):
+        load_cases(path)
+
+
+def test_reference_value_runs_through_the_guarded_catalog(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, reference_value
+
+    case = EvalCase(id="a", question="q", reference_sql="SELECT count(*) FROM samples")
+    assert reference_value(tiny_con, case) == 2.0
+
+
+def test_reference_value_raises_on_broken_reference_sql(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, reference_value
+
+    case = EvalCase(id="bad", question="q", reference_sql="SELECT * FROM nope")
+    with pytest.raises(ValueError, match="reference SQL"):
+        reference_value(tiny_con, case)

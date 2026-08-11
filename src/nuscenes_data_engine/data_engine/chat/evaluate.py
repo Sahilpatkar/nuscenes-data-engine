@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.data_engine.chat import catalog
@@ -137,3 +139,67 @@ def is_grounded(answer: str, con: Any, steps: list[dict[str, Any]]) -> bool:
         return True
     observed = observed_numbers(con, steps)
     return all(any(abs(value - seen) <= 1e-6 for seen in observed) for value in cited)
+
+
+@dataclass
+class EvalCase:
+    """One eval question plus how to check its answer."""
+
+    id: str
+    question: str
+    reference_sql: str | None = None
+    tolerance: float | None = None
+    tolerance_pct: float | None = None
+    expect_frames: bool = False
+
+
+def load_cases(path: Path) -> list[EvalCase]:
+    """Parse the eval-case YAML, validating ids and tolerance usage."""
+    from nuscenes_data_engine.config import load_yaml
+
+    raw = load_yaml(path).get("cases") or []
+    cases: list[EvalCase] = []
+    seen: set[str] = set()
+    for entry in raw:
+        case_id = str(entry["id"])
+        if case_id in seen:
+            raise ValueError(f"duplicate case id {case_id!r} in {path}")
+        seen.add(case_id)
+        tolerance = entry.get("tolerance")
+        tolerance_pct = entry.get("tolerance_pct")
+        if tolerance is not None and tolerance_pct is not None:
+            raise ValueError(
+                f"case {case_id!r}: pass exactly one of tolerance / tolerance_pct"
+            )
+        cases.append(
+            EvalCase(
+                id=case_id,
+                question=str(entry["question"]),
+                reference_sql=entry.get("reference_sql"),
+                tolerance=None if tolerance is None else float(tolerance),
+                tolerance_pct=None if tolerance_pct is None else float(tolerance_pct),
+                expect_frames=bool(entry.get("expect_frames", False)),
+            )
+        )
+    return cases
+
+
+def reference_value(con: Any, case: EvalCase) -> float:
+    """The case's ground-truth number, from its reference SQL via the guarded catalog.
+
+    A reference that errors or returns nothing is a HARNESS bug, not an agent failure,
+    so it raises rather than scoring the case.
+    """
+    if case.reference_sql is None:
+        raise ValueError(f"case {case.id!r} has no reference_sql")
+    result = catalog.run_sql(con, case.reference_sql)
+    if "error" in result:
+        raise ValueError(f"case {case.id!r}: reference SQL failed — {result['error']}")
+    if not result["rows"] or not result["rows"][0]:
+        raise ValueError(f"case {case.id!r}: reference SQL returned no rows")
+    cell = result["rows"][0][0]
+    if isinstance(cell, bool) or not isinstance(cell, int | float):
+        raise ValueError(
+            f"case {case.id!r}: reference SQL must return a number, got {cell!r}"
+        )
+    return float(cell)
