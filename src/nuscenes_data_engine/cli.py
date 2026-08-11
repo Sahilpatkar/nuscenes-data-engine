@@ -470,6 +470,8 @@ def chat_eval(
         processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
     )
     if regrade_path is not None:
+        if limit is not None or provider is not None or model is not None:
+            logger.warning("--limit/--provider/--model are ignored with --regrade")
         summary = regrade(regrade_path, con=con, cases=load_cases(config))
         logger.info("Regrade summary: %s", summary)
         return
