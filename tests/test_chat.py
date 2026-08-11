@@ -99,6 +99,23 @@ def test_run_sql_guard_rejects(con: Any, sql: str) -> None:
     assert set(out) == {"error"}, sql
 
 
+def test_run_sql_allows_division_between_two_string_literals(con: Any) -> None:
+    """A filtered-percentage query is legitimate SQL, not a file-path escape."""
+    sql = (
+        "SELECT 100.0 * count(*) FILTER (WHERE scene_name = 'scene-a') / count(*) "
+        "FROM samples WHERE channel = 'CAM_FRONT'"
+    )
+    result = catalog.run_sql(con, sql)
+    assert "error" not in result, result.get("error")
+
+
+def test_run_sql_still_blocks_a_real_file_path_literal(con: Any) -> None:
+    """The guard must still reject genuine file-reading attempts."""
+    assert "error" in catalog.run_sql(con, "SELECT * FROM '/etc/passwd'")
+    assert "error" in catalog.run_sql(con, "SELECT * FROM 'data/processed/samples.parquet'")
+    assert "error" in catalog.run_sql(con, "SELECT * FROM read_parquet('/any/path.parquet')")
+
+
 def test_run_sql_row_cap_and_errors(con: Any) -> None:
     out = catalog.run_sql(con, "SELECT * FROM range(100)", max_rows=10)
     assert out["row_count"] == 10 and out["truncated"]
