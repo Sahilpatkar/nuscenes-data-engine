@@ -98,6 +98,7 @@ def used_tools(steps: list[dict[str, Any]]) -> bool:
     return bool(steps)
 
 
+# Retained as the public predicate for a frames list; grade_case works from the count.
 def returned_frames(frames: list[dict[str, Any]]) -> bool:
     """True when the agent attached at least one example frame."""
     return bool(frames)
@@ -258,7 +259,9 @@ def _schema_constants(con: Any) -> set[float]:
     try:
         return _allowlist_numbers(catalog.schema_prompt(catalog.catalog_tables(con)))
     except Exception as exc:
-        logger.debug("schema constants unavailable (%s)", exc)
+        # WARNING, not DEBUG: a real catalog problem here silently shrinks the
+        # allowlist (e.g. a missing labels.parquet drops 5000.0) with no other signal.
+        logger.warning("schema constants unavailable (%s)", exc)
         return set()
 
 
@@ -527,16 +530,23 @@ def regrade(
     the STORED question (what the model actually saw), while the reference value and
     tolerance come from the current config by case id; a record whose id is missing
     from the config is skipped with a warning and counted in neither numerator nor
-    denominator.
+    denominator. Deliberately fail-loud (no per-case try/except the way ``run_eval``
+    has): a replay is a measurement, not a suite, so a malformed input record aborts
+    the run with a locatable error rather than silently dropping a result.
     """
     by_id = {case.id: case for case in cases}
     records: list[dict[str, Any]] = []
     skipped = 0
     with open(results_path, encoding="utf-8") as handle:
-        for line in handle:
+        for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
-            stored = json.loads(line)
+            try:
+                stored = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"regrade: malformed JSON on line {line_no} of {results_path}: {exc}"
+                ) from exc
             case = by_id.get(stored.get("id"))
             if case is None:
                 logger.warning(
@@ -558,9 +568,19 @@ def regrade(
     with open(out_jsonl, "w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record, default=str) + "\n")
-    model = records[0]["model"] if records else "unknown"
+    model = records[0].get("model", "unknown") if records else "unknown"
     report_path = results_path.with_name(f"{label}.md")
     report_path.write_text(render_report(records, model=model, provider=label))
+
+    # Provenance: the allowlist's size silently depends on catalog composition (which
+    # tables are registered, whether labels.parquet was present) — record what it was
+    # actually built from, so a checkout missing a table doesn't shrink the allowlist
+    # with no trace. Appended rather than folded into render_report, whose signature
+    # stays untouched (its inputs are our own records, not grader-provenance data).
+    constants = _schema_constants(con)
+    tables = catalog.catalog_tables(con)
+    with open(report_path, "a", encoding="utf-8") as handle:
+        handle.write(f"\n---\ngrader provenance: {len(constants)} schema constants from tables {tables}\n")
 
     passed = sum(1 for record in records if record["checks"].get("passed"))
     summary = {
@@ -568,6 +588,7 @@ def regrade(
         "n_passed": passed, "n_skipped": skipped,
         "pass_rate": round(passed / len(records), 3) if records else 0.0,
         "results": str(out_jsonl), "report": str(report_path),
+        "n_schema_constants": len(constants), "tables": tables,
     }
     logger.info("Regrade: %d/%d passed (%d skipped) -> %s",
                 passed, len(records), skipped, report_path)

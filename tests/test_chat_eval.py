@@ -650,6 +650,25 @@ def test_schema_constants_never_raises_on_a_bare_connection(tiny_con: Any) -> No
     assert isinstance(_schema_constants(tiny_con), set)
 
 
+def test_schema_constants_warns_and_empties_on_a_broken_connection(caplog: Any) -> None:
+    """Unlike ``tiny_con`` (whose ``SHOW TABLES`` succeeds), this exercises the actual
+    except path. Logged at WARNING, not DEBUG — a real catalog problem (e.g. a missing
+    ``labels.parquet`` silently shrinking the allowlist) must not vanish from default
+    log output the way a DEBUG-level message would.
+    """
+    import logging
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import _schema_constants
+
+    class _BrokenConnection:
+        def execute(self, sql: str) -> Any:
+            raise RuntimeError("catalog unavailable")
+
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        assert _schema_constants(_BrokenConnection()) == set()
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
 def test_max_instance_keyframes_stays_ungrounded() -> None:
     """Hard negative control: must never pass, whatever the allowlist grows.
 
@@ -749,6 +768,49 @@ def test_max_instance_keyframes_collision_ceiling_is_bounded() -> None:
     assert rate < 0.30, f"collision rate {rate:.1%} exceeds the enforced ceiling"
 
 
+# The full production table set (catalog.TABLES plus "labels", which open_catalog only
+# creates when labels.parquet is present — a full real checkout has all eight).
+# catalog.schema_prompt is a PURE function of table names: no connection, no data/
+# checkout, no I/O is needed to build the real production allowlist from this literal.
+_PRODUCTION_TABLES = (
+    "samples", "annotations", "availability", "labels",
+    "ego_pose", "annotations_3d", "instances", "canbus",
+)
+
+
+def _production_schema_constants() -> set[float]:
+    """The schema constants a full real catalog actually contributes to the allowlist.
+
+    ``tiny_con`` only ever registers a "samples" view, so ``_schema_constants(tiny_con)``
+    extracts from a 1-table schema prompt (4 distinct values, 8 signed) — nothing like
+    the ~14-distinct-value (27 signed) set a real 8-table catalog contributes. A ceiling
+    test that only monkeypatches ``_observed_split`` and lets ``_schema_constants`` run
+    for real against ``tiny_con`` therefore measures a materially smaller allowlist than
+    production and can pass a regression that would fail for real (measured: a
+    schema-constants-feed-derivations regression scores 29% under the tiny schema —
+    under the enforced 30% ceiling — vs 52% under this production one).
+    """
+    from nuscenes_data_engine.data_engine.chat import catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import _allowlist_numbers
+
+    return _allowlist_numbers(catalog.schema_prompt(list(_PRODUCTION_TABLES)))
+
+
+def test_production_schema_constants_are_pinned() -> None:
+    """Pins the schema-constant set a full 8-table catalog actually contributes.
+
+    ``catalog.schema_prompt``'s prose IS the grounding grader's allowlist — editing it
+    (adding, removing, or rewording a number anywhere in a table's docstring) silently
+    changes what ``is_grounded`` admits. This test makes that a visible CI diff instead
+    of a silent instrument change, e.g. "(Phase 6b)" contributes 6.0, "50 Hz" contributes
+    50.0, and "raw 0-126" contributes both 0.0 and 126.0.
+    """
+    positive = {v for v in _production_schema_constants() if v >= 0}
+    assert positive == {
+        0.0, 0.5, 1.0, 1.1, 1.2, 2.0, 3.0, 4.0, 5.0, 6.0, 50.0, 126.0, 5000.0, 204894.0,
+    }
+
+
 def test_max_instance_keyframes_collision_ceiling_is_ci_enforced(
     tiny_con: Any, monkeypatch: Any
 ) -> None:
@@ -756,12 +818,18 @@ def test_max_instance_keyframes_collision_ceiling_is_ci_enforced(
     ``max_instance_keyframes`` observed sets (extracted once from
     ``data/chat/eval/results_anthropic.jsonl`` via the real catalog — see the sibling
     test for the live extraction), exercised through the PUBLIC ``is_grounded`` with
-    ``_observed_split`` monkeypatched so it needs no ``data/`` checkout and runs in CI.
+    ``_observed_split`` AND ``_schema_constants`` monkeypatched — the latter to the
+    real production set (``_production_schema_constants()`` above), not whatever
+    ``tiny_con``'s 1-table schema happens to extract, or the ceiling silently measures
+    against a much smaller allowlist than production actually has. So it needs no
+    ``data/`` checkout and runs in CI.
 
     Because this still goes through the real wiring (``_allowlist_numbers``,
     ``_derived_candidates``, ``is_grounded`` itself), a wiring regression — e.g. row
-    counts leaking back into derivations — shows up as a shift in the measured
-    admitted fraction, not just as a change to a mocked return value.
+    counts leaking back into derivations, or schema constants leaking into the
+    derivation pool — shows up as a shift in the measured admitted fraction, not just
+    as a change to a mocked return value. Measured at 24.5% (49/200) against the
+    production set; ceiling kept at the same 30% used above.
     """
     from nuscenes_data_engine.data_engine.chat import evaluate
 
@@ -770,9 +838,11 @@ def test_max_instance_keyframes_collision_ceiling_is_ci_enforced(
         658.0, 680.0, 720.0, 1344.0, 1894.0, 4051.0, 10614.0,
     }
     row_counts = {8.0, 10.0}
+    production_constants = _production_schema_constants()
     monkeypatch.setattr(
         evaluate, "_observed_split", lambda con, steps: (measurements, row_counts)
     )
+    monkeypatch.setattr(evaluate, "_schema_constants", lambda con: production_constants)
     dummy_steps = [{"tool": "run_sql", "input": {"sql": "SELECT 1"}, "output": "1 rows"}]
     admitted = sum(
         1
@@ -857,3 +927,68 @@ def test_regrade_uses_the_stored_question_not_the_configs(tmp_path: Path, tiny_c
                       reference_sql="SELECT count(*) FROM samples", tolerance=0)]
     summary = regrade(src, con=tiny_con, cases=cases)
     assert summary["n_passed"] == 1   # the echoed 5 is grounded via the STORED question
+
+
+def test_regrade_records_schema_constant_provenance(tmp_path: Path, tiny_con: Any) -> None:
+    """The allowlist's size silently depends on catalog composition (which tables, and
+    whether labels.parquet was present) — a checkout missing a table shrinks the
+    allowlist with no trace otherwise. Record what the allowlist actually was built
+    from, both in the returned summary and appended to the written report.
+    """
+    import json as _json
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, regrade
+
+    stored = [{"id": "a", "question": "How many samples?", "answer": "There are 2 samples.",
+               "model": "stub-model", "steps": [{"tool": "run_sql",
+                "input": {"sql": "SELECT count(*) FROM samples"}, "output": "1 rows"}],
+               "n_frames": 0, "checks": {}, "latency_s": 1.0}]
+    src = tmp_path / "results_stub.jsonl"
+    src.write_text(_json.dumps(stored[0]) + "\n")
+    cases = [EvalCase(id="a", question="How many samples?",
+                      reference_sql="SELECT count(*) FROM samples", tolerance=0)]
+    summary = regrade(src, con=tiny_con, cases=cases)
+
+    # tiny_con registers exactly one view ("samples"); its schema prompt extracts
+    # {1, 2, 5, 204894} signed both ways -> 8 constants (see _production_schema_constants
+    # above for why this is much smaller than a real catalog's allowlist).
+    assert summary["tables"] == ["samples"]
+    assert summary["n_schema_constants"] == 8
+
+    report_text = (tmp_path / "results_stub_v2.md").read_text()
+    assert "grader provenance: 8 schema constants from tables ['samples']" in report_text
+
+
+def test_regrade_defaults_model_to_unknown_when_a_record_omits_it(
+    tmp_path: Path, tiny_con: Any
+) -> None:
+    """regrade (unlike render_report, whose inputs are our own code) reads external
+    stored JSON defensively — a record missing "model" must not raise a KeyError.
+    """
+    import json as _json
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, regrade
+
+    stored = {"id": "a", "question": "q", "answer": "", "steps": [], "n_frames": 0,
+              "checks": {}, "latency_s": 1.0}  # no "model" key
+    src = tmp_path / "no_model.jsonl"
+    src.write_text(_json.dumps(stored) + "\n")
+    cases = [EvalCase(id="a", question="q", expect_frames=True)]
+    summary = regrade(src, con=tiny_con, cases=cases)
+    assert summary["model"] == "unknown"
+
+
+def test_regrade_raises_a_valueerror_naming_the_line_on_malformed_json(
+    tmp_path: Path, tiny_con: Any
+) -> None:
+    """regrade is deliberately fail-loud: a replay is a measurement, not a suite, so a
+    malformed record aborts with a locatable error rather than silently dropping (the
+    way run_eval's per-case try/except would) or raising an unlocatable JSONDecodeError.
+    """
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, regrade
+
+    src = tmp_path / "broken.jsonl"
+    src.write_text('{"id": "a", "question": "q"}\nnot json at all\n')
+    cases = [EvalCase(id="a", question="q", expect_frames=True)]
+    with pytest.raises(ValueError, match="line 2"):
+        regrade(src, con=tiny_con, cases=cases)
