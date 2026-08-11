@@ -16,7 +16,7 @@ import re
 import statistics
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -513,4 +513,62 @@ def run_eval(
         "results": str(results_path), "report": str(report_path),
     }
     logger.info("Eval: %d/%d passed -> %s", passed, len(records), report_path)
+    return summary
+
+
+def regrade(
+    results_path: Path, *, con: Any, cases: list[EvalCase]
+) -> dict[str, Any]:
+    """Re-grade a stored run's answers with the CURRENT graders — no LLM calls.
+
+    Instrument isolation: same answers, new grader, so any pass-rate delta is
+    attributable to the grader alone. Writes ``<stem>_v2.jsonl`` / ``<stem>_v2.md``
+    next to the input and never modifies it. Grounding's question-echo allowlist uses
+    the STORED question (what the model actually saw), while the reference value and
+    tolerance come from the current config by case id; a record whose id is missing
+    from the config is skipped with a warning and counted in neither numerator nor
+    denominator.
+    """
+    by_id = {case.id: case for case in cases}
+    records: list[dict[str, Any]] = []
+    skipped = 0
+    with open(results_path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            stored = json.loads(line)
+            case = by_id.get(stored.get("id"))
+            if case is None:
+                logger.warning(
+                    "regrade: case %r not in the current config — skipped", stored.get("id")
+                )
+                skipped += 1
+                continue
+            asked = replace(case, question=stored.get("question", case.question))
+            checks = grade_case(
+                con, asked,
+                answer=stored.get("answer", ""),
+                steps=stored.get("steps") or [],
+                n_frames=int(stored.get("n_frames") or 0),
+            )
+            records.append({**stored, "checks": checks})
+
+    label = f"{results_path.stem}_v2"
+    out_jsonl = results_path.with_name(f"{label}.jsonl")
+    with open(out_jsonl, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, default=str) + "\n")
+    model = records[0]["model"] if records else "unknown"
+    report_path = results_path.with_name(f"{label}.md")
+    report_path.write_text(render_report(records, model=model, provider=label))
+
+    passed = sum(1 for record in records if record["checks"].get("passed"))
+    summary = {
+        "provider": label, "model": model, "n_cases": len(records),
+        "n_passed": passed, "n_skipped": skipped,
+        "pass_rate": round(passed / len(records), 3) if records else 0.0,
+        "results": str(out_jsonl), "report": str(report_path),
+    }
+    logger.info("Regrade: %d/%d passed (%d skipped) -> %s",
+                passed, len(records), skipped, report_path)
     return summary

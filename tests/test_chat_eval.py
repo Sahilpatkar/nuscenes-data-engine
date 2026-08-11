@@ -805,3 +805,55 @@ def test_run_eval_records_a_failing_case_without_aborting(tmp_path: Path, tiny_c
         out_dir=tmp_path / "eval", provider="stub",
     )
     assert summary["n_cases"] == 2 and summary["n_passed"] == 0
+
+
+def test_regrade_replays_stored_records_without_llm(tmp_path: Path, tiny_con: Any) -> None:
+    import json as _json
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, regrade
+
+    stored = [
+        {"id": "a", "question": "How many samples?", "answer": "There are 2 samples.",
+         "model": "stub-model", "steps": [{"tool": "run_sql",
+          "input": {"sql": "SELECT count(*) FROM samples"}, "output": "1 rows"}],
+         "n_frames": 0, "checks": {"passed": False}, "latency_s": 1.0},
+        {"id": "ghost", "question": "?", "answer": "", "model": "stub-model",
+         "steps": [], "n_frames": 0, "checks": {"passed": False}, "latency_s": 1.0},
+    ]
+    src = tmp_path / "results_stub.jsonl"
+    src.write_text("\n".join(_json.dumps(r) for r in stored) + "\n")
+
+    cases = [EvalCase(id="a", question="How many samples?",
+                      reference_sql="SELECT count(*) FROM samples", tolerance=0)]
+    summary = regrade(src, con=tiny_con, cases=cases)
+
+    assert summary["n_cases"] == 1 and summary["n_passed"] == 1   # re-graded to a pass
+    assert summary["n_skipped"] == 1                              # unknown id skipped
+    out = tmp_path / "results_stub_v2.jsonl"
+    assert out.is_file()
+    regraded = _json.loads(out.read_text().splitlines()[0])
+    assert regraded["checks"]["passed"] is True
+    assert (tmp_path / "results_stub_v2.md").is_file()
+    # The input is untouched.
+    assert _json.loads(src.read_text().splitlines()[0])["checks"]["passed"] is False
+
+
+def test_regrade_uses_the_stored_question_not_the_configs(tmp_path: Path, tiny_con: Any) -> None:
+    """Echo-grounding must reflect what the model was actually asked at the time."""
+    import json as _json
+
+    from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, regrade
+
+    stored = [{"id": "a", "question": "How many within 5 metres?",
+               "answer": "2 samples within 5 metres.", "model": "m",
+               "steps": [{"tool": "run_sql",
+                          "input": {"sql": "SELECT count(*) FROM samples"},
+                          "output": "1 rows"}],
+               "n_frames": 0, "checks": {}, "latency_s": 1.0}]
+    src = tmp_path / "r.jsonl"
+    src.write_text(_json.dumps(stored[0]) + "\n")
+    # The current config has since reworded the question (no "5" in it).
+    cases = [EvalCase(id="a", question="How many samples are nearby?",
+                      reference_sql="SELECT count(*) FROM samples", tolerance=0)]
+    summary = regrade(src, con=tiny_con, cases=cases)
+    assert summary["n_passed"] == 1   # the echoed 5 is grounded via the STORED question
