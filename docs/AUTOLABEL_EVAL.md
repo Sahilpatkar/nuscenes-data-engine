@@ -216,17 +216,22 @@ Phase 6d's weak-supervision experiment (docs/ACTIVE_LEARNING.md, "Weak
 supervision") reuses this labeller unchanged — same Qwen2.5-VL-7B model, same
 prompt, same submit/collect path — pointed at a separate state dir via
 [configs/autolabel_weak.yaml](../configs/autolabel_weak.yaml), so the original
-5,000-frame run's sample/batches/results/labels are never touched. 1,272 frames
-(the `random` arm's mined frames not already covered by the original sample) were
-labelled at $0; parse rate 1,267/1,272 = 99.6% ok, 5 truncated — consistent with
-the original run's 99.7%.
+5,000-frame run's sample/batches/results/labels are never touched. It has now run
+twice against that state dir, once per weak-supervision base arm: 1,272 frames for
+`random` (99.6% ok, 5 truncated) and 1,172 frames for `graph_rate_night` (328
+already covered by the first run). Cumulatively, the weak-labels table holds
+**2,444 rows, 2,437 ok / 7 truncated (99.7% parse rate)** — consistent with the
+original 5,000-frame run's 99.7%.
 
 What this run's count quality implies for verification: the Findings above show
 presence/condition tagging is reliable (night F1 0.989, rain F1 0.865) while exact
 counts under crowding are not (MAE 6.67 at 10+ objects) — which is exactly why the
 weak-supervision verifier accepts frames on **±1 count tolerance per class**, not
 exact equality. It's also why pedestrian presence recall 0.58 (Findings #3 above)
-shows up downstream as a measured blind spot: 686 of 958 weak-supervision-accepted
-frames have *both* detector and VLM reporting zero pedestrians. See
-docs/ACTIVE_LEARNING.md, "Weak supervision", for the mechanism and its effect on
-night mAP.
+shows up downstream as a measured blind spot: 686 of 958 `random`-arm
+weak-supervision-accepted frames have *both* detector and VLM reporting zero
+pedestrians — and it's *worse*, not better, on the night-heavy `graph_rate_night`
+arm: 870 of 1,101 accepted frames (79.0%, vs the random round's 71.6%) share the
+same mutual-zero pedestrian gap. See docs/ACTIVE_LEARNING.md, "Weak supervision"
+and "A second arm: the night champion", for the mechanism and its effect on night
+mAP.

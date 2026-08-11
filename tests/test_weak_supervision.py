@@ -882,3 +882,89 @@ def test_apply_pseudo_labels_accepted_but_empty_frame_loses_its_gt() -> None:
     merged = _apply_pseudo_labels(gt, pseudo, {"empty"})
     assert "empty" not in set(merged["sample_data_token"])  # trains as a background
     assert list(merged[merged["sample_data_token"] == "other"]["category_group"]) == ["car"]
+
+
+def test_weak_arms_map_resolves_base_and_pseudo_flag() -> None:
+    from nuscenes_data_engine.active_learning.experiment import (
+        ARM_EXTRA_FILE,
+        ARMS,
+        WEAK_ARMS,
+    )
+
+    assert WEAK_ARMS["weak_random"] == ("random", True)
+    assert WEAK_ARMS["weak_random_gt"] == ("random", False)
+    assert WEAK_ARMS["weak_graph_rate_night"] == ("graph_rate_night", True)
+    assert WEAK_ARMS["weak_graph_rate_night_gt"] == ("graph_rate_night", False)
+
+    # Every weak arm is registered and resolves to its base arm's accepted set.
+    for arm, (base, _uses_pseudo) in WEAK_ARMS.items():
+        assert arm in ARMS
+        assert ARM_EXTRA_FILE[arm] == f"{base}_accepted.parquet"
+
+    # Exactly one pseudo arm and one GT twin per base.
+    for base in {b for b, _ in WEAK_ARMS.values()}:
+        flags = sorted(uses for b, uses in WEAK_ARMS.values() if b == base)
+        assert flags == [False, True], f"base {base} needs exactly one pseudo + one GT arm"
+
+
+def test_night_weak_arms_share_frames_and_resolve(tmp_path: Path) -> None:
+    from nuscenes_data_engine.active_learning.experiment import resolve_arm_frames
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["bl-1", "bl-2", "p-1", "p-2"],
+            "scene_name": ["bl", "bl", "pool", "pool"],
+            "channel": ["CAM_FRONT"] * 4,
+            "filename": ["a.jpg", "b.jpg", "c.jpg", "d.jpg"],
+            "is_night": [False] * 4,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame({"scene_name": ["bl", "pool"], "role": ["baseline", "pool"]}).to_parquet(
+        state / "split.parquet", index=False
+    )
+    pd.DataFrame({"sample_data_token": ["p-2"]}).to_parquet(
+        state / "graph_rate_night_accepted.parquet", index=False
+    )
+
+    cfg = {"split": {"channel": "CAM_FRONT"}}
+    weak = resolve_arm_frames(state, processed, cfg, "weak_graph_rate_night")
+    weak_gt = resolve_arm_frames(state, processed, cfg, "weak_graph_rate_night_gt")
+    assert weak == weak_gt == {"bl-1", "bl-2", "p-2"}
+
+
+def test_run_arm_missing_pseudo_table_names_the_right_base(tmp_path: Path) -> None:
+    """The error must name the arm's own base, not a hardcoded 'random'."""
+    import yaml
+
+    from nuscenes_data_engine.active_learning.experiment import run_arm
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["bl-1", "p-1"],
+            "scene_name": ["bl", "pool"],
+            "channel": ["CAM_FRONT"] * 2,
+            "filename": ["a.jpg", "b.jpg"],
+            "is_night": [False] * 2,
+        }
+    ).to_parquet(processed / "samples.parquet", index=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    pd.DataFrame({"scene_name": ["bl", "pool"], "role": ["baseline", "pool"]}).to_parquet(
+        state / "split.parquet", index=False
+    )
+    pd.DataFrame({"sample_data_token": ["p-1"]}).to_parquet(
+        state / "graph_rate_night_accepted.parquet", index=False
+    )
+    config = tmp_path / "al.yaml"
+    config.write_text(
+        yaml.safe_dump({"state": {"dir": str(state)}, "split": {"channel": "CAM_FRONT"}})
+    )
+
+    with pytest.raises(ValueError, match=r"graph_rate_night_pseudo_labels\.parquet"):
+        run_arm(config, arm="weak_graph_rate_night", processed_dir=processed)

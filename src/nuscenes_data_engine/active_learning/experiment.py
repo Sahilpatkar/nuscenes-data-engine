@@ -1,14 +1,16 @@
 """Experiment arms: build the arm's dataset, train, evaluate, record results.
 
 Arms: ``baseline`` (25% train scenes) plus baseline-and-extra-frames arms —
-``mined``/``random``/``graph`` from round 1 and ``rate``/``strat``/``rate_strat``
-from round 2 (see docs/superpowers/specs/2026-08-02-al-round-2-design.md). Plus the
-weak-supervision pair ``weak_random``/``weak_random_gt``, which trains on the SAME
-frame set (the ``random`` arm's accepted set) but with pseudo labels vs. ground truth
-respectively — isolating label quality from frame count (see
-docs/superpowers/specs/2026-08-06-vlm-weak-supervision-design.md). Each arm gets its
-own YOLO dataset dir and run-name suffix; the val split is identical across arms by
-construction and asserted at result-merge time.
+``mined``/``random``/``graph`` from round 1, ``rate``/``strat``/``rate_strat`` from
+round 2 (docs/superpowers/specs/2026-08-02-al-round-2-design.md), and
+``graph_rate``/``graph_rate_night`` from round 3
+(docs/superpowers/specs/2026-08-04-al-round-3-design.md). Plus weak-supervision pairs
+(see ``WEAK_ARMS``): each base arm gets a pseudo-labelled arm and a GT twin trained on
+the SAME accepted frame set, isolating label quality from frame count
+(docs/superpowers/specs/2026-08-06-vlm-weak-supervision-design.md and
+docs/superpowers/specs/2026-08-10-weak-supervise-night-champion-design.md). Each arm
+gets its own YOLO dataset dir and run-name suffix; the val split is identical across
+arms by construction and asserted at result-merge time.
 """
 
 from __future__ import annotations
@@ -30,11 +32,22 @@ ARMS = (
     "rate", "strat", "rate_strat",
     "graph_rate", "graph_rate_night",
     "weak_random", "weak_random_gt",
+    "weak_graph_rate_night", "weak_graph_rate_night_gt",
 )
+
+# Weak-supervision arms -> (base arm whose accepted set they train on, uses pseudo
+# labels). Each base gets exactly two arms: the pseudo one and its GT twin, which
+# train on the SAME frames so a delta isolates label quality from frame count.
+WEAK_ARMS: dict[str, tuple[str, bool]] = {
+    "weak_random": ("random", True),
+    "weak_random_gt": ("random", False),
+    "weak_graph_rate_night": ("graph_rate_night", True),
+    "weak_graph_rate_night_gt": ("graph_rate_night", False),
+}
 
 # Per-arm extra-frames parquet, relative to the AL state dir. Module-level (not just a
 # local in resolve_arm_frames) so report.arm_composition can resolve the same file —
-# the weak arms share random_accepted.parquet, which isn't f"{arm}.parquet".
+# the weak arms share their base arm's <base>_accepted.parquet, not f"{arm}.parquet".
 ARM_EXTRA_FILE: dict[str, str] = {
     "mined": "mined.parquet",
     "random": "random.parquet",
@@ -44,8 +57,7 @@ ARM_EXTRA_FILE: dict[str, str] = {
     "rate_strat": "rate_strat.parquet",
     "graph_rate": "graph_rate.parquet",
     "graph_rate_night": "graph_rate_night.parquet",
-    "weak_random": "random_accepted.parquet",
-    "weak_random_gt": "random_accepted.parquet",
+    **{arm: f"{base}_accepted.parquet" for arm, (base, _) in WEAK_ARMS.items()},
 }
 
 
@@ -124,18 +136,19 @@ def run_arm(
 
     pseudo_labels = None
     pseudo_tokens = None
-    if arm == "weak_random":
-        pseudo_path = state_dir / "random_pseudo_labels.parquet"
+    base, uses_pseudo = WEAK_ARMS.get(arm, ("", False))
+    if uses_pseudo:
+        pseudo_path = state_dir / f"{base}_pseudo_labels.parquet"
         if not pseudo_path.is_file():
             raise ValueError(
-                f"Arm {arm!r} needs {pseudo_path} — run `al pseudo-label --arm random` first"
+                f"Arm {arm!r} needs {pseudo_path} — run `al pseudo-label --arm {base}` first"
             )
         pseudo_labels = pd.read_parquet(pseudo_path)
         # Every accepted frame is pseudo-labelled, including those the detector found
         # nothing in — those have no rows in the table, so the token set comes from
         # accepted.parquet or their ground truth would survive into a "no GT" arm.
         pseudo_tokens = set(
-            pd.read_parquet(state_dir / "random_accepted.parquet")["sample_data_token"]
+            pd.read_parquet(state_dir / f"{base}_accepted.parquet")["sample_data_token"]
         )
 
     data_yaml, stats = build_yolo_dataset(

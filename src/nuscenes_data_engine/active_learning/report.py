@@ -19,13 +19,15 @@ logger = logging.getLogger("nuscenes_data_engine")
 def _weak_arm_retention(state_dir: Path, arm: str) -> float | None:
     """Verification retention for a weak-supervision arm, from its pseudo-label summary.
 
-    Both ``weak_random``/``weak_random_gt`` are pseudo-labelled by a single
-    ``al pseudo-label --arm <base>`` run (e.g. ``random``), which writes
-    ``<base>_pseudo_summary.json`` — not ``<arm>_pseudo_summary.json``. ``<base>`` is
-    recovered from ARM_EXTRA_FILE's ``"<base>_accepted.parquet"`` naming (the same map
-    ``resolve_arm_frames``/composition use) rather than assumed, so this only fires for
-    arms actually wired that way. Returns ``None`` (not 0.0) when no summary exists —
-    the report renders that as a blank cell, not a fabricated zero.
+    Each weak arm and its GT twin (e.g. ``weak_random``/``weak_random_gt``,
+    ``weak_graph_rate_night``/``weak_graph_rate_night_gt``) are pseudo-labelled by a
+    single ``al pseudo-label --arm <base>`` run over their shared base arm (e.g.
+    ``random``, ``graph_rate_night``), which writes ``<base>_pseudo_summary.json`` —
+    not ``<arm>_pseudo_summary.json``. ``<base>`` is recovered from ARM_EXTRA_FILE's
+    ``"<base>_accepted.parquet"`` naming (the same map ``resolve_arm_frames``/
+    composition use) rather than assumed, so this only fires for arms actually wired
+    that way. Returns ``None`` (not 0.0) when no summary exists — the report renders
+    that as a blank cell, not a fabricated zero.
     """
     extra_file = ARM_EXTRA_FILE.get(arm, "")
     suffix = "_accepted.parquet"
@@ -55,9 +57,11 @@ def arm_composition(state_dir: Path, processed_dir: Path) -> dict[str, dict[str,
         if arm == "baseline":
             continue
         entry: dict[str, Any] = {}
-        # Most arms' extra-frames file is f"{arm}.parquet"; the weak arms share
-        # random_accepted.parquet (see ARM_EXTRA_FILE), so resolve through the same map
-        # resolve_arm_frames uses rather than assuming the naming convention.
+        # Most arms' extra-frames file is f"{arm}.parquet"; each weak arm instead shares
+        # its base arm's <base>_accepted.parquet (see ARM_EXTRA_FILE / WEAK_ARMS — there
+        # are now multiple base arms, e.g. random and graph_rate_night), so resolve
+        # through the same map resolve_arm_frames uses rather than assuming the naming
+        # convention.
         path = state_dir / ARM_EXTRA_FILE.get(arm, f"{arm}.parquet")
         if path.is_file():
             tokens = pd.read_parquet(path, columns=["sample_data_token"])["sample_data_token"]
