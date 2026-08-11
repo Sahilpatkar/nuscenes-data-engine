@@ -516,6 +516,8 @@ def test_derived_matches_admits_the_four_taxonomy_rules() -> None:
 
     # difference: "4,986 of 5,000, so 14 failed"
     assert _derived_matches(14.0, {5000.0, 4986.0}) is True
+    # difference, the other direction: "4986 - 4969 = 17"
+    assert _derived_matches(17.0, {4986.0, 4969.0}) is True
     # sum
     assert _derived_matches(9986.0, {5000.0, 4986.0}) is True
     # percentage at cited precision: 99.66 = 4969/4986*100
@@ -553,6 +555,119 @@ def test_is_grounded_accepts_a_derived_difference(tiny_con: Any) -> None:
     assert is_grounded("4986 parsed, so 14 failed.", tiny_con, steps) is True
     # An underived number is still unsupported.
     assert is_grounded("4986 parsed, so 15 failed and 77 crashed.", tiny_con, steps) is False
+
+
+def test_row_count_excluded_from_derivation_pairs(tiny_con: Any) -> None:
+    """A LIMIT-8 row count must not pair with a real value to manufacture a percentage.
+
+    Mirrors the real max_instance_keyframes collision measured in review: pre-fix,
+    row_count=8 paired with a genuine 40 to fabricate "20" (=8/40*100). Row counts are
+    a property of the SQL text (the LIMIT clause), not a measurement of the world, so
+    they must never feed a derivation — only direct/rounded citation of the count itself.
+    """
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql",
+              "input": {"sql": "SELECT n FROM (VALUES (34),(35),(36),(37),(38),(39),(40),(41)) "
+                                "t(n) LIMIT 8"},
+              "output": "8 rows"}]
+    assert is_grounded("About 20% stood out.", tiny_con, steps) is False
+    # The row count itself is still directly citable — only feeding derivations is cut.
+    assert is_grounded("The query returned 8 rows.", tiny_con, steps) is True
+
+
+def test_percentage_guard_requires_a_plausible_total() -> None:
+    """A percentage is a share of a plausible total, not any quotient of two numbers."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import _derived_matches
+
+    # 1/2*100 = 50: without the guard this "explains" almost any round answer.
+    assert _derived_matches(50.0, {1.0, 2.0}) is False
+    # 2/1*100 = 200: same problem in the other direction.
+    assert _derived_matches(200.0, {1.0, 2.0}) is False
+    # The guard doesn't touch a real percentage over a plausible (>=10) total.
+    assert _derived_matches(99.66, {4969.0, 4986.0}) is True
+
+
+def test_column_sum_skipped_when_the_result_is_truncated(tiny_con: Any) -> None:
+    """A 50-row slice of a bigger result must not manufacture a partial-total citation."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import observed_numbers
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT i FROM range(60) t(i)"},
+              "output": "50 rows (truncated)"}]
+    observed = observed_numbers(tiny_con, steps)
+    # Individual cells (0..49, the retained slice) are still observed...
+    assert 0.0 in observed and 49.0 in observed
+    # ...but their sum (a semi-arbitrary partial total: 0+1+...+49 = 1225) must not be.
+    assert 1225.0 not in observed
+
+
+def test_integer_citations_match_at_one_decimal_not_zero() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import _matches_at_cited_precision
+
+    assert _matches_at_cited_precision(14.0, 14.04) is True    # within the 0.1 window
+    assert _matches_at_cited_precision(14.0, 13.6) is False    # 0-decimals would admit this
+
+
+def test_negative_controls_stay_ungrounded_on_real_records() -> None:
+    """The two pre-registered invention cases must never pass, whatever the allowlist grows."""
+    import json
+    from pathlib import Path
+
+    path = Path("data/chat/eval/results_anthropic.jsonl")
+    if not path.is_file():
+        pytest.skip("no stored anthropic run in this checkout")
+    if not Path("data/processed").is_dir():
+        pytest.skip("no data/processed in this checkout")
+    pytest.importorskip("duckdb")
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    con = open_catalog(Path("data/processed"), labels_path=Path("data/autolabel/labels.parquet"))
+    records = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
+    for case_id in ("max_instance_keyframes", "foggy_misty_glare_frames"):
+        rec = records[case_id]
+        assert is_grounded(rec["answer"], con, rec["steps"], rec["question"]) is False, case_id
+
+
+def test_max_instance_keyframes_collision_ceiling_is_bounded() -> None:
+    """CI-enforced ceiling on the pre-registered collision probe (integers 1..200), not
+    just an eyeballed assertion. Pre-fix this record admitted 68/200 (34%); post-fix
+    (row-count exclusion, percentage-share guard, truncation skip) it measures 48/200
+    (24%) — the residual is genuine sum/difference collisions among the record's own
+    close-together keyframe counts (34..41), the documented one-step-derivation
+    trade-off, not a bug. Ceiling is set with modest headroom (+6pp) over that measured
+    rate so the guards are enforced without the test being a tautology.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path("data/chat/eval/results_anthropic.jsonl")
+    if not path.is_file():
+        pytest.skip("no stored anthropic run in this checkout")
+    if not Path("data/processed").is_dir():
+        pytest.skip("no data/processed in this checkout")
+    pytest.importorskip("duckdb")
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import (
+        _allowlist_numbers,
+        _derived_candidates,
+        _matches_at_cited_precision,
+        _observed_split,
+    )
+
+    con = open_catalog(Path("data/processed"), labels_path=Path("data/autolabel/labels.parquet"))
+    records = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
+    rec = records["max_instance_keyframes"]
+    measurements, row_counts = _observed_split(con, rec["steps"])
+    allowed = measurements | row_counts | _allowlist_numbers(rec["question"])
+    derived = _derived_candidates(measurements)
+    admitted = sum(
+        1
+        for n in range(1, 201)
+        if any(_matches_at_cited_precision(float(n), seen) for seen in allowed | derived)
+    )
+    rate = admitted / 200
+    assert rate < 0.30, f"collision rate {rate:.1%} exceeds the enforced ceiling"
 
 
 def test_run_eval_records_a_failing_case_without_aborting(tmp_path: Path, tiny_con: Any) -> None:

@@ -103,8 +103,12 @@ def returned_frames(frames: list[dict[str, Any]]) -> bool:
     return bool(frames)
 
 
-def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
-    """Every numeric value the agent's own SQL actually returns, plus row counts.
+def _observed_split(con: Any, steps: list[dict[str, Any]]) -> tuple[set[float], set[float]]:
+    """(measurements, row_counts): cells and column sums vs result-shape counts.
+
+    Row counts stay directly citable ("the query returned 8 rows") but must not feed
+    derivations — a LIMIT-8 query's 8 is a property of the SQL text, not of the world,
+    and reviews measured it manufacturing collisions (8/40x100 admitted a memorised 20).
 
     ``steps`` records tool output as a summary string, not rows, so the SQL is
     re-executed through the same guarded catalog to recover the values. Steps that are
@@ -113,9 +117,12 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
     DOUBLE; ``catalog._clip`` stringifies that (it isn't ``bool``/``int``/``float``), so
     a numeric-looking string cell is parsed too rather than silently dropped. Each
     numeric result column also contributes its sum — an answer totalling the
-    per-channel counts it retrieved is reporting tool-derived data.
+    per-channel counts it retrieved is reporting tool-derived data — unless the result
+    was truncated (catalog.MAX_ROWS): a 50-row slice of a bigger result sums to a
+    semi-arbitrary partial total, not a real measurement.
     """
-    values: set[float] = set()
+    measurements: set[float] = set()
+    row_counts: set[float] = set()
     for step in steps:
         if step.get("tool") != "run_sql":
             continue
@@ -126,7 +133,7 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
         if "error" in result:
             logger.debug("grounding: step SQL failed (%s)", result["error"])
             continue
-        values.add(float(result["row_count"]))
+        row_counts.add(float(result["row_count"]))
         columns: dict[int, list[float]] = {}
         for row in result["rows"]:
             for index, cell in enumerate(row):
@@ -139,10 +146,20 @@ def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
                     with contextlib.suppress(ValueError):
                         columns.setdefault(index, []).append(float(cell))
         for cells in columns.values():
-            values.update(cells)
-            if len(cells) >= 2:
-                values.add(sum(cells))  # answers often total a result column
-    return values
+            measurements.update(cells)
+            if len(cells) >= 2 and not result["truncated"]:
+                measurements.add(sum(cells))  # answers often total a result column
+    return measurements, row_counts
+
+
+def observed_numbers(con: Any, steps: list[dict[str, Any]]) -> set[float]:
+    """Every numeric value the agent's own SQL actually returns, plus row counts.
+
+    A thin union over ``_observed_split`` — see its docstring for what counts as a
+    measurement vs a row count and why the split matters for derivations.
+    """
+    measurements, row_counts = _observed_split(con, steps)
+    return measurements | row_counts
 
 
 def _matches_at_cited_precision(cited: float, observed: float) -> bool:
@@ -152,6 +169,10 @@ def _matches_at_cited_precision(cited: float, observed: float) -> bool:
     it is reporting the value it saw at a sensible precision, not inventing one. An
     exact comparison here would contradict the numeric check, which tolerates the same
     rounding, and would penalise whichever model rounds more sensibly.
+
+    A citation written as an integer is matched at one decimal (float formatting yields
+    "14.0"), i.e. a 0.1 window — deliberately tighter than the naive 0-decimal reading;
+    widening it doubles the measured false-admission rate.
     """
     if abs(cited - observed) <= 1e-6:
         return True
@@ -169,24 +190,37 @@ def _matches_at_cited_precision(cited: float, observed: float) -> bool:
 _MS_TO_KMH = 3.6
 
 
-def _derived_matches(cited: float, observed: set[float]) -> bool:
-    """True when ``cited`` is one admitted arithmetic step from observed values."""
+def _derived_candidates(observed: set[float]) -> set[float]:
+    """The full one-step admitted-derivation set: unit conversions + guarded pairs.
+
+    A percentage candidate is admitted only as a share of a plausible (>=10) total —
+    without that guard, any two small observed numbers manufacture a percentage for
+    almost any cited value (1/2*100 = 50, 2/1*100 = 200), which review measured
+    defeating a negative control. Materialized once per ``is_grounded`` call instead of
+    recomputed per cited number.
+    """
     obs = sorted(observed)
+    candidates: set[float] = set()
     for a in obs:
-        if _matches_at_cited_precision(cited, a * _MS_TO_KMH):
-            return True
-        if _matches_at_cited_precision(cited, a / _MS_TO_KMH):
-            return True
+        candidates.add(a * _MS_TO_KMH)
+        candidates.add(a / _MS_TO_KMH)
     for i, a in enumerate(obs):
         for b in obs[i + 1 :]:
-            candidates = [a + b, a - b, b - a]
-            if b != 0:
-                candidates.append(a / b * 100.0)
-            if a != 0:
-                candidates.append(b / a * 100.0)
-            if any(_matches_at_cited_precision(cited, value) for value in candidates):
-                return True
-    return False
+            candidates.add(a + b)
+            candidates.add(a - b)
+            candidates.add(b - a)
+            if b >= 10 and a <= b:
+                candidates.add(a / b * 100.0)  # a as a share of total b
+            if a >= 10 and b <= a:
+                candidates.add(b / a * 100.0)
+    return candidates
+
+
+def _derived_matches(cited: float, observed: set[float]) -> bool:
+    """True when ``cited`` is one admitted arithmetic step from observed values."""
+    return any(
+        _matches_at_cited_precision(cited, value) for value in _derived_candidates(observed)
+    )
 
 
 # A permissive extractor used ONLY for the question side of grounding (the allowlist),
@@ -228,11 +262,11 @@ def is_grounded(
     cited = extract_numbers(answer)
     if not cited:
         return True
-    observed = observed_numbers(con, steps)
-    allowed = observed | _allowlist_numbers(question)
+    measurements, row_counts = _observed_split(con, steps)
+    allowed = measurements | row_counts | _allowlist_numbers(question)
+    derived = _derived_candidates(measurements)  # derivations draw on measurements ONLY
     return all(
-        any(_matches_at_cited_precision(value, seen) for seen in allowed)
-        or _derived_matches(value, observed)   # derivations draw on observed ONLY
+        any(_matches_at_cited_precision(value, seen) for seen in allowed | derived)
         for value in cited
     )
 
