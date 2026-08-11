@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import Any
 
 logger = logging.getLogger("nuscenes_data_engine")
 
-# 1,234 | 12.5 | -0.0262 | 45 (a trailing % is stripped by the caller's float()).
-_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# A standalone number: 1,234 | 12.5 | -0.0262 | 45%. The boundaries matter — without
+# them the digit runs inside identifiers become phantom values (the hex token
+# "8afcbca8a9c9462eb..." yielded 9462.0, and "Scene-0992" yielded -992.0), and since
+# numeric_matches passes on ANY match, a phantom can score a wrong answer as correct.
+# A leading "-" counts as a sign only when it does not follow a word character, so
+# "Scene-0992" and "2026-08-11" no longer produce negatives.
+_NUMBER = re.compile(r"(?<![A-Za-z0-9_.-])-?\d[\d,]*(?:\.\d+)?(?![A-Za-z0-9_])")
 
 
 def extract_numbers(text: str) -> list[float]:
@@ -39,7 +45,8 @@ def numeric_matches(
     """True when any value is within tolerance of ``expected``.
 
     Exactly one of ``tolerance`` (absolute) / ``tolerance_pct`` (relative) may be given;
-    both bounds are inclusive. An answer with no numbers never matches.
+    both bounds are inclusive. An answer with no numbers never matches. With neither
+    given, the match is exact (tolerance 0).
     """
     if tolerance is not None and tolerance_pct is not None:
         raise ValueError("Pass exactly one of tolerance / tolerance_pct, not both")
@@ -57,6 +64,14 @@ def numeric_matches(
 _LATIN_SHARE_MIN = 0.9
 
 
+def _is_latin(char: str) -> bool:
+    """True for Latin-script letters, including accented ones (é, ñ, ø)."""
+    try:
+        return unicodedata.name(char).startswith("LATIN")
+    except ValueError:  # unnamed character
+        return False
+
+
 def is_english(text: str) -> bool:
     """True when the answer's alphabetic characters are overwhelmingly Latin script.
 
@@ -66,7 +81,7 @@ def is_english(text: str) -> bool:
     letters = [char for char in text if char.isalpha()]
     if not letters:
         return False
-    latin = sum(1 for char in letters if char.isascii())
+    latin = sum(1 for char in letters if _is_latin(char))
     return latin / len(letters) >= _LATIN_SHARE_MIN
 
 
