@@ -281,9 +281,14 @@ a fake win, with a quantified mechanism:
 matching the analytics docs, a 98.5% VLM-vs-GT night agreement (independently
 consistent with 6b's F1 0.989), semantic retrieval of construction zones and
 foggy frames with attached thumbnails, and self-repair through SQL binder errors.
-Documented limitations of the local model — occasional language drift, one subtly
+Documented limitations of the local model — language drift, one subtly
 misinterpreted statistic, hallucinated frame tokens (safely dropped) — are exactly
-why the Claude flip exists. Full transcripts: docs/DATASET_CHAT.md.
+why the Claude flip exists, and a 20-case answer-correctness eval measures the gap
+directly: **local 4/20 (20%) vs Claude 11/20 (55%)**, with 40% of local answers
+drifting out of English (vs 0% for Claude). The `grounded` check runs the other
+way (18/20 local vs 11/20 Claude) — inspection shows this rewards the local
+model's vagueness rather than penalising Claude's accuracy, a recorded harness
+limitation, not a re-tuned grader. Full transcripts and the eval: docs/DATASET_CHAT.md.
 
 ## 6. What we achieved
 
@@ -391,8 +396,16 @@ Ordered roughly by value-per-effort:
    noise band — that the damage is the *labels*, not the frames the verifier
    dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
 5. **Chat agent upgrades** — streaming responses, chart generation from SQL
-   results, a saved-questions gallery in Streamlit, and evaluation harness for
-   answer correctness (the logged JSONL is already the dataset for it).
+   results, and a saved-questions gallery in Streamlit remain open. **Evaluation
+   harness for answer correctness — DONE.** A 20-case set (reference SQL, no LLM
+   judge) scored both providers on the identical suite: **local `qwen2.5:14b`
+   4/20 (20%) vs `claude-opus-4-8` 11/20 (55%)**, driven by 40% of local answers
+   drifting into a non-Latin script (vs 0% for Claude). The `grounded` check
+   inverts the ranking (18/20 local vs 11/20 Claude) — a harness limitation, not
+   a capability gap: Claude's failures are legitimate derived arithmetic and
+   schema-quoted constants that the grader doesn't yet credit, not invented
+   numbers. Full results, per-check breakdown, and the pre-registered grader fix:
+   docs/DATASET_CHAT.md, "Answer-correctness evaluation".
 6. **Richer monitoring** — score production captures with the drift job on a
    schedule, alert on night-share/brightness shifts, and correlate drift windows
    with slice metrics.

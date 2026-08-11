@@ -141,9 +141,13 @@ that are crowded). Kept here deliberately — see limitations.
 
 ### Observed local-model limitations (and what the harness does about them)
 
-- **Language drift**: qwen2.5:14b occasionally answers in Thai or Chinese despite
-  an English question; pinning the reply language at the top of the system prompt
-  reduced but did not eliminate it.
+- **Language drift, measured**: 8 of 20 answers in the correctness eval (40%) came
+  back in a non-Latin script (mostly Thai/Chinese) — including simple questions
+  like "how many night scenes in holland village." This is not the occasional
+  glitch the live transcripts above might suggest: pinning the reply language at
+  the top of the system prompt reduces it but is nowhere near sufficient; see the
+  eval below. 3 of 20 answers also called no tool at all, answering from memory
+  instead of querying — Claude never did either (20/20 English, 20/20 tool-using).
 - **Loose terminology**: it sometimes labels image counts as "scenes" — the SQL in
   the steps expander is the ground truth for what was actually counted.
 - **Double-escaped SQL**: the model sometimes emits literal `\n` inside tool-call
@@ -156,4 +160,109 @@ that are crowded). Kept here deliberately — see limitations.
   precisely so this is checkable.
 - Error self-repair works well: binder/catalog errors are fed back and usually
   fixed in one retry. For higher reliability, `CHAT_PROVIDER=anthropic` swaps in
-  Claude with no other changes.
+  Claude with no other changes — see the measured pass-rate gap below.
+
+## Answer-correctness evaluation
+
+Live transcripts above are illustrative; this is the measured version. A case set
+scores each answer against a **reference SQL**, deterministically — there is no LLM
+judge. Ground truth for each case is its `reference_sql`, executed through the SAME
+guarded catalog (`chat/catalog.py`) the agent itself queries, so a case can never ask
+for something the agent is structurally unable to answer. A `reference_sql` that
+errors or returns the wrong shape fails the whole suite loudly at preflight
+(`evaluate.validate_cases`) rather than silently scoring as an agent failure.
+
+Five checks, each a pure function over the agent's own output (`chat/evaluate.py`):
+
+- **`numeric`** — any number cited in the answer is within tolerance of the
+  reference value.
+- **`english`** — the answer's alphabetic characters are ≥90% Latin script; an
+  explicit heuristic, not a language model, sized to catch wholesale script drift.
+- **`tool_use`** — the agent called at least one tool rather than answering from
+  memory.
+- **`grounded`** — every number cited in the answer traces to the agent's own tool
+  output, accepting values rounded to the precision the answer states and constants
+  echoed back from the question. `grounded` re-executes the agent's own SQL from
+  its logged steps, because `ChatResult.steps` stores tool-output *summary strings*,
+  not the underlying rows — so this check also independently verifies the query
+  really produces what the prose claims, not just that the prose looks plausible.
+- **`frames`** — retrieval-only cases returned at least one example frame.
+
+**The case set**: `configs/chat_eval.yaml`, 20 cases (17 numeric + 3 retrieval),
+seeded from the real questions in `data/chat/log.jsonl`, covering `samples`,
+`annotations`, `labels`, `canbus`, `ego_pose`, `annotations_3d`/`instances`, and
+`availability`. Two references cross-check against numbers documented independently
+elsewhere: "pedestrians within 5 m of ego at night" (183) and "hard braking with a
+pedestrian within 10 m" (30) both reproduce docs/GRAPH.md's SQL/Cypher parity
+results.
+
+One infrastructure fix came out of building this harness: the SQL guard's
+file-path denylist had a false positive on legitimate SQL that divides between two
+string literals — exactly the shape of a filtered percentage
+(`count(*) FILTER (WHERE a='x') / count(*) ... WHERE b='y'`) — because the old
+single regex could pair the closing quote of one literal with the opening quote of
+an unrelated later one. That was silently pushing the agent toward computing
+percentages in prose instead of retrieving them directly; fixed by matching each
+`'...'` literal on its own rather than scanning the whole statement (`chat/catalog.py`).
+
+### Results (2026-08-11, 20 cases, identical suite both providers)
+
+| check | local (`qwen2.5:14b`) | anthropic (`claude-opus-4-8`) |
+|---|---|---|
+| **overall passed** | **4/20 (20%)** | **11/20 (55%)** |
+| numeric | 7/17 | 16/17 |
+| english | 12/20 | 20/20 |
+| tool_use | 17/20 | 20/20 |
+| grounded | 18/20 | 11/20 |
+| frames | 1/3 | 3/3 |
+| median latency | 11.4s | 8.0s |
+
+2 cases pass under both providers; 9 pass only under Claude; 2 pass only under
+local. 7 cases fail under both: `avg_visibility_pedestrian_night`,
+`canbus_hard_braking_count`, `foggy_misty_glare_frames`,
+`hard_braking_near_pedestrian_10m`, `labels_night_agreement_pct`,
+`max_instance_keyframes`, `missing_cam_files`.
+
+**Finding 1 — language drift is far worse than the live transcripts suggest.** 8
+of 20 local answers (40%) came back in a non-Latin script, including simple
+questions like "how many night scenes in holland village." Claude: 20/20 English.
+3 local answers also called no tool at all, answering from memory; Claude always
+queried (20/20 `tool_use`).
+
+**Finding 2 — the grounding check penalises the stronger model, and that is a
+harness limitation, not a model defect.** Claude is far more accurate (`numeric`
+16/17 vs 7/17) yet scores *worse* on `grounded` (11/20 vs 18/20). Inspecting its 9
+grounding failures shows why — the cited numbers are legitimate but not literally
+present in tool output:
+
+- derived arithmetic: "**4,986** of the VLM-labeled frames parsed successfully
+  (out of 5,000 total, so **14** failed to parse)" — 14 = 5000 − 4986, computed,
+  never retrieved;
+- computed percentages: "**Agreement rate: 99.66%** (4,969 of 4,986 usable
+  frames)" — 99.66 derived from two retrieved counts;
+- constants quoted from the schema prompt: "94 keyframes show hard braking (peak
+  deceleration ≤ **−3.0** m/s² within the **±0.5** s window)" — those thresholds
+  come from the documented schema, not from a query.
+
+In each of those three examples `numeric` passed (the headline figure was right)
+while `grounded` failed. So the composite "passed" column **understates the
+stronger model**: a capable agent that shows its arithmetic and explains its
+thresholds is penalised for doing so.
+
+To be explicit about what this project did and did not do: **the grader was not
+loosened after seeing these results.** Changing a measurement instrument to
+flatter an outcome is exactly what this project avoids elsewhere (see the AL
+random-control gate). This is recorded as a known limitation, with a principled
+fix for a future round, pre-registered here before any re-run: admit numbers
+derivable from observed values by simple arithmetic, and seed the observed set
+with constants from the schema prompt, the same way question-echoed constants are
+already admitted. `grounded` remains a real signal for the local model, though —
+where it caught genuine invention, not just unretrieved-but-correct arithmetic.
+
+### Running it
+
+```bash
+uv run nuscenes-data-engine chat-eval --provider local       # Ollama, $0
+uv run nuscenes-data-engine chat-eval --provider anthropic   # needs ANTHROPIC_API_KEY
+# artifacts: data/chat/eval/{results,report}_<provider>.{jsonl,md}
+```
