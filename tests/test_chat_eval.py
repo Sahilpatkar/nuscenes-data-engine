@@ -47,3 +47,39 @@ def test_numeric_matches_empty_answer_fails() -> None:
 def test_numeric_matches_rejects_both_tolerance_kinds() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         numeric_matches([1.0], expected=1.0, tolerance=1.0, tolerance_pct=5.0)
+
+
+def test_is_english_accepts_normal_answer_and_rejects_thai() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_english
+
+    assert is_english("There are 12 night scenes in singapore-onenorth.") is True
+    # The exact drift observed in data/chat/log.jsonl's first record.
+    assert is_english("ในเซ็นซิเนกา (Singapore), มีสถานการณ์แสงสว่างน้อยที่บันทึกไว้") is False
+
+
+def test_is_english_ignores_digits_and_punctuation() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_english
+
+    # Mostly numbers/symbols with a little Latin text still counts as English.
+    assert is_english("12,345 (67.8%) — ok") is True
+
+
+def test_is_english_empty_answer_is_not_english() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_english
+
+    assert is_english("") is False
+    assert is_english("   ") is False
+
+
+def test_used_tools_detects_any_step() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import used_tools
+
+    assert used_tools([{"tool": "run_sql", "input": {"sql": "SELECT 1"}, "output": "1 rows"}])
+    assert not used_tools([])
+
+
+def test_returned_frames() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import returned_frames
+
+    assert returned_frames([{"sample_data_token": "t1"}]) is True
+    assert returned_frames([]) is False

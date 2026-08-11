@@ -48,3 +48,33 @@ def numeric_matches(
     else:
         allowed = tolerance if tolerance is not None else 0.0
     return any(abs(value - expected) <= allowed for value in values)
+
+
+# Share of *alphabetic* characters that must be Latin for an answer to count as English.
+# A heuristic, deliberately not a language model: it exists to catch the wholesale
+# script drift seen in data/chat/log.jsonl (an answer returned in Thai), not to judge
+# fluency. Digits, punctuation and whitespace are ignored entirely.
+_LATIN_SHARE_MIN = 0.9
+
+
+def is_english(text: str) -> bool:
+    """True when the answer's alphabetic characters are overwhelmingly Latin script.
+
+    Heuristic by design — see ``_LATIN_SHARE_MIN``. An empty or non-alphabetic answer
+    is not English (there is nothing to answer with).
+    """
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return False
+    latin = sum(1 for char in letters if char.isascii())
+    return latin / len(letters) >= _LATIN_SHARE_MIN
+
+
+def used_tools(steps: list[dict[str, Any]]) -> bool:
+    """True when the agent called at least one tool (queried rather than recalled)."""
+    return bool(steps)
+
+
+def returned_frames(frames: list[dict[str, Any]]) -> bool:
+    """True when the agent attached at least one example frame."""
+    return bool(frames)
