@@ -160,6 +160,35 @@ def _matches_at_cited_precision(cited: float, observed: float) -> bool:
     return abs(cited - round(observed, decimals)) <= 1e-6
 
 
+# One-step derivations the grounding check admits, each motivated by a real failure
+# from the v1 review taxonomy (docs/superpowers/specs/2026-08-11-grounding-v2-design.md):
+# a difference ("4,986 of 5,000, so 14 failed"), a percentage (99.66 = 4969/4986*100),
+# and the m/s<->km/h conversion (18.4 = 5.1049*3.6). No products, no other quotients,
+# no chaining: derived values are never re-derived, which is what keeps a WRONG
+# computation (the historical 98.5% for a true 99.66%) failing.
+_MS_TO_KMH = 3.6
+
+
+def _derived_matches(cited: float, observed: set[float]) -> bool:
+    """True when ``cited`` is one admitted arithmetic step from observed values."""
+    obs = sorted(observed)
+    for a in obs:
+        if _matches_at_cited_precision(cited, a * _MS_TO_KMH):
+            return True
+        if _matches_at_cited_precision(cited, a / _MS_TO_KMH):
+            return True
+    for i, a in enumerate(obs):
+        for b in obs[i + 1 :]:
+            candidates = [a + b, a - b, b - a]
+            if b != 0:
+                candidates.append(a / b * 100.0)
+            if a != 0:
+                candidates.append(b / a * 100.0)
+            if any(_matches_at_cited_precision(cited, value) for value in candidates):
+                return True
+    return False
+
+
 # A permissive extractor used ONLY for the question side of grounding (the allowlist),
 # never for the answer's own citations. `_NUMBER` (above) suppresses digits adjacent to
 # a hyphen so identifiers like "Scene-0992" don't yield phantom values — but that same
@@ -193,13 +222,17 @@ def is_grounded(
     itself (a question asking about 5 metres invites an answer that says 5). A number
     that is neither retrieved, nor a rounding of a retrieved value, nor present in the
     question, is unsupported — being plausible, or even correct, is not being grounded.
+    …or one admitted arithmetic step (sum, difference, percentage, m/s↔km/h) from
+    observed values — showing your arithmetic is grounded; getting it wrong is not.
     """
     cited = extract_numbers(answer)
     if not cited:
         return True
-    observed = observed_numbers(con, steps) | _allowlist_numbers(question)
+    observed = observed_numbers(con, steps)
+    allowed = observed | _allowlist_numbers(question)
     return all(
-        any(_matches_at_cited_precision(value, seen) for seen in observed)
+        any(_matches_at_cited_precision(value, seen) for seen in allowed)
+        or _derived_matches(value, observed)   # derivations draw on observed ONLY
         for value in cited
     )
 

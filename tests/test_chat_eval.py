@@ -511,6 +511,50 @@ def test_observed_numbers_includes_per_column_sums(tiny_con: Any) -> None:
     assert 3.0 in observed                   # row_count, as before
 
 
+def test_derived_matches_admits_the_four_taxonomy_rules() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import _derived_matches
+
+    # difference: "4,986 of 5,000, so 14 failed"
+    assert _derived_matches(14.0, {5000.0, 4986.0}) is True
+    # sum
+    assert _derived_matches(9986.0, {5000.0, 4986.0}) is True
+    # percentage at cited precision: 99.66 = 4969/4986*100
+    assert _derived_matches(99.66, {4969.0, 4986.0}) is True
+    # m/s -> km/h at cited precision: 18.4 = 5.1049... * 3.6
+    assert _derived_matches(18.4, {5.104916902905238}) is True
+    # and km/h -> m/s
+    assert _derived_matches(5.1, {18.377700850458857}) is True
+
+
+def test_derived_matches_rejects_wrong_arithmetic_record5() -> None:
+    """The historical miscalculation must STILL fail: correct inputs, wrong result."""
+    from nuscenes_data_engine.data_engine.chat.evaluate import _derived_matches
+
+    observed = {4213.0, 756.0, 4986.0}
+    assert _derived_matches(98.5, observed) is False
+    # Even the CORRECT value is not one-step-derivable from these inputs (it needs
+    # 4213+756=4969 first). v2 is one step by design; this documents the bound.
+    assert _derived_matches(99.66, observed) is False
+
+
+def test_derived_matches_collision_guard() -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import _derived_matches
+
+    observed = {40.0, 2.0}
+    assert _derived_matches(43.0, observed) is False   # near-miss must not pass
+    assert _derived_matches(42.0, observed) is True    # 40+2: the documented trade-off
+    assert _derived_matches(38.0, observed) is True    # 40-2
+
+
+def test_is_grounded_accepts_a_derived_difference(tiny_con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat.evaluate import is_grounded
+
+    steps = [{"tool": "run_sql", "input": {"sql": "SELECT 5000, 4986"}, "output": "1 rows"}]
+    assert is_grounded("4986 parsed, so 14 failed.", tiny_con, steps) is True
+    # An underived number is still unsupported.
+    assert is_grounded("4986 parsed, so 15 failed and 77 crashed.", tiny_con, steps) is False
+
+
 def test_run_eval_records_a_failing_case_without_aborting(tmp_path: Path, tiny_con: Any) -> None:
     from nuscenes_data_engine.data_engine.chat.evaluate import EvalCase, run_eval
 
