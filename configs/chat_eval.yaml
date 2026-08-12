@@ -1,0 +1,183 @@
+# Chat-agent answer-correctness cases (docs/superpowers/specs/2026-08-11-chat-eval-harness-design.md).
+# Each reference_sql runs through the same guarded catalog the agent uses and must
+# return exactly one numeric cell. Seeded from data/chat/log.jsonl's real questions.
+#
+# Tolerance convention:
+#   - Exact counts / maxima (count(*), count(DISTINCT ...), max(...)): tolerance: 0 —
+#     there is exactly one right integer, no room for rounding.
+#   - Percentage-valued answers (a share/rate already expressed 0-100): tolerance is an
+#     ABSOLUTE number of percentage points (e.g. 1.0 = ±1pp), not tolerance_pct — a
+#     *relative* tolerance behaves badly near 0% or 100% (5% relative of a 2% share is
+#     a practically useless ±0.1pp band; 5% relative of a 99.7% rate is needlessly
+#     tight). The absolute band is sized to the value: small shares get a tighter
+#     absolute band than the near-100% agreement rate.
+#   - Physical-magnitude averages with no natural 0-100 scale and a wide range (speed
+#     in m/s or km/h): tolerance_pct: 5 — relative tolerance scales correctly regardless
+#     of the unit, and covers an agent rounding to 1-2 significant figures.
+#   - Averages on a narrow fixed scale (the 1-4 visibility score) get a tight absolute
+#     tolerance instead: relative tolerance on a narrow range is too forgiving — 5% of
+#     ~3.6 covers most of the scale's other category-level averages, so a wrong-category
+#     answer could still land inside the band.
+cases:
+  # --- samples (frame/scene metadata) ---
+  - id: night_scenes_hollandvillage
+    question: "How many night scenes are there in singapore-hollandvillage?"
+    reference_sql: >
+      SELECT count(DISTINCT scene_token) FROM samples
+      WHERE is_night AND location = 'singapore-hollandvillage'
+    tolerance: 0
+
+  - id: night_scenes_queenstown
+    question: "How many night scenes are there in singapore-queenstown?"
+    reference_sql: >
+      SELECT count(DISTINCT scene_token) FROM samples
+      WHERE is_night AND location = 'singapore-queenstown'
+    tolerance: 0
+
+  - id: rain_scenes_boston
+    question: "How many rainy scenes are there in boston-seaport?"
+    reference_sql: >
+      SELECT count(DISTINCT scene_token) FROM samples
+      WHERE is_rain AND location = 'boston-seaport'
+    tolerance: 0
+
+  - id: crowded_frames_share_pct
+    question: >
+      What share of camera frames (as a percentage) have 20 or more annotated
+      objects?
+    reference_sql: >
+      SELECT 100.0 * count(*) FILTER (WHERE n_boxes >= 20) / count(*) FROM samples
+    tolerance: 0.5
+
+  # --- annotations (2D boxes) ---
+  - id: bicycle_scenes_count
+    question: "How many distinct scenes have at least one bicycle annotation?"
+    reference_sql: >
+      SELECT count(DISTINCT scene_token) FROM annotations
+      WHERE category_group = 'bicycle'
+    tolerance: 0
+
+  - id: avg_visibility_pedestrian_night
+    # "Using the 2D annotations table" disambiguates against annotations_3d, which
+    # also carries visibility_token but reads ~2.78 there vs ~3.64 here — both are
+    # real, correct readings of real tables, not an error either way (see
+    # docs/DATASET_CHAT.md, "Answer-correctness evaluation").
+    question: >
+      Using the 2D annotations table, what is the average visibility (on the 1-4
+      scale) of pedestrian annotations at night?
+    reference_sql: >
+      SELECT avg(CAST(visibility_token AS INT)) FROM annotations
+      WHERE category_group = 'pedestrian' AND is_night
+    # A tight absolute band, not tolerance_pct: 5% relative (~[3.459, 3.823]) covers 6
+    # of the 10 category x night/day visibility averages, so an agent answering about
+    # the wrong category would still score correct.
+    tolerance: 0.05
+
+  - id: bike_bus_singapore_night_count
+    question: >
+      How many camera frames in Singapore night scenes contain both a bicycle and
+      a bus annotation?
+    reference_sql: >
+      SELECT count(*) FROM (
+        SELECT sample_data_token FROM annotations
+        WHERE category_group = 'bicycle' AND location LIKE 'singapore%' AND is_night
+        INTERSECT
+        SELECT sample_data_token FROM annotations
+        WHERE category_group = 'bus' AND location LIKE 'singapore%' AND is_night
+      )
+    tolerance: 0
+
+  - id: pedestrian_cone_cooccurrence_count
+    question: "In how many camera frames do a pedestrian and a traffic cone both appear?"
+    reference_sql: >
+      SELECT count(*) FROM (
+        SELECT sample_data_token FROM annotations WHERE category_group = 'pedestrian'
+        INTERSECT
+        SELECT sample_data_token FROM annotations
+        WHERE category_name = 'movable_object.trafficcone'
+      )
+    tolerance: 0
+
+  # --- labels (Phase 6b VLM auto-labels) ---
+  - id: labels_parse_ok_count
+    question: "How many of the VLM-labeled frames parsed successfully (parse_status = 'ok')?"
+    reference_sql: "SELECT count(*) FROM labels WHERE parse_status = 'ok'"
+    tolerance: 0
+
+  - id: labels_night_agreement_pct
+    question: >
+      Using the labels table joined to samples, how often do the VLM labels agree
+      with ground truth that a frame is night? Give the agreement rate as a
+      percentage.
+    reference_sql: >
+      SELECT 100.0 * avg(CASE WHEN (l.time_of_day = 'night') = s.is_night
+        THEN 1.0 ELSE 0.0 END)
+      FROM labels l JOIN samples s USING (sample_data_token)
+      WHERE l.parse_status = 'ok'
+    tolerance: 1.0
+
+  # --- canbus (CAN-bus ego dynamics) ---
+  - id: canbus_hard_braking_count
+    question: "How many keyframes show hard braking (is_hard_braking)?"
+    reference_sql: "SELECT count(*) FROM canbus WHERE is_hard_braking"
+    tolerance: 0
+
+  - id: canbus_avg_speed_boston_kmh
+    question: "What is the average CAN-bus vehicle speed (km/h) in boston-seaport?"
+    reference_sql: >
+      SELECT avg(can_speed_kmh) FROM canbus
+      WHERE location = 'boston-seaport' AND has_canbus
+    tolerance_pct: 5
+
+  # --- ego_pose ---
+  - id: ego_pose_avg_speed_onenorth
+    question: >
+      What is the average ego-vehicle speed (m/s) in singapore-onenorth, based on
+      the ego pose?
+    reference_sql: "SELECT avg(speed_mps) FROM ego_pose WHERE location = 'singapore-onenorth'"
+    tolerance_pct: 5
+
+  # --- annotations_3d / instances (Phase B geometry) ---
+  - id: pedestrians_within_5m_night
+    question: "how many pedestrians come within 5 meters of the ego vehicle at night? just the number."
+    reference_sql: >
+      SELECT count(*) FROM annotations_3d
+      WHERE category_group = 'pedestrian' AND distance_to_ego_m < 5 AND is_night
+    tolerance: 0
+
+  - id: hard_braking_near_pedestrian_10m
+    question: >
+      How many keyframes show hard braking with a pedestrian within 10 meters of
+      the ego vehicle?
+    reference_sql: >
+      SELECT count(DISTINCT c.sample_token)
+      FROM canbus c JOIN annotations_3d a USING (sample_token)
+      WHERE c.is_hard_braking AND a.category_group = 'pedestrian'
+        AND a.distance_to_ego_m < 10
+    tolerance: 0
+
+  - id: max_instance_keyframes
+    question: "which objects are tracked across the most keyframes?"
+    reference_sql: "SELECT max(n_annotations) FROM instances"
+    tolerance: 0
+
+  # --- availability (file-integrity manifest) ---
+  - id: missing_cam_files
+    question: >
+      Are any referenced camera files missing from disk? Check the availability
+      manifest for CAM channels only.
+    reference_sql: "SELECT count(*) FROM availability WHERE channel LIKE 'CAM%' AND NOT present"
+    tolerance: 0
+
+  # --- retrieval-only cases (no single ground-truth number; graded on frames returned) ---
+  - id: construction_cones_night_frames
+    question: "Show me a few frames of construction zones with traffic cones at night."
+    expect_frames: true
+
+  - id: foggy_misty_glare_frames
+    question: "Find frames that look foggy, misty or have heavy lens glare, and attach a few examples."
+    expect_frames: true
+
+  - id: bike_bus_singapore_night_frames
+    question: "show me frames where bicycles and buses appear together in Singapore night scenes"
+    expect_frames: true

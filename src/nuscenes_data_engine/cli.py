@@ -447,6 +447,69 @@ def chat(
         graph_connection.close(graph_driver)
 
 
+@app.command("chat-eval")
+def chat_eval(
+    config: Path = typer.Option(Path("configs/chat_eval.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="local | anthropic."),
+    model: str | None = typer.Option(None, "--model", help="Override the chat model."),
+    limit: int | None = typer.Option(None, "--limit", help="First N cases (smoke runs)."),
+    processed_dir: Path = typer.Option(Path("data/processed"), "--processed-dir"),
+    regrade_path: Path | None = typer.Option(
+        None, "--regrade", exists=True, dir_okay=False,
+        help="Replay a stored results_*.jsonl through the current graders (no LLM calls).",
+    ),
+) -> None:
+    """Score the chat agent's answers against reference SQL (deterministic, no judge)."""
+    from nuscenes_data_engine.config import get_settings
+    from nuscenes_data_engine.data_engine.chat.catalog import open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases, regrade, run_eval
+    from nuscenes_data_engine.data_engine.chat.transports import make_transport
+
+    settings = get_settings()
+    con = open_catalog(
+        processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
+    )
+    if regrade_path is not None:
+        if limit is not None or provider is not None or model is not None:
+            logger.warning("--limit/--provider/--model are ignored with --regrade")
+        summary = regrade(regrade_path, con=con, cases=load_cases(config))
+        logger.info("Regrade summary: %s", summary)
+        return
+
+    transport = make_transport(settings, provider=provider, model=model)
+    try:
+        from nuscenes_data_engine.data_engine.search import SearchEngine
+
+        probe = SearchEngine(
+            Path(settings.search_lancedb_path), settings.search_table,
+            settings.search_model_name, device=settings.search_device,
+        )
+        # Construction alone never touches the encoder (search_similar works without
+        # it), so a missing torch previously surfaced only mid-eval, per case, inside
+        # search_frames's own try/except, as a silent "search failed: ..." tool error
+        # — every retrieval case degraded to SQL fallback with no warning that search
+        # itself was unavailable. Probe it here so that degradation is up front instead.
+        probe.search_text("probe", k=1)
+        engine: Any | None = probe
+    except Exception as exc:
+        logger.warning("Vector search unavailable (%s) — SQL-only eval.", exc)
+        engine = None
+
+    # Resolved the same way make_transport resolves the model, not the raw CLI flag:
+    # a flagless run under CHAT_PROVIDER=anthropic must not write results_default.jsonl
+    # (a later flagless run under default settings would then silently overwrite it
+    # with local results — exactly the collision the provider suffix exists to avoid).
+    label = provider or settings.chat_provider
+    if model is not None:
+        label = f"{label}_{model.replace(':', '-').replace('/', '-')}"
+    summary = run_eval(
+        load_cases(config), con=con, transport=transport, search_engine=engine,
+        out_dir=Path(settings.data_dir) / "chat" / "eval",
+        provider=label, limit=limit,
+    )
+    logger.info("Eval summary: %s", summary)
+
+
 autolabel_app = typer.Typer(no_args_is_help=True, help="Phase 6b: VLM auto-labeling.")
 app.add_typer(autolabel_app, name="autolabel")
 
