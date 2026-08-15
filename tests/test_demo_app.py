@@ -10,7 +10,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import yaml
-from PIL import Image
 
 FORBIDDEN = ("nuscenes_data_engine", "requests", "torch", "lancedb", "neo4j", "duckdb")
 DEMO_DIR = Path(__file__).resolve().parents[1] / "app" / "demo"
@@ -53,7 +52,15 @@ def built_demo_data(tmp_path: Path) -> Path:
     exercise every exporter edge case (that is test_demo_export.py's job). Importing
     nuscenes_data_engine.demo.build here is fine: the forbidden-import rule is about
     app/demo/*.py, not the tests that exercise the builder.
+
+    PIL is only a transitive dep (via streamlit, not declared in any repo extra
+    itself), and this fixture runs before the test body's own importorskip — so the
+    guard has to live here, not there, or a serve-less environment would fail
+    collection of the whole module instead of skipping cleanly.
     """
+    pytest.importorskip("PIL")
+    from PIL import Image
+
     from nuscenes_data_engine.demo.build import run_build
 
     processed = tmp_path / "processed"

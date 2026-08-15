@@ -21,6 +21,11 @@ logger = logging.getLogger("nuscenes_data_engine")
 # src/nuscenes_data_engine/demo/build.py -> repo root is three levels up.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# A package is recognisable by any known output, not only the last-written manifest:
+# a failed build leaves overview_metrics.json (written first) but no manifest, and
+# recovery must not require a manual rm -rf.
+_PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -58,14 +63,14 @@ def run_build(config_path: Path) -> dict[str, Any]:
     out_dir = Path(paths["out_dir"])
     mlruns_dir = Path(paths["mlruns_dir"])
 
-    # The package is fully regenerated on every build; anything not produced by
-    # this run (a removed exporter's stale output, a leftover from a failed prior
-    # build) must not survive into the committed tree. But out_dir comes straight
-    # from config — a typo'd `out_dir: data/processed` would otherwise happily
-    # wipe real pipeline artifacts, so refuse unless the directory already looks
-    # like a demo package (or doesn't exist yet).
+    # The package is fully regenerated on every build; anything not produced by this
+    # build must not survive — a partial tree from a failed build carries
+    # overview_metrics.json and is safely regenerated. But out_dir comes straight
+    # from config — a typo'd `out_dir: data/processed` would otherwise happily wipe
+    # real pipeline artifacts, so refuse unless the directory already looks like a
+    # demo package (or doesn't exist yet).
     resolved = out_dir.resolve()
-    if resolved.exists() and not (resolved / "manifest.json").is_file():
+    if resolved.exists() and not any((resolved / m).is_file() for m in _PACKAGE_MARKERS):
         raise ValueError(
             f"refusing to wipe {resolved}: it exists but has no manifest.json, so it "
             "does not look like a demo package (typo'd out_dir?)"

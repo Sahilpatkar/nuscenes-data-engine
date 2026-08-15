@@ -412,6 +412,35 @@ def test_build_refuses_to_wipe_a_non_package_dir(build_config: Path) -> None:
     assert (out_dir / "not_a_demo_package.txt").is_file()
 
 
+def test_build_recovers_from_a_failed_build_without_manual_cleanup(build_config: Path) -> None:
+    """A failed build must not self-lock the retry.
+
+    manifest.json is written last, so a failed build (here: the documented flagship-
+    mismatch failure) leaves overview_metrics.json on disk but no manifest.json. The
+    wipe guard must still recognise that tree as a demo package (via
+    _PACKAGE_MARKERS) and let the corrected retry through, not blame a config typo
+    that doesn't exist and demand a manual rm -rf.
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    config["flagship"]["expected_sql_count"] = 30  # tiny fixture yields 1, not 30 -> fails
+    build_config.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="flagship"):
+        run_build(build_config)
+
+    out_dir = Path(config["paths"]["out_dir"])
+    assert (out_dir / "overview_metrics.json").is_file()
+    assert not (out_dir / "manifest.json").is_file()
+
+    config["flagship"]["expected_sql_count"] = 1  # fix the config back to reality
+    build_config.write_text(yaml.safe_dump(config))
+    manifest = run_build(build_config)  # must not raise "refusing to wipe"
+
+    assert (out_dir / "manifest.json").is_file()
+    assert manifest["validation"]["flagship_sql_count"] == 1
+
+
 def test_build_rewipes_an_existing_demo_package(build_config: Path) -> None:
     """A dir that already looks like a demo package (has manifest.json) is fine to wipe."""
     from nuscenes_data_engine.demo.build import run_build

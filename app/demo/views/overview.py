@@ -44,22 +44,26 @@ def render() -> None:
             ("Graph = SQL flagship", f"{flagship['sql']} = {flagship['cypher']}"),
         ]
     )
+    # One decimal place here (39.4%, not 39%) to match the figure as documented in
+    # docs/DEMO.md — the two must agree on the same rounding for the same number.
     other_pairs = ", ".join(
-        f"`{arm}` ({weak['by_base_arm'][arm]:.0%})"
+        f"`{arm}` ({weak['by_base_arm'][arm]:.1%})"
         for arm in weak["by_base_arm"]
         if arm != weak["headline_arm"]
     )
     other_pairs_note = (
-        f"the {other_pairs} pair is carried in `demo_data/overview_metrics.json`; "
-        "the Weak Supervision page presents it in Phase 7."
+        f"The {other_pairs} pair is carried in `demo_data/overview_metrics.json`. "
+        "The Weak Supervision page presents it in Phase 7."
         if other_pairs
-        else "no other weak/GT pairs are in this build."
+        else "No other weak/GT pairs are in this build."
     )
     st.caption(
         f"Best night arm: `{results['best_night_arm']}` · flagship Cypher twin "
-        f"sourced from {flagship['cypher_source']} until the live-graph export lands. "
-        f"The card above is {retention_text} of the ground-truth mAP gain, for the "
-        f"`{weak['headline_arm']}` pair (the documented headline); {other_pairs_note}"
+        f"sourced from {flagship['cypher_source']} until the live-graph export lands."
+    )
+    st.caption(
+        f"The card above is {retention_text} of the ground-truth mAP gain for the "
+        f"`{weak['headline_arm']}` pair (the documented headline). {other_pairs_note}"
     )
     if hero_path().is_file():
         st.subheader("The model at work")
