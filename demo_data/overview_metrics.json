@@ -1,0 +1,26 @@
+{
+  "can_speed_r": 0.999,
+  "flagship": {
+    "cypher": 30,
+    "cypher_source": "docs/GRAPH.md",
+    "sql": 30
+  },
+  "results": {
+    "best_night_arm": "graph_rate_night",
+    "best_night_delta": 0.0101,
+    "weak_retention": {
+      "by_base_arm": {
+        "graph_rate_night": 0.3937,
+        "random": 0.1824
+      },
+      "headline": 0.1824,
+      "headline_arm": "random"
+    }
+  },
+  "scale": {
+    "boxes_2d": 1004184,
+    "canbus_rows": 34149,
+    "images": 204894,
+    "objects_3d": 1166187
+  }
+}
