@@ -18,12 +18,14 @@ def package_missing() -> bool:
 
 @st.cache_data
 def load_manifest() -> dict[str, Any]:
-    return json.loads((DEMO_DATA / "manifest.json").read_text())
+    data: dict[str, Any] = json.loads((DEMO_DATA / "manifest.json").read_text())
+    return data
 
 
 @st.cache_data
 def load_overview() -> dict[str, Any]:
-    return json.loads((DEMO_DATA / "overview_metrics.json").read_text())
+    data: dict[str, Any] = json.loads((DEMO_DATA / "overview_metrics.json").read_text())
+    return data
 
 
 @st.cache_data

@@ -10,6 +10,9 @@ DEMO_DIR = Path(__file__).resolve().parents[1] / "app" / "demo"
 
 
 def test_demo_app_never_imports_the_backend() -> None:
+    # Static ast.Import/ImportFrom check only: dynamic imports (importlib, __import__)
+    # slip past this. It's a contributor guardrail against the obvious mistake, not a
+    # sandbox — don't rely on it to block a determined attempt to reach the backend.
     offenders = []
     for path in sorted(DEMO_DIR.rglob("*.py")):
         tree = ast.parse(path.read_text())
