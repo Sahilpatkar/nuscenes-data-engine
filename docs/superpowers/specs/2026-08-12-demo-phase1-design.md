@@ -56,6 +56,12 @@ no torch; lancedb imported lazily) and a `demo` sub-app in `cli.py`:
 champion run ids), hero source run, size budget, paths. Later phases add their
 sections; the config is the single place demo curation is parameterized.
 
+**Amendment (2026-08-14, at plan-writing):** Phase 1 exposes only `demo build` on
+the CLI; the per-artifact `demo export <name>` subcommands listed above stay
+internal functions until a later phase actually needs a partial rebuild (YAGNI —
+`demo build` takes seconds at Phase-1 scope). The exporter functions and their
+tests are unchanged.
+
 ## 2. The package — `demo_data/`
 
 Committed to the repo root (gitignore exception). Phase 1 contents:
