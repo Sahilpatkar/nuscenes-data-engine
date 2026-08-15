@@ -26,7 +26,7 @@ FLAGSHIP_SQL = """
       AND a.distance_to_ego_m < 10
 """
 
-_PROCESSED_INPUTS = (
+PROCESSED_INPUTS = (
     "samples.parquet",
     "annotations.parquet",
     "annotations_3d.parquet",
@@ -73,12 +73,12 @@ def export_overview(
     local tables. The Cypher twin stays *sourced* (docs/GRAPH.md) until Phase 6
     computes it against a live graph — the JSON labels it as such.
     """
-    for name in _PROCESSED_INPUTS:
+    for name in PROCESSED_INPUTS:
         _require(processed_dir / name)
     results = json.loads(_require(al_dir / "results.json").read_text())
 
     con = duckdb.connect()
-    for name in _PROCESSED_INPUTS:
+    for name in PROCESSED_INPUTS:
         table = name.removesuffix(".parquet")
         # duckdb.BinderException: CREATE VIEW (a DDL statement) cannot take a
         # prepared-statement parameter, so bind the path via the relation API
@@ -136,7 +136,12 @@ def export_overview(
         if base not in results:
             continue
         gt_gain = results[base]["overall"]["mAP50-95"] - overall_baseline
-        if gt_gain:
+        # Strictly positive only: `if gt_gain:` let a *negative* GT gain through too
+        # (float-truthiness only excludes exactly zero), which would publish a
+        # technically-computed but meaningless ratio — "retention" of a regression
+        # isn't a real quantity. A base arm that regressed vs baseline just doesn't
+        # get a weak-retention entry.
+        if gt_gain > 0:
             weak_gain = entry["overall"]["mAP50-95"] - overall_baseline
             weak_pairs[base] = round(weak_gain / gt_gain, 4)
 

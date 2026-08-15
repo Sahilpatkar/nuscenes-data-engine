@@ -111,6 +111,33 @@ def test_export_overview_derives_every_number(tmp_path: Path, tiny_inputs: dict[
     assert weak_retention["by_base_arm"]["graph_rate_night"] == pytest.approx(0.25, abs=1e-6)
 
 
+def test_export_overview_excludes_negative_gt_gain_pairs(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    """A base arm that regressed vs baseline gets no weak-retention ratio.
+
+    `if gt_gain:` (float-truthiness) only excluded an exactly-zero gain; a negative
+    gt_gain would still produce a technically-computed but meaningless ratio (there is
+    no such thing as "retention" of a regression). `if gt_gain > 0:` excludes it.
+    """
+    results_path = tiny_inputs["al"] / "results.json"
+    results = json.loads(results_path.read_text())
+    # graph_rate_night now UNDERPERFORMS baseline overall mAP (0.20) -> negative gt_gain.
+    results["graph_rate_night"]["overall"]["mAP50-95"] = 0.15
+    results_path.write_text(json.dumps(results))
+
+    metrics = export_overview(
+        processed_dir=tiny_inputs["processed"],
+        al_dir=tiny_inputs["al"],
+        out_dir=tmp_path / "demo_data",
+        flagship_cypher={"count": 30, "source": "docs/GRAPH.md"},
+    )
+    weak_retention = metrics["results"]["weak_retention"]
+    assert "graph_rate_night" not in weak_retention["by_base_arm"]
+    # the headline (random) pair is a different base arm and is unaffected
+    assert weak_retention["headline"] == pytest.approx(0.18, abs=1e-6)
+
+
 def test_export_overview_missing_input_raises(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
     (tiny_inputs["processed"] / "canbus.parquet").unlink()
     with pytest.raises(ValueError, match=r"canbus\.parquet"):
@@ -358,12 +385,74 @@ def test_build_wipes_stale_residue(build_config: Path) -> None:
     config = yaml.safe_load(build_config.read_text())
     out_dir = Path(config["paths"]["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    # manifest.json makes this look like an existing demo package (not a typo'd
+    # out_dir) so the wipe-guard (test_build_refuses_to_wipe_a_non_package_dir) lets
+    # the rebuild proceed.
+    (out_dir / "manifest.json").write_text("{}")
     (out_dir / "stale.json").write_text("{}")
 
     manifest = run_build(build_config)
 
     assert not (out_dir / "stale.json").exists()
     assert "stale.json" not in manifest["outputs"]
+
+
+def test_build_refuses_to_wipe_a_non_package_dir(build_config: Path) -> None:
+    """A typo'd out_dir pointing at a real, unrelated directory must not be wiped."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+    (out_dir / "not_a_demo_package.txt").write_text("please don't delete me")
+
+    with pytest.raises(ValueError, match="refusing to wipe"):
+        run_build(build_config)
+
+    assert (out_dir / "not_a_demo_package.txt").is_file()
+
+
+def test_build_rewipes_an_existing_demo_package(build_config: Path) -> None:
+    """A dir that already looks like a demo package (has manifest.json) is fine to wipe."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    run_build(build_config)  # first build creates out_dir/manifest.json
+    manifest = run_build(build_config)  # second build must not raise the new guard
+
+    out_dir = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert (out_dir / "manifest.json").is_file()
+    assert manifest["validation"]["n_arms"] == 5
+
+
+def test_build_proceeds_when_out_dir_absent(build_config: Path) -> None:
+    """An out_dir that simply doesn't exist yet (the common case) is fine, not an error."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    out_dir = Path(config["paths"]["out_dir"])
+    assert not out_dir.exists()
+
+    manifest = run_build(build_config)
+
+    assert (out_dir / "manifest.json").is_file()
+    assert manifest["validation"]["n_arms"] == 5
+
+
+def test_build_fails_when_weak_retention_headline_missing(build_config: Path) -> None:
+    """A results.json missing the documented headline (random) pair must fail loudly,
+    not silently publish `"headline": null` to the committed package."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    al_dir = Path(config["paths"]["active_learning_dir"])
+    results_path = al_dir / "results.json"
+    results = json.loads(results_path.read_text())
+    del results["random"]
+    del results["weak_random"]
+    results_path.write_text(json.dumps(results))
+
+    with pytest.raises(ValueError, match="weak-retention headline"):
+        run_build(build_config)
 
 
 def test_build_hashes_all_real_inputs(build_config: Path) -> None:

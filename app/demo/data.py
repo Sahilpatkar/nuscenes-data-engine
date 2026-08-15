@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-DEMO_DATA = Path(__file__).resolve().parents[2] / "demo_data"
+# DEMO_DATA_DIR lets tests point the app at a tmp-built package (Streamlit Cloud and
+# the real app never set it, so the committed demo_data/ stays the default).
+_DEFAULT_DEMO_DATA = Path(__file__).resolve().parents[2] / "demo_data"
+DEMO_DATA = Path(os.environ.get("DEMO_DATA_DIR", str(_DEFAULT_DEMO_DATA)))
 
 
 def package_missing() -> bool:

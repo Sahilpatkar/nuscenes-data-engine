@@ -60,7 +60,16 @@ def run_build(config_path: Path) -> dict[str, Any]:
 
     # The package is fully regenerated on every build; anything not produced by
     # this run (a removed exporter's stale output, a leftover from a failed prior
-    # build) must not survive into the committed tree.
+    # build) must not survive into the committed tree. But out_dir comes straight
+    # from config — a typo'd `out_dir: data/processed` would otherwise happily
+    # wipe real pipeline artifacts, so refuse unless the directory already looks
+    # like a demo package (or doesn't exist yet).
+    resolved = out_dir.resolve()
+    if resolved.exists() and not (resolved / "manifest.json").is_file():
+        raise ValueError(
+            f"refusing to wipe {resolved}: it exists but has no manifest.json, so it "
+            "does not look like a demo package (typo'd out_dir?)"
+        )
     shutil.rmtree(out_dir, ignore_errors=True)
 
     metrics = exporters.export_overview(
@@ -84,6 +93,9 @@ def run_build(config_path: Path) -> dict[str, Any]:
             f"flagship SQL count {metrics['flagship']['sql']} != expected {expected} — "
             "the source tables changed; re-verify before publishing"
         )
+    headline = metrics["results"]["weak_retention"]["headline"]
+    if headline is None:
+        raise ValueError("weak-retention headline (random pair) missing from results.json")
     package_bytes = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
     package_mb = package_bytes / 1e6
     if package_mb > config["budgets"]["max_package_mb"]:
@@ -110,7 +122,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
         str(al_dir / "results.json"): _sha256(al_dir / "results.json"),
         str(hero_src): _sha256(hero_src),
     }
-    for name in exporters._PROCESSED_INPUTS:
+    for name in exporters.PROCESSED_INPUTS:
         path = processed / name
         inputs[str(path)] = _sha256(path)
     for path in sorted(al_dir.glob("*_pseudo_summary.json")):
