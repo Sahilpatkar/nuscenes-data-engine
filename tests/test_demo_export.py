@@ -172,3 +172,61 @@ def test_export_weaksup_reads_summaries(tmp_path: Path, tiny_inputs: dict[str, P
     assert row["verifier_retention"] == pytest.approx(0.639)
     # arms without a summary file are simply absent, not an error
     assert "graph_rate_night" not in set(df["arm"])
+
+
+def test_export_hero_copies_the_configured_mosaic(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_hero
+
+    mlruns = tmp_path / "mlruns"
+    run_dir = mlruns / "artifacts" / "run123" / "artifacts" / "ultralytics_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "val_batch0_pred.jpg").write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
+    out = tmp_path / "demo_data"
+    dest = export_hero(mlruns_dir=mlruns, run_id="run123", mosaic="val_batch0_pred.jpg", out_dir=out)
+    assert dest == out / "sample_frames" / "hero.jpg"
+    assert dest.read_bytes().startswith(b"\xff\xd8")
+
+
+def test_export_hero_missing_mosaic_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_hero
+
+    with pytest.raises(ValueError, match="hero mosaic"):
+        export_hero(
+            mlruns_dir=tmp_path, run_id="nope", mosaic="val_batch0_pred.jpg",
+            out_dir=tmp_path / "demo_data",
+        )
+
+
+def test_export_thumbs_writes_one_jpeg_per_token(tmp_path: Path) -> None:
+    lancedb = pytest.importorskip("lancedb")
+    from nuscenes_data_engine.demo.exporters import export_thumbs
+
+    db = lancedb.connect(str(tmp_path / "lancedb"))
+    db.create_table(
+        "frames",
+        data=[
+            {"sample_data_token": "t1", "thumbnail": b"\xff\xd8\xff\xe0one"},
+            {"sample_data_token": "t2", "thumbnail": b"\xff\xd8\xff\xe0two"},
+            {"sample_data_token": "t3", "thumbnail": b"\xff\xd8\xff\xe0three"},
+        ],
+    )
+    out = tmp_path / "demo_data"
+    written = export_thumbs(
+        lancedb_path=tmp_path / "lancedb", table="frames",
+        tokens=["t1", "t3"], out_dir=out,
+    )
+    assert sorted(p.name for p in written) == ["t1.jpg", "t3.jpg"]
+    assert (out / "sample_frames" / "thumbs" / "t1.jpg").read_bytes().endswith(b"one")
+
+
+def test_export_thumbs_unknown_token_raises(tmp_path: Path) -> None:
+    lancedb = pytest.importorskip("lancedb")
+    from nuscenes_data_engine.demo.exporters import export_thumbs
+
+    db = lancedb.connect(str(tmp_path / "lancedb"))
+    db.create_table("frames", data=[{"sample_data_token": "t1", "thumbnail": b"x"}])
+    with pytest.raises(ValueError, match="ghost"):
+        export_thumbs(
+            lancedb_path=tmp_path / "lancedb", table="frames",
+            tokens=["t1", "ghost"], out_dir=tmp_path / "demo_data",
+        )

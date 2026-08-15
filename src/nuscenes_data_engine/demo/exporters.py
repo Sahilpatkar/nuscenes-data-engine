@@ -217,3 +217,52 @@ def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "weak_supervision_results.parquet", index=False)
     return df
+
+
+def export_hero(*, mlruns_dir: Path, run_id: str, mosaic: str, out_dir: Path) -> Path:
+    """Copy the configured validation mosaic as the interim Overview hero image.
+
+    Replaced by a real curated overlay in Phase 3; until then the hero is still a
+    genuine model output (an ultralytics val-batch prediction mosaic), not a mock.
+    """
+    src = mlruns_dir / "artifacts" / run_id / "artifacts" / "ultralytics_run" / mosaic
+    if not src.is_file():
+        raise ValueError(f"hero mosaic not found: {src}")
+    dest = out_dir / "sample_frames" / "hero.jpg"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(src.read_bytes())
+    return dest
+
+
+def export_thumbs(
+    *, lancedb_path: Path, table: str, tokens: list[str], out_dir: Path
+) -> list[Path]:
+    """Export LanceDB-embedded thumbnails as ``thumbs/<token>.jpg`` files.
+
+    Reads the store directly (no SearchEngine, no encoder, no torch). Every
+    requested token must exist — a silent miss would leave a demo page with a
+    broken image, so missing tokens raise naming themselves.
+    """
+    import lancedb  # lazy: optional dependency, never needed by the demo app itself
+
+    frames = (
+        lancedb.connect(str(lancedb_path))
+        .open_table(table)
+        .search()
+        .where(f"sample_data_token IN ({', '.join(repr(t) for t in tokens)})")
+        .select(["sample_data_token", "thumbnail"])
+        .limit(len(tokens))
+        .to_list()
+    )
+    by_token = {row["sample_data_token"]: row["thumbnail"] for row in frames}
+    missing = [token for token in tokens if token not in by_token]
+    if missing:
+        raise ValueError(f"tokens missing from the LanceDB store: {missing}")
+    thumb_dir = out_dir / "sample_frames" / "thumbs"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for token in sorted(tokens):
+        path = thumb_dir / f"{token}.jpg"
+        path.write_bytes(by_token[token])
+        written.append(path)
+    return written
