@@ -130,3 +130,53 @@ def export_overview(
     }
     _write_json(out_dir / "overview_metrics.json", metrics)
     return metrics
+
+
+def export_al_results(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
+    """Reshape results.json into the arm-comparison table the demo charts read."""
+    results = json.loads(_require(al_dir / "results.json").read_text())
+    base_overall = results["baseline"]["overall"]["mAP50-95"]
+    base_night = results["baseline"]["night"]["mAP50-95"]
+    rows = [
+        {
+            "arm": arm,
+            "n_train_images": entry.get("n_train_images"),
+            "overall_map5095": entry["overall"]["mAP50-95"],
+            "night_map5095": entry["night"]["mAP50-95"],
+            "delta_overall": round(entry["overall"]["mAP50-95"] - base_overall, 4),
+            "delta_night": round(entry["night"]["mAP50-95"] - base_night, 4),
+        }
+        for arm, entry in results.items()
+    ]
+    df = pd.DataFrame(sorted(rows, key=lambda row: row["arm"])).reset_index(drop=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / "active_learning_results.parquet", index=False)
+    return df
+
+
+def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
+    """Collect every ``*_pseudo_summary.json`` into one weak-supervision table.
+
+    Arms without a summary are absent rather than an error — the demo shows what
+    was actually run.
+    """
+    rows = []
+    for path in sorted(al_dir.glob("*_pseudo_summary.json")):
+        summary = json.loads(path.read_text())
+        rows.append(
+            {
+                "arm": summary["arm"],
+                "n_candidates": summary["n_candidates"],
+                "n_accepted": summary["n_accepted"],
+                "verifier_retention": summary["retention"],
+                "n_pseudo_boxes": summary["n_boxes"],
+                "boxes_per_accepted_frame": summary["mean_boxes_per_accepted_frame"],
+                "gt_boxes_per_accepted_frame": summary["mean_gt_boxes_per_accepted_frame"],
+            }
+        )
+    if not rows:
+        raise ValueError(f"no *_pseudo_summary.json found under {al_dir}")
+    df = pd.DataFrame(rows)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / "weak_supervision_results.parquet", index=False)
+    return df

@@ -101,3 +101,40 @@ def test_export_overview_missing_input_raises(tmp_path: Path, tiny_inputs: dict[
             out_dir=tmp_path / "demo_data",
             flagship_cypher={"count": 30, "source": "docs/GRAPH.md"},
         )
+
+
+def test_export_al_results_reshapes_and_sorts(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    out = tmp_path / "demo_data"
+    df = export_al_results(al_dir=tiny_inputs["al"], out_dir=out)
+    on_disk = pd.read_parquet(out / "active_learning_results.parquet")
+    pd.testing.assert_frame_equal(df, on_disk)
+    assert list(df.columns) == [
+        "arm", "n_train_images", "overall_map5095", "night_map5095",
+        "delta_overall", "delta_night",
+    ]
+    assert list(df["arm"]) == sorted(df["arm"])          # deterministic order
+    row = df.set_index("arm").loc["graph_rate_night"]
+    assert row["delta_night"] == pytest.approx(0.0101, abs=1e-6)
+    baseline = df.set_index("arm").loc["baseline"]
+    assert baseline["delta_overall"] == 0.0
+
+
+def test_export_weaksup_reads_summaries(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
+    from nuscenes_data_engine.demo.exporters import export_weaksup
+
+    al = tiny_inputs["al"]
+    (al / "random_pseudo_summary.json").write_text(json.dumps({
+        "arm": "random", "n_candidates": 1500, "n_accepted": 958, "retention": 0.639,
+        "n_boxes": 1942, "mean_boxes_per_accepted_frame": 2.0,
+        "mean_gt_boxes_per_accepted_frame": 3.9,
+    }))
+    out = tmp_path / "demo_data"
+    df = export_weaksup(al_dir=al, out_dir=out)
+    assert (out / "weak_supervision_results.parquet").is_file()
+    row = df.set_index("arm").loc["random"]
+    assert row["n_accepted"] == 958
+    assert row["verifier_retention"] == pytest.approx(0.639)
+    # arms without a summary file are simply absent, not an error
+    assert "graph_rate_night" not in set(df["arm"])
