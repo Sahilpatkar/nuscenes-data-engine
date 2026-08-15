@@ -26,8 +26,17 @@ output, row counts). It **fails loudly** — no manifest is written — if:
 
 - a declared input is missing,
 - the flagship hard-braking-near-pedestrians SQL count ≠ 30 (the documented
-  SQL/Cypher parity number), or
+  SQL/Cypher parity number),
+- the documented weak-retention headline (the `random` pair) is missing from
+  `results.json`, or
 - the package exceeds the size budget (100 MB; currently 0.49 MB).
+
+`demo build` only runs where the local pipeline artifacts already exist —
+`data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
+fresh clone cannot rebuild the package (those come from running the ingestion and
+active-learning phases locally, not from git). What a fresh clone *can* always do is
+verify the committed `demo_data/` against `manifest.json`'s SHA256s without rebuilding
+anything.
 
 Every number in the package is **derived at export time**, never hardcoded: dataset
 scale = live parquet row counts; CAN-speed validation r = live correlation of the
@@ -38,8 +47,11 @@ attribution (headline = the documented 18% `random` pair; the 39.4%
 sourced from [GRAPH.md](GRAPH.md) until Phase 6 computes it against a live graph —
 `overview_metrics.json` labels it as sourced.
 
-Rebuilds are deterministic: identical inputs produce byte-identical outputs (only
-`manifest.json`'s `built_at` differs — expect that one-line diff on any rebuild).
+Rebuilds are deterministic: identical inputs produce byte-identical outputs —
+`manifest.json`'s `built_at` and `git_sha` are the only fields that vary run-to-run
+(`git_sha` whenever HEAD moves between builds). `git_sha` is necessarily the *parent*
+commit: a package can't contain the sha of the commit that adds it, so the committed
+manifest always names the commit it was built from, not the one that carries it.
 
 ## Package layout (Phase 1)
 
@@ -54,15 +66,23 @@ Rebuilds are deterministic: identical inputs produce byte-identical outputs (onl
 ## Streamlit-Cloud contract
 
 The demo app never imports `src/nuscenes_data_engine`, `requests`, `torch`,
-`lancedb`, `neo4j`, or `duckdb` — enforced by an AST test
-(`tests/test_demo_app.py`) and by strict mypy (the app is inside the repo's mypy
-scope). Its full dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
+`lancedb`, `neo4j`, or `duckdb` — enforced by an AST test (`tests/test_demo_app.py`)
+that parses every `app/demo/*.py` file's imports and rejects those names; it's a
+contributor guardrail, not a sandbox (a dynamic `importlib` call would slip past it).
+Strict mypy also covers `app/demo` (see `[tool.mypy] files` in `pyproject.toml`) —
+that's real type-checking of the app code, not an import-policing mechanism. Its full
+dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
 (streamlit, pandas, pyarrow, pillow). Bare-venv smoke check:
 
 ```bash
 uv venv "$TMPDIR/demo-venv" --python 3.11
 VIRTUAL_ENV="$TMPDIR/demo-venv" uv pip install -r app/demo/requirements.txt
-cd app/demo && "$TMPDIR/demo-venv/bin/python" -c "import data, render; print('clean')" && cd ../..
+cd app/demo
+"$TMPDIR/demo-venv/bin/python" -c "import data, render; print('data/render import clean')"
+# views/ need a live Streamlit runtime to import (st.cache_data etc.), so the honest
+# static check there is that every file at least parses.
+"$TMPDIR/demo-venv/bin/python" -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('.').rglob('*.py')]; print('all files parse clean')"
+cd ../..
 rm -rf "$TMPDIR/demo-venv"
 ```
 

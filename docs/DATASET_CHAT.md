@@ -81,7 +81,7 @@ answer's steps in an expander.
 
 ## Tables the agent can query
 
-`samples` (204,894 camera keyframes), `annotations` (~1.1M projected 2D boxes),
+`samples` (204,894 camera keyframes), `annotations` (~1.0M projected 2D boxes),
 `availability` (file-integrity manifest), `labels` (5,000 Qwen2.5-VL scene
 labels from Phase 6b), `ego_pose`/`annotations_3d`/`instances` (Phase B 3D geometry),
 and `canbus` (Phase B CAN-bus ego dynamics — speed, steering, braking, `is_hard_braking`)

@@ -91,6 +91,12 @@ one so image-heavy later phases cannot creep past it silently.
   `nuscenes_data_engine` and `requests` are absent from `sys.modules`, plus a
   documented bare-venv smoke command in `docs/DEMO.md`.
 
+**Amendment (2026-08-14):** `results_table` was not built (Overview needed no
+table — its four headline results render as metric cards, and the two per-arm
+comparison tables are deferred to the pages that actually need them, Phases 3/7);
+`recorded_banner` was added instead (`render.py`), unused by Overview but there for
+Phase-8 (chat replay gallery) reuse.
+
 ## 4. Testing
 
 - Exporter unit tests on tmp fixtures: overview numbers derived (not literal),

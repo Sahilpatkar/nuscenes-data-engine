@@ -31,20 +31,35 @@ def render() -> None:
     flagship = metrics["flagship"]
     weak = results["weak_retention"]
     retention = weak["headline"]
+    # "Retention" is ambiguous: the weak-sup summaries also publish a *verifier*
+    # retention (fraction of candidate pseudo-labels the verifier kept — a different
+    # quantity, ~64% for the random arm). This card is the training-outcome quantity:
+    # how much of the GT-trained arm's mAP gain a weak-labeled arm captures.
+    retention_text = "n/a" if retention is None else f"{retention:.0%}"
     metric_cards(
         [
             ("Best night gain", f"+{results['best_night_delta']:.4f}"),
             ("CAN speed vs ego-motion", f"r = {metrics['can_speed_r']:.3f}"),
-            ("Weak-label retention", "n/a" if retention is None else f"{retention:.0%}"),
+            ("Weak-sup share of GT gain", retention_text),
             ("Graph = SQL flagship", f"{flagship['sql']} = {flagship['cypher']}"),
         ]
     )
-    other_pairs = ", ".join(arm for arm in weak["by_base_arm"] if arm != weak["headline_arm"])
+    other_pairs = ", ".join(
+        f"`{arm}` ({weak['by_base_arm'][arm]:.0%})"
+        for arm in weak["by_base_arm"]
+        if arm != weak["headline_arm"]
+    )
+    other_pairs_note = (
+        f"the {other_pairs} pair is carried in `demo_data/overview_metrics.json`; "
+        "the Weak Supervision page presents it in Phase 7."
+        if other_pairs
+        else "no other weak/GT pairs are in this build."
+    )
     st.caption(
         f"Best night arm: `{results['best_night_arm']}` · flagship Cypher twin "
         f"sourced from {flagship['cypher_source']} until the live-graph export lands. "
-        f"Weak retention shown for the `{weak['headline_arm']}` arm (documented 18% "
-        f"pair); the {other_pairs} pair(s) appear on the Weak Supervision page."
+        f"The card above is {retention_text} of the ground-truth mAP gain, for the "
+        f"`{weak['headline_arm']}` pair (the documented headline); {other_pairs_note}"
     )
     if hero_path().is_file():
         st.subheader("The model at work")
