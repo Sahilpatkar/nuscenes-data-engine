@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -17,15 +18,25 @@ from nuscenes_data_engine.demo import exporters
 
 logger = logging.getLogger("nuscenes_data_engine")
 
+# src/nuscenes_data_engine/demo/build.py -> repo root is three levels up.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _git_sha() -> str:
+    """The HEAD sha of this package's own repo, not whatever repo happens to be cwd.
+
+    A bare ``git rev-parse HEAD`` resolves against the process's current working
+    directory, which silently returns an unrelated repo's sha (or "unknown") if
+    ``demo build`` is ever invoked from inside a different git checkout.
+    """
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
         )
         return out.stdout.strip()
     except (OSError, subprocess.CalledProcessError):  # detached environments
@@ -45,6 +56,12 @@ def run_build(config_path: Path) -> dict[str, Any]:
     processed = Path(paths["processed_dir"])
     al_dir = Path(paths["active_learning_dir"])
     out_dir = Path(paths["out_dir"])
+    mlruns_dir = Path(paths["mlruns_dir"])
+
+    # The package is fully regenerated on every build; anything not produced by
+    # this run (a removed exporter's stale output, a leftover from a failed prior
+    # build) must not survive into the committed tree.
+    shutil.rmtree(out_dir, ignore_errors=True)
 
     metrics = exporters.export_overview(
         processed_dir=processed, al_dir=al_dir, out_dir=out_dir,
@@ -56,9 +73,9 @@ def run_build(config_path: Path) -> dict[str, Any]:
     al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir)
     weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir)
     hero_run = config["models"][config["hero"]["run"]]
+    hero_mosaic = config["hero"]["mosaic"]
     exporters.export_hero(
-        mlruns_dir=Path(paths["mlruns_dir"]), run_id=hero_run,
-        mosaic=config["hero"]["mosaic"], out_dir=out_dir,
+        mlruns_dir=mlruns_dir, run_id=hero_run, mosaic=hero_mosaic, out_dir=out_dir,
     )
 
     expected = config["flagship"]["expected_sql_count"]
@@ -83,12 +100,26 @@ def run_build(config_path: Path) -> dict[str, Any]:
             entry["rows"] = len(pd.read_parquet(path))
         outputs[str(path.relative_to(out_dir))] = entry
 
+    # Hash everything the build actually read, not just results.json: the
+    # processed parquets, every weak-sup summary, and the hero mosaic source —
+    # an unnoticed change to any of these silently changes the published numbers.
+    hero_src = (
+        mlruns_dir / "artifacts" / hero_run / "artifacts" / "ultralytics_run" / hero_mosaic
+    )
+    inputs: dict[str, str] = {
+        str(al_dir / "results.json"): _sha256(al_dir / "results.json"),
+        str(hero_src): _sha256(hero_src),
+    }
+    for name in exporters._PROCESSED_INPUTS:
+        path = processed / name
+        inputs[str(path)] = _sha256(path)
+    for path in sorted(al_dir.glob("*_pseudo_summary.json")):
+        inputs[str(path)] = _sha256(path)
+
     manifest = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "git_sha": _git_sha(),
-        "inputs": {
-            str(al_dir / "results.json"): _sha256(al_dir / "results.json"),
-        },
+        "inputs": inputs,
         "outputs": outputs,
         "validation": {
             "flagship_sql_count": metrics["flagship"]["sql"],

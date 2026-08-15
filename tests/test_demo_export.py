@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -233,6 +235,28 @@ def test_export_thumbs_unknown_token_raises(tmp_path: Path) -> None:
         )
 
 
+def test_export_thumbs_empty_token_list_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_thumbs
+
+    with pytest.raises(ValueError, match="empty token list"):
+        export_thumbs(
+            lancedb_path=tmp_path / "lancedb", table="frames",
+            tokens=[], out_dir=tmp_path / "demo_data",
+        )
+
+
+def test_export_thumbs_malformed_token_raises_value_error(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_thumbs
+
+    bad_token = "abc'); DROP TABLE frames;--"
+    with pytest.raises(ValueError, match="malformed tokens") as exc_info:
+        export_thumbs(
+            lancedb_path=tmp_path / "lancedb", table="frames",
+            tokens=["t1", bad_token], out_dir=tmp_path / "demo_data",
+        )
+    assert bad_token in str(exc_info.value)
+
+
 @pytest.fixture()
 def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
     al = tiny_inputs["al"]
@@ -308,3 +332,44 @@ def test_build_fails_over_size_budget(build_config: Path) -> None:
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="budget"):
         run_build(build_config)
+
+
+def test_git_sha_anchored_to_package_repo_not_cwd(tmp_path: Path) -> None:
+    """_git_sha() must anchor to this package's repo, not an unrelated repo at cwd."""
+    from nuscenes_data_engine.demo.build import _git_sha
+
+    repo_root = Path(__file__).resolve().parents[1]
+    expected = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        assert _git_sha() == expected
+    finally:
+        os.chdir(cwd)
+
+
+def test_build_wipes_stale_residue(build_config: Path) -> None:
+    """A leftover file from a removed exporter or failed prior build must not survive."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "stale.json").write_text("{}")
+
+    manifest = run_build(build_config)
+
+    assert not (out_dir / "stale.json").exists()
+    assert "stale.json" not in manifest["outputs"]
+
+
+def test_build_hashes_all_real_inputs(build_config: Path) -> None:
+    """manifest['inputs'] must cover everything the build actually reads, not just results.json."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+    assert len(manifest["inputs"]) >= 7
+    assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])

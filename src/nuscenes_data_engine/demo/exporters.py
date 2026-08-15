@@ -242,7 +242,18 @@ def export_thumbs(
     Reads the store directly (no SearchEngine, no encoder, no torch). Every
     requested token must exist — a silent miss would leave a demo page with a
     broken image, so missing tokens raise naming themselves.
+
+    Tokens are validated up front, before touching the store: they are
+    interpolated into a SQL ``IN (...)`` clause via ``repr()``, which breaks on
+    quotes (raising a bare ``RuntimeError`` from the query engine, not a
+    meaningful error) and is a syntax error for an empty list.
     """
+    if not tokens:
+        raise ValueError("export_thumbs: empty token list")
+    bad = [t for t in tokens if not t.replace("-", "").isalnum()]
+    if bad:
+        raise ValueError(f"export_thumbs: malformed tokens (expected hex-like): {bad[:5]}")
+
     import lancedb  # lazy: optional dependency, never needed by the demo app itself
 
     frames = (
