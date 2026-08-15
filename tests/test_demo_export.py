@@ -34,6 +34,7 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
             "sample_token": ["s1", "s2"],
             "has_canbus": [True, True],
             "can_vel_mps": [10.0, 5.0],
+            "can_speed_kmh": [36.0, 18.0],  # /3.6 == can_vel_mps here, by construction
             "is_hard_braking": [True, False],
         }
     ).to_parquet(processed / "canbus.parquet")
@@ -47,6 +48,16 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
                     "n_train_images": 100,
                     "overall": {"mAP50-95": 0.20},
                     "night": {"mAP50-95": 0.10},
+                },
+                "random": {
+                    "n_train_images": 115,
+                    "overall": {"mAP50-95": 0.21},
+                    "night": {"mAP50-95": 0.099},
+                },
+                "weak_random": {
+                    "n_train_images": 110,
+                    "overall": {"mAP50-95": 0.2018},
+                    "night": {"mAP50-95": 0.095},
                 },
                 "graph_rate_night": {
                     "n_train_images": 130,
@@ -82,14 +93,19 @@ def test_export_overview_derives_every_number(tmp_path: Path, tiny_inputs: dict[
     assert metrics["flagship"]["sql"] == 1
     assert metrics["flagship"]["cypher"] == 30
     assert metrics["flagship"]["cypher_source"] == "docs/GRAPH.md"
-    # CAN validation: corr of (10.0, 5.0) vs (10.1, 4.9) is ~1.0, derived not hardcoded
+    # CAN validation: corr of (can_speed_kmh/3.6 == 10.0, 5.0) vs (10.1, 4.9) is
+    # ~1.0, derived not hardcoded
     assert 0.99 <= metrics["can_speed_r"] <= 1.0
     # headline results derived from results.json
     assert metrics["results"]["best_night_arm"] == "graph_rate_night"
     assert metrics["results"]["best_night_delta"] == pytest.approx(0.0101, abs=1e-6)
-    assert metrics["results"]["weak_retention_of_gt_gain"] == pytest.approx(
-        (0.205 - 0.20) / (0.22 - 0.20), abs=1e-6
-    )
+    # weak-supervision retention: per-pair, with an attributed headline (the
+    # documented Overview headline is the weak_random/random pair, not whichever
+    # weak_ arm happens to be present)
+    weak_retention = metrics["results"]["weak_retention"]
+    assert weak_retention["headline_arm"] == "random"
+    assert weak_retention["headline"] == pytest.approx(0.18, abs=1e-6)
+    assert weak_retention["by_base_arm"]["graph_rate_night"] == pytest.approx(0.25, abs=1e-6)
 
 
 def test_export_overview_missing_input_raises(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
@@ -119,6 +135,24 @@ def test_export_al_results_reshapes_and_sorts(tmp_path: Path, tiny_inputs: dict[
     assert row["delta_night"] == pytest.approx(0.0101, abs=1e-6)
     baseline = df.set_index("arm").loc["baseline"]
     assert baseline["delta_overall"] == 0.0
+
+
+def test_export_al_results_missing_results_json_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    al = tmp_path / "active_learning"
+    al.mkdir()
+    with pytest.raises(ValueError, match=r"results\.json"):
+        export_al_results(al_dir=al, out_dir=tmp_path / "demo_data")
+
+
+def test_export_weaksup_empty_dir_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_weaksup
+
+    al = tmp_path / "active_learning"
+    al.mkdir()
+    with pytest.raises(ValueError, match=r"no \*_pseudo_summary\.json"):
+        export_weaksup(al_dir=al, out_dir=tmp_path / "demo_data")
 
 
 def test_export_weaksup_reads_summaries(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:

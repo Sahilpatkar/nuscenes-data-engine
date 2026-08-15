@@ -90,27 +90,55 @@ def export_overview(
         "objects_3d": _scalar(con, "SELECT count(*) FROM annotations_3d"),
         "canbus_rows": _scalar(con, "SELECT count(*) FROM canbus"),
     }
+    # docs/DATA.md's documented validation correlates the CAN vehicle_monitor
+    # wheel-speed stream (an independent modality from GT pose) against
+    # ego-pose-derived speed; `can_vel_mps` comes from the CAN pose/localization
+    # stream instead and is a weaker independence claim, even though it happens to
+    # round to the same 0.999 today. `WHERE c.has_canbus` is belt-and-braces here —
+    # corr() already skips NULL pairs, and only has_canbus=False rows have a NULL
+    # can_speed_kmh — but it documents the intent.
     can_speed_r = _scalar(
         con,
-        "SELECT corr(c.can_vel_mps, e.speed_mps) FROM canbus c "
+        "SELECT corr(c.can_speed_kmh / 3.6, e.speed_mps) FROM canbus c "
         "JOIN ego_pose e USING (sample_token) WHERE c.has_canbus",
     )
+    if can_speed_r is None:
+        raise ValueError("CAN speed correlation undefined — empty join?")
     flagship_sql = _scalar(con, FLAGSHIP_SQL)
 
     baseline = results["baseline"]["night"]["mAP50-95"]
     overall_baseline = results["baseline"]["overall"]["mAP50-95"]
+    # weak_ arms are excluded here: they are pseudo-label training runs, not
+    # independent night-targeting arms, so they can't win "best night gain". Note
+    # the margin is narrow — in the real data weak_graph_rate_night_gt is +0.0099
+    # against the winning graph_rate_night's +0.0101 — so a future results.json
+    # change flipping the winner is a real result change, not a bug here.
     night_deltas = {
         arm: entry["night"]["mAP50-95"] - baseline
         for arm, entry in results.items()
         if arm != "baseline" and not arm.startswith("weak_")
     }
     best_night_arm = max(night_deltas, key=lambda arm: night_deltas[arm])
-    weak_retention = None
-    if "weak_graph_rate_night" in results and "graph_rate_night" in results:
-        gt_gain = results["graph_rate_night"]["overall"]["mAP50-95"] - overall_baseline
-        weak_gain = results["weak_graph_rate_night"]["overall"]["mAP50-95"] - overall_baseline
+
+    # Per-pair weak-supervision retention (weak_<base> vs <base>, both vs baseline),
+    # keyed by the GT base arm. `_gt` arms (e.g. weak_random_gt) are a different,
+    # separately-documented comparison (GT training on the verifier-kept subset) and
+    # are excluded here. The Overview headline is *attributed*, not just the largest
+    # or most recent pair: docs/DEMO_PLAN.md and docs/ACTIVE_LEARNING.md's published
+    # 18% figure is specifically the weak_random/random pair — other pairs (e.g.
+    # weak_graph_rate_night/graph_rate_night, ~39% in the real data) are real but
+    # different results, and must never be silently swapped in as "the" headline.
+    weak_pairs: dict[str, float] = {}
+    for arm, entry in results.items():
+        if not arm.startswith("weak_") or arm.endswith("_gt"):
+            continue
+        base = arm.removeprefix("weak_")
+        if base not in results:
+            continue
+        gt_gain = results[base]["overall"]["mAP50-95"] - overall_baseline
         if gt_gain:
-            weak_retention = weak_gain / gt_gain
+            weak_gain = entry["overall"]["mAP50-95"] - overall_baseline
+            weak_pairs[base] = round(weak_gain / gt_gain, 4)
 
     metrics: dict[str, Any] = {
         "scale": scale,
@@ -123,9 +151,11 @@ def export_overview(
         "results": {
             "best_night_arm": best_night_arm,
             "best_night_delta": round(night_deltas[best_night_arm], 4),
-            "weak_retention_of_gt_gain": (
-                None if weak_retention is None else round(weak_retention, 4)
-            ),
+            "weak_retention": {
+                "headline_arm": "random",  # the documented 18% pair
+                "headline": weak_pairs.get("random"),
+                "by_base_arm": weak_pairs,
+            },
         },
     }
     _write_json(out_dir / "overview_metrics.json", metrics)
@@ -159,6 +189,13 @@ def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
 
     Arms without a summary are absent rather than an error — the demo shows what
     was actually run.
+
+    Phase-7 note: the documented 50%/32% loss decomposition (docs/ACTIVE_LEARNING.md)
+    needs a 3-way results.json comparison per base arm (e.g. random vs weak_random_gt
+    vs weak_random) that these per-arm summaries alone don't carry. The rejected-frame
+    GT-box mean (documented 7.61) is also not in the summaries — recompute it from the
+    arm's mined-token list minus its accepted tokens, joined to samples.parquet's
+    n_boxes per frame.
     """
     rows = []
     for path in sorted(al_dir.glob("*_pseudo_summary.json")):
