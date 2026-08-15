@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from nuscenes_data_engine.demo.exporters import export_overview
 
@@ -230,3 +231,80 @@ def test_export_thumbs_unknown_token_raises(tmp_path: Path) -> None:
             lancedb_path=tmp_path / "lancedb", table="frames",
             tokens=["t1", "ghost"], out_dir=tmp_path / "demo_data",
         )
+
+
+@pytest.fixture()
+def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
+    al = tiny_inputs["al"]
+    (al / "random_pseudo_summary.json").write_text(json.dumps({
+        "arm": "random", "n_candidates": 10, "n_accepted": 6, "retention": 0.6,
+        "n_boxes": 12, "mean_boxes_per_accepted_frame": 2.0,
+        "mean_gt_boxes_per_accepted_frame": 3.0,
+    }))
+    mlruns = tmp_path / "mlruns"
+    hero = mlruns / "artifacts" / "runX" / "artifacts" / "ultralytics_run"
+    hero.mkdir(parents=True)
+    (hero / "val_batch0_pred.jpg").write_bytes(b"\xff\xd8\xff\xe0hero")
+    config = {
+        "paths": {
+            "processed_dir": str(tiny_inputs["processed"]),
+            "active_learning_dir": str(al),
+            "mlruns_dir": str(mlruns),
+            "lancedb_path": str(tmp_path / "lancedb"),
+            "lancedb_table": "frames",
+            "out_dir": str(tmp_path / "demo_data"),
+        },
+        "models": {"baseline": "runX"},
+        "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
+        "budgets": {"max_package_mb": 100},
+        "flagship": {"expected_sql_count": 1, "cypher_count": 30,
+                     "cypher_source": "docs/GRAPH.md"},
+    }
+    path = tmp_path / "demo.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    on_disk = json.loads((out / "manifest.json").read_text())
+    assert on_disk == manifest
+    assert manifest["git_sha"]
+    assert manifest["outputs"]["overview_metrics.json"]["sha256"]
+    assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
+    assert manifest["validation"]["flagship_sql_count"] == 1
+    assert manifest["validation"]["package_mb"] < 1
+
+
+def test_build_is_deterministic(build_config: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    run_build(build_config)
+    first = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
+    run_build(build_config)
+    second = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
+    assert first == second                    # byte-stable outputs (manifest has built_at)
+
+
+def test_build_fails_on_wrong_flagship_count(build_config: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    config["flagship"]["expected_sql_count"] = 30      # tiny fixture yields 1, not 30
+    build_config.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="flagship"):
+        run_build(build_config)
+
+
+def test_build_fails_over_size_budget(build_config: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    config["budgets"]["max_package_mb"] = 0
+    build_config.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="budget"):
+        run_build(build_config)
