@@ -1001,5 +1001,20 @@ def graph_stats() -> None:
         connection.close(driver)
 
 
+demo_app = typer.Typer(no_args_is_help=True, help="Public-demo artifact builder.")
+app.add_typer(demo_app, name="demo")
+
+
+@demo_app.command("build")
+def demo_build(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Build and validate the committed demo_data/ package from local artifacts."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(config)
+    logger.info("demo package built: %s", manifest["validation"])
+
+
 if __name__ == "__main__":
     app()

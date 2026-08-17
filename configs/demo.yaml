@@ -1,0 +1,25 @@
+# Demo artifact-builder parameters (docs/superpowers/specs/2026-08-12-demo-phase1-design.md).
+# The single place demo curation is parameterized; later phases add their sections.
+paths:
+  processed_dir: data/processed
+  active_learning_dir: data/active_learning
+  mlruns_dir: mlruns
+  lancedb_path: data/lancedb
+  lancedb_table: frames
+  out_dir: demo_data
+
+models:              # MLflow run ids (weights + artifacts live under mlruns/artifacts/<id>/)
+  baseline: e465844a6b0249a3bc08ae894e530b22
+  graph_rate_night: b7e251d4fb624097bea3d4e9e4a80c62
+
+hero:
+  run: baseline      # key into models
+  mosaic: val_batch0_pred.jpg
+
+budgets:
+  max_package_mb: 100
+
+flagship:
+  expected_sql_count: 30
+  cypher_count: 30                 # sourced, not computed, until Phase 6
+  cypher_source: docs/GRAPH.md

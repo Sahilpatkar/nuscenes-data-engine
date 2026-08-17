@@ -23,7 +23,7 @@ the real work in AV/robotics ML is not the model — it is:
 - keeping the whole thing **reproducible, tracked, and deployable** by one person.
 
 The objective of this project is to build that loop end-to-end at a realistic scale
-(204,894 images, ~1.1M boxes) with production-grade engineering practices — and to
+(204,894 images, ~1.0M boxes) with production-grade engineering practices — and to
 *measure* each step honestly, including the experiments that produced negative
 results.
 
@@ -78,7 +78,7 @@ with `importorskip`, so the same suite runs everywhere.
 
 **What:** Walk `scene → sample → sample_data` for all 6 cameras (850 scenes, 34,149
 keyframes → **204,894 images**), project each 3D box to a 2D axis-aligned box
-(**~1.1M boxes**), and write two columnar Parquet tables (`samples`,
+(**~1.0M boxes**), and write two columnar Parquet tables (`samples`,
 `annotations`) plus a file-integrity manifest (`availability`). Validate with
 Great Expectations; version with DVC against a MinIO remote.
 

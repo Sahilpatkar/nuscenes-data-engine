@@ -40,7 +40,7 @@ num_lidar_pts, num_radar_pts}`, `HAS_HAZARD`, `HAS_CONDITION`,
 `CO_OCCURS_WITH {n_frames}` (per canonical category-name order), `SIMILAR_TO {score, rank}`
 (SigLIP kNN within one camera channel).
 
-Annotations are **not** nodes: the ~1.1M boxes collapse to one `CONTAINS` edge per (frame,
+Annotations are **not** nodes: the ~1.0M boxes collapse to one `CONTAINS` edge per (frame,
 category) with the box stats as edge aggregates — the graph stays about relationships, not
 individual boxes.
 

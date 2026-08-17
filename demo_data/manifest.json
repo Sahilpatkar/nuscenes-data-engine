@@ -1,0 +1,41 @@
+{
+  "built_at": "2026-08-14T20:36:58-0700",
+  "git_sha": "98981c061b29c2eccc6226b515033641c174cd00",
+  "inputs": {
+    "data/active_learning/graph_rate_night_pseudo_summary.json": "dc0f3637a8785647addabbee8123823f14014c99959ea0590ad4078678f911ab",
+    "data/active_learning/random_pseudo_summary.json": "aaac4d750f3bce819c92ba2949a5d34c607d65b6f1ae46d8a0e395c7be042e0e",
+    "data/active_learning/results.json": "b13f8fd8678ebdc9ced40b060865aa799ce141175ad54ae853987bf5829fb756",
+    "data/processed/annotations.parquet": "96889b4976b7520cb267e790254a4e43cce4f643a1f839f6a46dc938c6e92646",
+    "data/processed/annotations_3d.parquet": "2c4c470b1ff8316f2bcd85c7d52ccb451da8de450e569728127061f46652e93e",
+    "data/processed/canbus.parquet": "95eaa717490aa9a75a84630f4ddea0d6e1b5bd6ed04c37637e1d318c43373bd9",
+    "data/processed/ego_pose.parquet": "2bdb7c532658176818bb99dba2d0c310a895ff59a76edc03cd3a9c989599b158",
+    "data/processed/samples.parquet": "beca6bd40334ba10468b2acb1f5b30cee42d1d963c4dff6d6a6d7252b01a2016",
+    "mlruns/artifacts/e465844a6b0249a3bc08ae894e530b22/artifacts/ultralytics_run/val_batch0_pred.jpg": "6701a2371a159b0abb01c284d6a0b32da230a5a91d58f5e9488c799c3cf2b9f1"
+  },
+  "outputs": {
+    "active_learning_results.parquet": {
+      "bytes": 4763,
+      "rows": 13,
+      "sha256": "4b7c967a6cb49a41574ec72d7267df08ef1823fd156e9c460e8e09c4a4f292f2"
+    },
+    "overview_metrics.json": {
+      "bytes": 509,
+      "sha256": "4aa5a1589b995d09d7259526a178b27f7bba05d4964ffc7ace92819c67f22ac7"
+    },
+    "sample_frames/hero.jpg": {
+      "bytes": 476323,
+      "sha256": "6701a2371a159b0abb01c284d6a0b32da230a5a91d58f5e9488c799c3cf2b9f1"
+    },
+    "weak_supervision_results.parquet": {
+      "bytes": 5069,
+      "rows": 2,
+      "sha256": "e801316d08dadd8e29fb592af8c9aab3c0759981c6cd2d3fc5bc9401deb4fc16"
+    }
+  },
+  "validation": {
+    "flagship_sql_count": 30,
+    "n_arms": 13,
+    "n_weak_arms": 2,
+    "package_mb": 0.49
+  }
+}
