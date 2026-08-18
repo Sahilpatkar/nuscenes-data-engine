@@ -23,3 +23,21 @@ flagship:
   expected_sql_count: 30
   cypher_count: 30                 # sourced, not computed, until Phase 6
   cypher_source: docs/GRAPH.md
+
+curation:
+  staging_dir: data/demo_curation
+  quotas:
+    night_failure: 60
+    day_failure: 40
+    hard_braking: 40
+    al_selected: 30
+    weak_accepted: 20
+    weak_rejected: 20
+    clean_success: 20
+    semantic: 20
+  semantic_queries:
+    - foggy road with heavy lens glare
+    - crowded nighttime pedestrian crossing
+  weak_arm: graph_rate_night
+  al_arm: graph_rate_night
+  crop_size: [960, 540]
