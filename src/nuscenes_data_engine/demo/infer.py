@@ -6,7 +6,13 @@ injected model, box-matches its predictions against ground truth with
 ``match_frame_boxes`` (the same greedy semantics ``active_learning/sweep.py`` uses
 for ``failures.parquet``), and writes ``predictions.parquet`` + ``gt_boxes.parquet``.
 ``frame_manifest.parquet`` is rewritten in place with ``fixes_fn_vs_<a>_<b>``
-exemplar columns for every ordered model pair.
+exemplar columns for every ordered model pair, plus one ``n_preds_<model>`` nullable-
+Int64 column per configured model: the raw prediction count (incl. low_conf) for
+``val`` rows, NA for ``train_pool`` rows never evaluated. Zero is a legitimate,
+recorded finding ("ran and found nothing" — exactly a total-miss frame the demo
+wants to show); NA means the model never ran on that token at all. This distinction
+is what ``demo build``'s val-coverage validation checks — ``predictions.parquet``
+alone can't tell "found nothing" from "never ran" apart, since both write zero rows.
 
 Visibility filter (2026-08-18 correction): ``active_learning/sweep.py`` filters GT to
 ``visibility_token >= visibility_min`` (``configs/active_learning.yaml``'s
@@ -173,6 +179,12 @@ def run_infer(
     prediction_rows: list[dict[str, Any]] = []
     # (token, model_a, model_b) -> bool: model_a had an unmatched GT that model_b matched.
     fixes: dict[str, dict[tuple[str, str], bool]] = {}
+    # token -> {model: raw prediction count, incl. low_conf}. Recorded even when 0 —
+    # "ran and found nothing" is a legitimate finding (exactly the total-miss frame
+    # the demo wants to show) and must read differently on the manifest than "never
+    # ran" (NA), since predictions.parquet has zero rows for either case and can't
+    # tell them apart on its own.
+    n_preds: dict[str, dict[str, int]] = {}
 
     for token in val_tokens:
         image_path = image_paths[token]
@@ -197,6 +209,7 @@ def run_infer(
             )
             gt_matched_by_model[model_name] = matches.gt_matched
             gt_all.loc[gt_index, f"matched_{model_name}"] = matches.gt_matched
+            n_preds.setdefault(token, {})[model_name] = len(pred_boxes)
 
             for i in range(len(pred_boxes)):
                 gt_row = int(matches.pred_matched_gt[i])
@@ -232,23 +245,34 @@ def run_infer(
     gt_out_columns = [*_GT_COLUMNS, "below_visibility_min", *(f"matched_{m}" for m in model_names)]
     gt_all[gt_out_columns].to_parquet(staging_dir / "gt_boxes.parquet")
 
-    # Drop any exemplar columns from a PRIOR run's model roster before adding this
-    # run's — rerunning with a different model set must not ship stale
-    # fixes_fn_vs_<a>_<b> pairs alongside the current ones. Column names are built by
-    # joining against model_names (not parsed back via string-splitting), since model
-    # names may themselves contain underscores (e.g. "graph_rate_night").
+    # Drop any exemplar/coverage columns from a PRIOR run's model roster before
+    # adding this run's — rerunning with a different model set must not ship stale
+    # fixes_fn_vs_<a>_<b> or n_preds_<model> columns alongside the current ones.
+    # Column names are built by joining against model_names (not parsed back via
+    # string-splitting), since model names may themselves contain underscores (e.g.
+    # "graph_rate_night").
     manifest = manifest.drop(
-        columns=[c for c in manifest.columns if c.startswith("fixes_fn_vs_")]
+        columns=[
+            c for c in manifest.columns
+            if c.startswith("fixes_fn_vs_") or c.startswith("n_preds_")
+        ]
     )
     pair_columns = [f"fixes_fn_vs_{a}_{b}" for a in model_names for b in model_names if a != b]
     for col in pair_columns:
         manifest[col] = pd.array([pd.NA] * len(manifest), dtype="boolean")
+    n_preds_columns = [f"n_preds_{m}" for m in model_names]
+    for col in n_preds_columns:
+        manifest[col] = pd.array([pd.NA] * len(manifest), dtype="Int64")
     for idx, row in manifest.iterrows():
-        token_fixes = fixes.get(row["sample_data_token"])
-        if token_fixes is None:
-            continue
-        for (model_a, model_b), value in token_fixes.items():
-            manifest.at[idx, f"fixes_fn_vs_{model_a}_{model_b}"] = value
+        token = row["sample_data_token"]
+        token_fixes = fixes.get(token)
+        if token_fixes is not None:
+            for (model_a, model_b), value in token_fixes.items():
+                manifest.at[idx, f"fixes_fn_vs_{model_a}_{model_b}"] = value
+        token_counts = n_preds.get(token)
+        if token_counts is not None:
+            for model_name, count in token_counts.items():
+                manifest.at[idx, f"n_preds_{model_name}"] = count
     manifest.to_parquet(staging_dir / "frame_manifest.parquet")
 
     logger.info(

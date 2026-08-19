@@ -715,6 +715,7 @@ def test_run_infer_drops_stale_exemplar_columns_on_rerun(tmp_path: Path) -> None
     )
     first_manifest = pd.read_parquet(staging / "frame_manifest.parquet")
     assert "fixes_fn_vs_old_a_old_b" in first_manifest.columns
+    assert "n_preds_old_a" in first_manifest.columns
 
     # Second run over the same staging dir, single model -> zero pair columns.
     run_infer(
@@ -725,6 +726,66 @@ def test_run_infer_drops_stale_exemplar_columns_on_rerun(tmp_path: Path) -> None
     second_manifest = pd.read_parquet(staging / "frame_manifest.parquet")
     stale = [c for c in second_manifest.columns if c.startswith("fixes_fn_vs_")]
     assert stale == []
+    # a PRIOR run's n_preds_<model> columns must not survive a rerun with a
+    # different model roster either -- same staleness class as fixes_fn_vs_<a>_<b>.
+    stale_n_preds = [c for c in second_manifest.columns if c.startswith("n_preds_")]
+    assert stale_n_preds == ["n_preds_new_solo"]
+
+
+def test_run_infer_records_n_preds_including_explicit_zero(tmp_path: Path) -> None:
+    """Task-5 fix: 'ran and found nothing' (0 predictions) is a legitimate finding —
+    exactly the kind of total-miss frame the demo wants to show — and must be
+    distinguished from 'never ran' (NA). build.py's val-coverage validation keys off
+    this n_preds_<model> column, not off predictions.parquet row presence, precisely
+    because a real zero-prediction model produces zero prediction.parquet rows too,
+    indistinguishable from a model that was never configured."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "v0.jpg")
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "t1.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["v0", "t1"], "split": ["val", "train_pool"],
+        "filename": ["images/v0.jpg", "images/t1.jpg"],
+        "curation_buckets": [["night_failure"], ["weak_accepted"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["pedestrian"],
+        "x_min": [100.0], "y_min": [100.0], "x_max": [200.0], "y_max": [300.0],
+        "visibility_token": ["4"],
+    })
+
+    import numpy as np
+
+    def miss(image_path: Path) -> dict:
+        return {"boxes": np.zeros((0, 4)), "conf": np.zeros(0), "classes": []}
+
+    def hit(image_path: Path) -> dict:
+        return {
+            "boxes": np.array([[100.0, 100.0, 200.0, 300.0]]),
+            "conf": np.array([0.9]),
+            "classes": ["pedestrian"],
+        }
+
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"baseline": miss, "champion": hit},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    manifest = pd.read_parquet(staging / "frame_manifest.parquet")
+    by_token = manifest.set_index("sample_data_token")
+    assert by_token.loc["v0", "n_preds_baseline"] == 0     # ran, found nothing
+    assert by_token.loc["v0", "n_preds_champion"] == 1
+    assert str(manifest["n_preds_baseline"].dtype) == "Int64"
+    assert str(manifest["n_preds_champion"].dtype) == "Int64"
+    # train_pool: no model ever ran over it -- NA, not zero.
+    assert pd.isna(by_token.loc["t1", "n_preds_baseline"])
+    assert pd.isna(by_token.loc["t1", "n_preds_champion"])
 
 
 def test_run_infer_empty_predictions_has_stable_dtypes(tmp_path: Path) -> None:

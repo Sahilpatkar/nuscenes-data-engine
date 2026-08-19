@@ -555,6 +555,7 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
     pd.DataFrame({
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([1], dtype="Int64"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
@@ -580,6 +581,9 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
 
 
 def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) -> None:
+    """The never-ran case, column entirely absent: frame_manifest.parquet carries no
+    n_preds_baseline column at all (demo infer never ran with this model) -- must
+    fail loudly, not be conflated with a legitimate zero-prediction finding."""
     from nuscenes_data_engine.demo.build import run_build
 
     config = yaml.safe_load(build_config.read_text())
@@ -588,6 +592,7 @@ def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) 
     pd.DataFrame({
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
+        # no n_preds_baseline column at all
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame(columns=["sample_data_token", "model", "category_group", "x_min",
                           "y_min", "x_max", "y_max", "conf", "status",
@@ -599,6 +604,63 @@ def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) 
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     with pytest.raises(ValueError, match="predictions"):
         run_build(build_config)
+
+
+def test_build_fails_when_val_token_has_na_n_preds(build_config: Path) -> None:
+    """The never-ran case, column present but NA: distinct code path from the column
+    being entirely absent (a model dropped from a later infer run, or leftover
+    NA from a rerun with a different roster) -- must still fail loudly."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([pd.NA], dtype="Int64"),
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame(columns=["sample_data_token", "model", "category_group", "x_min",
+                          "y_min", "x_max", "y_max", "conf", "status",
+                          "matched_annotation_token"]).to_parquet(
+        staging / "predictions.parquet")
+    pd.DataFrame(columns=["annotation_token", "sample_data_token", "category_group",
+                          "x_min", "y_min", "x_max", "y_max"]).to_parquet(
+        staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    with pytest.raises(ValueError, match="predictions"):
+        run_build(build_config)
+
+
+def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Path) -> None:
+    """Task-5 fix: 'ran and found nothing' (n_preds_<model> == 0) is legitimate
+    coverage, not a validation failure -- real Task-5 case: baseline and
+    graph_rate_night both found zero boxes on a genuine total-miss frame, and the
+    old predictions.parquet-row-presence check couldn't tell that apart from
+    'never ran', wrongly failing the build on a token the demo actually wants."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([0], dtype="Int64"),
+    }).to_parquet(staging / "frame_manifest.parquet")
+    # baseline ran and found nothing on v0 -- predictions.parquet has zero rows for
+    # it, same as a model that never ran would; n_preds is what disambiguates.
+    pd.DataFrame(columns=["sample_data_token", "model", "category_group", "x_min",
+                          "y_min", "x_max", "y_max", "conf", "status",
+                          "matched_annotation_token"]).to_parquet(
+        staging / "predictions.parquet")
+    pd.DataFrame(columns=["annotation_token", "sample_data_token", "category_group",
+                          "x_min", "y_min", "x_max", "y_max"]).to_parquet(
+        staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["curation"] == "included"
 
 
 def test_build_raises_named_error_on_partial_curation_staging(build_config: Path) -> None:
@@ -639,6 +701,7 @@ def test_build_tolerates_a_corrupt_lancedb_store(
     pd.DataFrame({
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([1], dtype="Int64"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],

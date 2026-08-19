@@ -66,8 +66,9 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     unusable, e.g. no valid table inside — none of this module's test fixtures carry
     a real store, so full coverage of the export itself is the Task 5 operational
     run), and two invariants are validated before the copy is trusted: every ``val``
-    token has predictions from every configured model, and every curated token has
-    at least a crop or a thumbnail to render.
+    token has RECORDED coverage (``n_preds_<model>`` not-NA — zero predictions counts
+    as coverage, only "never ran" doesn't) from every configured model, and every
+    curated token has at least a crop or a thumbnail to render.
     """
     curation_cfg = config.get("curation")
     if not curation_cfg:
@@ -103,7 +104,6 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
 
     for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
         shutil.copy2(staging_dir / name, out_dir / name)
-    predictions = pd.read_parquet(out_dir / "predictions.parquet")
 
     crops_dest = out_dir / "sample_frames" / "crops"
     crops_dest.mkdir(parents=True, exist_ok=True)
@@ -139,14 +139,20 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
             lancedb_path,
         )
 
+    # Coverage is read off frame_manifest's n_preds_<model> columns, not off
+    # predictions.parquet row presence: a model that ran and found nothing writes
+    # ZERO prediction rows, which is indistinguishable from "never ran" by row count
+    # alone (Task 5's real run hit this: baseline and graph_rate_night both found
+    # zero boxes on a genuine total-miss frame). n_preds_<model> disambiguates —
+    # 0 is a recorded finding, NA (or the column being absent entirely, e.g. a model
+    # dropped between infer runs) is "never ran".
     model_names = sorted(config["models"])
-    have_predictions = set(
-        zip(predictions["sample_data_token"], predictions["model"], strict=True)
-    )
-    val_tokens = manifest.loc[manifest["split"] == "val", "sample_data_token"]
-    for token in val_tokens:
+    val_rows = manifest.loc[manifest["split"] == "val"].set_index("sample_data_token")
+    for token in val_rows.index:
         for model_name in model_names:
-            if (token, model_name) not in have_predictions:
+            col = f"n_preds_{model_name}"
+            ran = col in val_rows.columns and pd.notna(val_rows.loc[token, col])
+            if not ran:
                 raise ValueError(
                     f"demo build: val token {token!r} has no predictions for model "
                     f"{model_name!r} — did `demo infer` run with every configured model?"
