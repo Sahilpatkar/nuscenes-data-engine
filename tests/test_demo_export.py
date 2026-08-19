@@ -369,31 +369,15 @@ def _stage_and_pick_hero(config_path: Path, *, token: str = "v0") -> dict[str, A
 def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
     # Production shape: a {run, imgsz} mapping (configs/demo.yaml since the Task 3
     # review round) -- the shape every other fixture in this module now exercises.
-    # The flat run-id-string legacy shape gets its own dedicated coverage in
-    # test_build_accepts_legacy_flat_model_shape below.
+    # (The flat run-id-string legacy shape's dedicated coverage,
+    # test_build_accepts_legacy_flat_model_shape, was deleted in the Phase 3 quality
+    # round: its subject -- run_build's hero accessor resolving config["models"] --
+    # no longer exists, since the Phase 3 hero flow reads configs/demo.yaml
+    # hero.token instead. _include_curation's val-coverage check only iterates
+    # config["models"] keys, which is shape-agnostic already.)
     return _write_demo_config(
         tmp_path, tiny_inputs, models={"baseline": {"run": "runX", "imgsz": 640}}
     )
-
-
-def test_build_accepts_legacy_flat_model_shape(
-    tmp_path: Path, tiny_inputs: dict[str, Path]
-) -> None:
-    """Carried review item: ``models:`` entries may still be a flat run-id string
-    (the shape every fixture used before the Task 3 review round introduced
-    ``{run, imgsz}``) -- ``_include_curation``'s val-coverage check iterates
-    ``config["models"]`` keys, which works identically for either value shape, and
-    the Phase 3 hero flow no longer reads ``config["models"]`` at all -- so this
-    just needs to confirm a build with the legacy shape still succeeds end to end.
-    """
-    from nuscenes_data_engine.demo.build import run_build
-
-    config_path = _write_demo_config(tmp_path, tiny_inputs, models={"baseline": "runX"})
-    config = _stage_and_pick_hero(config_path)
-    manifest = run_build(config_path)
-    out = Path(config["paths"]["out_dir"])
-    assert (out / "sample_frames" / "hero.jpg").is_file()
-    assert manifest["validation"]["flagship_sql_count"] == 1
 
 
 def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> None:
@@ -568,12 +552,16 @@ def test_build_fails_when_weak_retention_headline_missing(build_config: Path) ->
 
 
 def test_build_hashes_all_real_inputs(build_config: Path) -> None:
-    """manifest['inputs'] must cover everything the build actually reads, not just results.json."""
+    """manifest['inputs'] must cover everything the build actually reads, not just
+    results.json. Exact composition for build_config + _stage_and_pick_hero: 1
+    (active_learning_dir/results.json) + 5 (exporters.PROCESSED_INPUTS: samples/
+    annotations/annotations_3d/canbus/ego_pose) + 1 (random_pseudo_summary.json) + 3
+    (staged frame_manifest/gt_boxes/predictions.parquet, curation included) = 10."""
     from nuscenes_data_engine.demo.build import run_build
 
     _stage_and_pick_hero(build_config)
     manifest = run_build(build_config)
-    assert len(manifest["inputs"]) >= 7
+    assert len(manifest["inputs"]) == 10
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
 
 
@@ -861,6 +849,21 @@ def test_size_bucket_boundaries_exact() -> None:
     assert _size_bucket(96.0 * 96.0) == "large"
 
 
+def test_size_bucket_rejects_degenerate_area() -> None:
+    """A NaN or negative box area is corrupt data (e.g. x_max < x_min upstream), not
+    a legitimate "large" or silently-computed "small" bucket -- it must fail loudly
+    naming the bad value, not fall through the < comparisons (NaN compares False to
+    everything, which would otherwise silently fall through to "large")."""
+    import math
+
+    from nuscenes_data_engine.demo.build import _size_bucket
+
+    with pytest.raises(ValueError, match="degenerate box area"):
+        _size_bucket(math.nan)
+    with pytest.raises(ValueError, match="degenerate box area"):
+        _size_bucket(-1.0)
+
+
 def test_build_hero_from_token_copies_crop_and_records_token(build_config: Path) -> None:
     import json as _json
 
@@ -904,3 +907,42 @@ def test_build_hero_token_without_curation_fails_loudly(build_config: Path) -> N
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="hero"):
         run_build(build_config)
+def test_build_raises_on_annotation_token_join_fanout(build_config: Path) -> None:
+    """A duplicate annotation_token in annotations_3d would silently fan a single
+    staged gt_boxes row out into two published rows via the left join -- caught as a
+    row-count mismatch between the staged and enriched frames, not shipped quietly."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    processed = Path(config["paths"]["processed_dir"])
+    existing = pd.read_parquet(processed / "annotations_3d.parquet")
+    # Two rows both claiming annotation_token "a1" -- _stage_minimal_curation's
+    # gt_boxes has exactly one "a1" row, so the join fans it out to two.
+    dup = pd.DataFrame({
+        "annotation_token": ["a1", "a1"],
+        "distance_to_ego_m": [9.9, 10.1],
+    })
+    pd.concat([existing, dup], ignore_index=True).to_parquet(
+        processed / "annotations_3d.parquet"
+    )
+
+    with pytest.raises(ValueError, match="fanout"):
+        run_build(build_config)
+
+
+def test_build_gt_boxes_transform_leaves_staging_untouched(build_config: Path) -> None:
+    """Transform-on-copy (Task 1): the staged gt_boxes.parquet is read to derive the
+    published copy but must not itself be modified on disk -- and since it (along
+    with the other two staging parquets) is what the build actually read, all three
+    must appear in manifest['inputs']."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    before = (staging / "gt_boxes.parquet").read_bytes()
+
+    manifest = run_build(build_config)
+
+    assert (staging / "gt_boxes.parquet").read_bytes() == before
+    hashed_names = {Path(key).name for key in manifest["inputs"]}
+    assert {"frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"} <= hashed_names

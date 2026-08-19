@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -62,41 +61,71 @@ _MIN_LABEL_WIDTH_PX = 24
 _XYXY = tuple[float, float, float, float]
 
 
-def _draw_dashed_segment(
-    draw: ImageDraw.ImageDraw, start: tuple[float, float], end: tuple[float, float], style: BoxStyle
+def _draw_dashed_edge(
+    draw: ImageDraw.ImageDraw,
+    *,
+    axis: str,
+    fixed: float,
+    start: float,
+    end: float,
+    style: BoxStyle,
+    inward: int,
 ) -> None:
-    """Walk one straight edge in ``style.dash``-length segments with equal gaps."""
-    (x0, y0), (x1, y1) = start, end
-    length = math.hypot(x1 - x0, y1 - y0)
-    if length == 0 or style.dash is None:
+    """Walk one straight, axis-aligned edge in ``style.dash``-length segments with
+    equal gaps, each "on" segment drawn as a thin FILLED RECTANGLE rather than a
+    ``draw.line`` stroke.
+
+    ``draw.rectangle(..., width=W)`` insets its stroke INWARD from the given
+    coordinates by exactly W px (verified against PIL 12: a width-W edge occupies
+    pixels [edge, edge + W - 1] toward the box interior). ``draw.line(..., width=W)``
+    does NOT behave as a simple centered or fixed-offset version of that: for even
+    W its thickening is DIRECTION-DEPENDENT (a vertical width-2 line from (x,10) to
+    (x,20) covers columns [x, x+1]; the same line reversed, (x,20) to (x,10), covers
+    [x-1, x]) -- verified empirically, and it breaks any single fixed per-edge
+    offset, since two of our four edges are necessarily walked in the "reversed"
+    direction relative to the other two. Building each dash segment as an explicit
+    filled rectangle sidesteps the whole issue: it has the same well-defined inward
+    inset as ``draw.rectangle`` by construction, regardless of which direction the
+    edge is walked in.
+
+    ``axis``: "x" for a horizontal edge (top/bottom), "y" for a vertical edge (left/
+    right). ``fixed``: the edge's constant coordinate (e.g. y_min for a top edge).
+    ``start``/``end``: the varying coordinate's range (start < end). ``inward``: +1
+    or -1, the direction (in the *other* axis) that grows into the box interior.
+    """
+    length = end - start
+    if length <= 0 or style.dash is None:
         return
-    ux, uy = (x1 - x0) / length, (y1 - y0) / length
+    lo, hi = (fixed, fixed + style.width - 1) if inward > 0 else (fixed - style.width + 1, fixed)
     pos, on = 0.0, True
     while pos < length:
         seg_end = min(pos + style.dash, length)
         if on:
-            start_px = (x0 + ux * pos, y0 + uy * pos)
-            end_px = (x0 + ux * seg_end, y0 + uy * seg_end)
-            draw.line([start_px, end_px], fill=style.color, width=style.width)
+            box = (
+                (start + pos, lo, start + seg_end, hi)
+                if axis == "x"
+                else (lo, start + pos, hi, start + seg_end)
+            )
+            draw.rectangle(box, fill=style.color)
         pos = seg_end
         on = not on
 
 
 def _draw_rect(draw: ImageDraw.ImageDraw, xyxy: _XYXY, style: BoxStyle) -> None:
     """Draw one box outline: a solid rectangle, or (when ``style.dash`` is set) each
-    edge walked as dashed/dotted segments."""
+    of its four edges as dashed/dotted segments (see ``_draw_dashed_edge`` for why
+    those segments are filled rectangles, not ``draw.line`` strokes) -- inset inward
+    exactly like ``draw.rectangle`` does, so a dashed (FN) box and a solid (GT) box
+    at identical coordinates occupy the same pixels.
+    """
     x_min, y_min, x_max, y_max = xyxy
     if style.dash is None:
         draw.rectangle([x_min, y_min, x_max, y_max], outline=style.color, width=style.width)
         return
-    edges = (
-        ((x_min, y_min), (x_max, y_min)),  # top
-        ((x_max, y_min), (x_max, y_max)),  # right
-        ((x_max, y_max), (x_min, y_max)),  # bottom
-        ((x_min, y_max), (x_min, y_min)),  # left
-    )
-    for edge_start, edge_end in edges:
-        _draw_dashed_segment(draw, edge_start, edge_end, style)
+    _draw_dashed_edge(draw, axis="x", fixed=y_min, start=x_min, end=x_max, style=style, inward=1)
+    _draw_dashed_edge(draw, axis="x", fixed=y_max, start=x_min, end=x_max, style=style, inward=-1)
+    _draw_dashed_edge(draw, axis="y", fixed=x_min, start=y_min, end=y_max, style=style, inward=1)
+    _draw_dashed_edge(draw, axis="y", fixed=x_max, start=y_min, end=y_max, style=style, inward=-1)
 
 
 def _draw_label(draw: ImageDraw.ImageDraw, xyxy: _XYXY, text: str, style: BoxStyle) -> None:
@@ -118,9 +147,12 @@ def draw_overlay(
 
     Boxes arrive in native 1600x900 coords; ``scale`` maps them onto this image
     (0.6 for crops, 0.16 for thumbs). ``gt_boxes`` needs x_min..y_max,
-    category_group, matched (bool: unmatched renders as the FN style);
-    ``predictions`` needs x_min..y_max, category_group, conf, status.
-    ``mode``: "gt" | "pred" | "overlay". The input image is never mutated.
+    category_group, matched (nullable bool: False renders as the FN style, NA
+    renders as plain GT -- "not evaluated" is not the same claim as "missed");
+    ``predictions`` needs x_min..y_max, category_group, conf, status (one of
+    "tp"/"fp"/"low_conf" -- anything else raises ValueError).
+    ``mode``: "gt" | "pred" | "overlay", else raises ValueError. The input image is
+    never mutated.
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"draw_overlay: unknown mode {mode!r} — expected one of {_VALID_MODES}")
@@ -130,13 +162,23 @@ def draw_overlay(
 
     if mode in ("gt", "overlay"):
         for row in gt_boxes.itertuples(index=False):
-            style = STYLE_GT if bool(row.matched) else STYLE_FN
+            # matched is a nullable boolean (matched_<model> upstream): NA means "not
+            # evaluated" (e.g. a model that hasn't run against this frame yet), not
+            # "unmatched" -- rendering it as an FN would paint an unknown as a miss.
+            # Only an explicit False is a false negative.
+            matched = row.matched
+            style = STYLE_GT if (pd.isna(matched) or matched) else STYLE_FN
             xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
             _draw_rect(draw, xyxy, style)
             _draw_label(draw, xyxy, str(row.category_group), style)
 
     if mode in ("pred", "overlay"):
         for row in predictions.itertuples(index=False):
+            if row.status not in _PRED_STYLES:
+                raise ValueError(
+                    f"draw_overlay: unknown prediction status {row.status!r} — "
+                    f"expected one of {sorted(_PRED_STYLES)}"
+                )
             style = _PRED_STYLES[row.status]
             xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
             _draw_rect(draw, xyxy, style)

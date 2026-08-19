@@ -41,9 +41,19 @@ def _require(path: Path) -> Path:
     return path
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` as sorted, indented JSON, creating parent dirs as needed.
+
+    Public since Phase 3: ``build.py`` reuses it to patch ``hero_token`` into
+    overview_metrics.json after curation/hero resolution, which runs after this
+    module's own export_overview call has already written the file once.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+# Kept for any caller still referencing the pre-Phase-3 private name.
+_write_json = write_json
 
 
 def _scalar(con: duckdb.DuckDBPyConnection, sql: str) -> Any:
@@ -65,7 +75,6 @@ def export_overview(
     al_dir: Path,
     out_dir: Path,
     flagship_cypher: dict[str, Any],
-    hero_token: str | None = None,
 ) -> dict[str, Any]:
     """Derive the Overview page's numbers from local artifacts and write the JSON.
 
@@ -74,11 +83,11 @@ def export_overview(
     local tables. The Cypher twin stays *sourced* (docs/GRAPH.md) until Phase 6
     computes it against a live graph — the JSON labels it as such.
 
-    ``hero_token`` (Phase 3): the picked exemplar-crop token, when already known at
-    call time. ``run_build`` does NOT pass it here — the hero token is only resolved
-    after curation is included, which runs after this export (Overview must stay
-    renderable even with curation absent) — instead it patches the written JSON
-    afterward. This kwarg exists for callers/tests that already know the token.
+    Phase 3's hero_token is deliberately NOT a parameter here: the hero token is
+    only resolved after curation is included, which runs after this export
+    (Overview must stay renderable even with curation absent) -- ``run_build``
+    patches ``hero_token`` into the written JSON afterward via ``write_json``
+    instead.
     """
     for name in PROCESSED_INPUTS:
         _require(processed_dir / name)
@@ -170,9 +179,7 @@ def export_overview(
             },
         },
     }
-    if hero_token is not None:
-        metrics["hero_token"] = hero_token
-    _write_json(out_dir / "overview_metrics.json", metrics)
+    write_json(out_dir / "overview_metrics.json", metrics)
     return metrics
 
 

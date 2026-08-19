@@ -61,7 +61,7 @@ manifest always names the commit it was built from, not the one that carries it.
 | `overview_metrics.json` | scale, headline results, flagship parity, CAN r |
 | `active_learning_results.parquet` | all 13 arms: overall/night mAP50-95 + deltas |
 | `weak_supervision_results.parquet` | per-arm verifier retention + box stats |
-| `sample_frames/hero.jpg` | interim hero (baseline val-batch mosaic; real overlay in Phase 3) |
+| `sample_frames/hero.jpg` | hand-picked exemplar crop (`hero_token` recorded in `overview_metrics.json`); picked via `configs/demo.yaml` `hero.token`, from the `fixes_fn_vs_baseline_graph_rate_night` exemplars |
 | `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched) |
 | `gt_boxes.parquet` | GT boxes for curated frames (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `below_visibility_min` (all-False on today's data — ingestion already filters visibility < 2; parity-defensive only, do not build UI against it) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
