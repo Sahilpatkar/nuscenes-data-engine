@@ -1126,6 +1126,14 @@ def demo_infer(
         weights = mlruns_dir / "artifacts" / spec["run"] / "artifacts" / "weights" / "best.pt"
         models[name] = make_ultralytics_predictor(weights, imgsz=imgsz, conf=conf)
 
+    # sweep.py treats a null visibility_min as "no filter at all" (config.get(...)
+    # returns None for an explicit `visibility_min: null`, not the missing-key
+    # default) -- str()-wrapping that would produce the literal string "None", which
+    # crashes inside run_infer's int() call. Pass None through unchanged; only a
+    # real (present, non-null) value gets str()-wrapped.
+    visibility_min_raw = sweep_cfg.get("visibility_min", "2")
+    visibility_min = None if visibility_min_raw is None else str(visibility_min_raw)
+
     out = run_infer(
         staging_dir=staging_dir,
         annotations=annotations,
@@ -1134,7 +1142,7 @@ def demo_infer(
         iou=float(sweep_cfg.get("iou", 0.5)),
         conf_hit=float(sweep_cfg.get("conf_hit", 0.4)),
         images_root=images_root,
-        visibility_min=str(sweep_cfg.get("visibility_min", "2")),
+        visibility_min=visibility_min,
     )
     logger.info("demo infer: %s", out)
 

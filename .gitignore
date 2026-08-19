@@ -69,3 +69,8 @@ app/samples/*
 
 # Phase 6c dataset-chat query log
 /data/chat/
+
+# Demo curation staging (demo Phase 2): holds nuScenes-derived crops — non-
+# commercial-licensed, never committed; `demo build` copies what it needs into the
+# reviewed demo_data/ package, see docs/DEMO.md "Curated frames + predictions".
+/data/demo_curation/

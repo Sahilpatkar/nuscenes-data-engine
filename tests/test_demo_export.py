@@ -580,6 +580,40 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
     )
 
 
+def test_build_raises_on_stale_crop_not_in_manifest(build_config: Path) -> None:
+    """Licensing hazard: crops are nuScenes-derived imagery. A re-curation with a
+    different token set must not silently ship a PRIOR run's crop alongside the
+    current manifest -- stale imagery in staging means the operator's pipeline state
+    is inconsistent (e.g. `demo curate` re-ran but `demo infer` hasn't cleaned up the
+    old crops dir), not something to quietly carry forward into the package."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([1], dtype="Int64"),
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+    }).to_parquet(staging / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
+        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+    }).to_parquet(staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    # stale imagery: left over from a PRIOR curation run, not a token in this manifest.
+    (staging / "crops" / "stale_token.jpg").write_bytes(b"\xff\xd8\xff\xe0stale")
+
+    with pytest.raises(ValueError, match="stale_token"):
+        run_build(build_config)
+
+
 def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) -> None:
     """The never-ran case, column entirely absent: frame_manifest.parquet carries no
     n_preds_baseline column at all (demo infer never ran with this model) -- must

@@ -101,6 +101,7 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
 
     manifest = pd.read_parquet(manifest_path)
     tokens = list(manifest["sample_data_token"])
+    token_set = set(tokens)
 
     for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
         shutil.copy2(staging_dir / name, out_dir / name)
@@ -108,6 +109,15 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     crops_dest = out_dir / "sample_frames" / "crops"
     crops_dest.mkdir(parents=True, exist_ok=True)
     for crop in sorted((staging_dir / "crops").glob("*")):
+        # Crops are nuScenes-derived imagery (licensing-controlled) -- a re-curation
+        # with a different token set must not silently ship a PRIOR run's crop
+        # alongside the current manifest. This is an operator-pipeline-state
+        # inconsistency, not something to skip past quietly.
+        if crop.stem not in token_set:
+            raise ValueError(
+                f"demo build: stale crop {crop.name} not in the current manifest — "
+                "re-run demo infer (crops are licensing-controlled)"
+            )
         shutil.copy2(crop, crops_dest / crop.name)
 
     lancedb_path = Path(config["paths"]["lancedb_path"])
@@ -128,10 +138,11 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
             )
             thumb_tokens = set(tokens)
         except Exception as exc:
-            logger.warning(
-                "demo build: thumbnail export skipped — LanceDB store unusable (%s)",
-                exc,
-            )
+            # Broad on purpose (store corruption, missing table, a bad token) --
+            # don't narrow the message to "store unusable", which would misattribute
+            # e.g. a missing-token ValueError from export_thumbs's own validation to
+            # store corruption. The exception text speaks for itself.
+            logger.warning("demo build: thumbnail export skipped (%s)", exc)
     else:
         logger.warning(
             "demo build: no LanceDB store at %s — curated frames ship without "

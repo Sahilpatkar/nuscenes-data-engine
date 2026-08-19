@@ -22,7 +22,11 @@ means what ``failures.parquet`` means: GT rows below the threshold are EXCLUDED 
 matching (their ``matched_<model>`` columns stay NA, not False — NA is "not
 evaluated", False would falsely claim "evaluated and missed") but are still written
 to ``gt_boxes.parquet`` with ``below_visibility_min=True`` so the UI can render them
-ghosted without counting them as false negatives.
+ghosted without counting them as false negatives. ``visibility_min=None`` mirrors
+sweep.py's own null handling (``if visibility_min is not None: ...``): no filter at
+all, every GT row in scope, none ghosted — NOT the string ``"None"`` fed to ``int()``,
+which crashes (a real config divergence the CLI must avoid by passing ``None``
+through rather than ``str()``-wrapping whatever ``sweep_cfg.get(...)`` returns).
 
 NOTE: on today's ingested data ``below_visibility_min`` is always False — ingestion
 already applies ``projection.visibility_min: 2`` (``configs/data.yaml:19``) before
@@ -125,7 +129,7 @@ def run_infer(
     iou: float,
     conf_hit: float,
     images_root: Path | None = None,
-    visibility_min: str = "2",
+    visibility_min: str | None = "2",
 ) -> dict[str, Any]:
     """Run inference + box matching over the staged curation manifest.
 
@@ -171,8 +175,14 @@ def run_infer(
     curated_tokens = set(manifest["sample_data_token"])
     gt_all = annotations[annotations["sample_data_token"].isin(curated_tokens)].copy()
     gt_all = gt_all.dropna(subset=["category_group"]).reset_index(drop=True)
-    visibility = pd.to_numeric(gt_all["visibility_token"], errors="coerce")
-    gt_all["below_visibility_min"] = ~(visibility >= int(visibility_min))
+    if visibility_min is None:
+        # Mirrors sweep.py's `if visibility_min is not None: ...` — null means no
+        # filter at all, not "filter at threshold 0". str(None) fed to int() would
+        # crash; every GT row stays in scope, none are ghosted.
+        gt_all["below_visibility_min"] = False
+    else:
+        visibility = pd.to_numeric(gt_all["visibility_token"], errors="coerce")
+        gt_all["below_visibility_min"] = ~(visibility >= int(visibility_min))
     for model_name in model_names:
         gt_all[f"matched_{model_name}"] = pd.array([pd.NA] * len(gt_all), dtype="boolean")
 

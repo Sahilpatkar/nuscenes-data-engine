@@ -534,6 +534,60 @@ def test_run_infer_below_visibility_min_excluded_but_flagged(tmp_path: Path) -> 
     assert "a3" not in set(preds["matched_annotation_token"].dropna())
 
 
+def test_run_infer_visibility_min_none_disables_filter(tmp_path: Path) -> None:
+    """cli.py divergence fix: sweep.py treats a null ``visibility_min`` as "no
+    filter at all" (``if visibility_min is not None: ...``), not as the string
+    "None" fed to ``int()`` (which crashes). ``run_infer(visibility_min=None)`` must
+    mirror that -- every GT row is in scope regardless of its visibility_token, none
+    are ghosted, matching proceeds normally."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "v0.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["images/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1", "a3"],
+        "sample_data_token": ["v0", "v0"],
+        "category_group": ["car", "pedestrian"],
+        "x_min": [500.0, 100.0], "y_min": [300.0, 100.0],
+        "x_max": [700.0, 200.0], "y_max": [500.0, 300.0],
+        # a3's visibility_token=1 would be excluded under the default "2" filter --
+        # with the filter disabled it must be in scope like everything else.
+        "visibility_token": ["4", "1"],
+    })
+
+    def fake_predict(image_path: Path):
+        import numpy as np
+        return {
+            "boxes": np.array(
+                [[500.0, 300.0, 700.0, 500.0], [100.0, 100.0, 200.0, 300.0]], dtype=float
+            ),
+            "conf": np.array([0.9, 0.9]),
+            "classes": ["car", "pedestrian"],
+        }
+
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"baseline": fake_predict}, crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+        visibility_min=None,
+    )
+    gt = pd.read_parquet(staging / "gt_boxes.parquet").set_index("annotation_token")
+    assert gt.loc["a3", "below_visibility_min"] == False  # noqa: E712
+    assert gt.loc["a1", "below_visibility_min"] == False  # noqa: E712
+    assert gt.loc["a3", "matched_baseline"] == True  # noqa: E712
+    assert gt.loc["a1", "matched_baseline"] == True  # noqa: E712
+
+    preds = pd.read_parquet(staging / "predictions.parquet")
+    assert "a3" in set(preds["matched_annotation_token"].dropna())
+
+
 def test_run_infer_uses_custom_images_root(tmp_path: Path) -> None:
     """``images_root`` defaults to ``staging_dir`` (what the tests above rely on); the
     real CLI run passes ``data/raw/demo_frames``, the rsync destination, which is a
