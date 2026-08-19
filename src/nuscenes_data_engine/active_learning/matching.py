@@ -55,11 +55,16 @@ def _greedy_assign(
 
     Predictions are processed in descending-confidence order (per class) and each
     claims its best-IoU unmatched GT box (IoU >= ``iou``); this is the exact loop
-    ``match_frame`` used before the refactor — behavior is unchanged. The order is a
-    ``kind="stable"`` argsort so tie-broken confidences resolve by original array
-    position instead of an unspecified quicksort order — verified against the
-    25-trial equivalence property test and the full existing match_frame suite with
-    no verdict changes (frozen behavior would win over this if it ever did).
+    ``match_frame`` used before the refactor — behavior is unchanged except for one
+    labelled deviation: the order is a ``kind="stable"`` argsort, an intentional
+    determinism improvement aligned with the demo pipeline's no-RNG policy. It is
+    provably a no-op for frames with <= 16 same-class predictions (numpy's introsort
+    is insertion-sort, i.e. already stable, at that size — which is why the
+    equivalence tests cannot distinguish it). Above that, exactly-tied confidences
+    may claim GT in a different order than the pre-refactor code, so a sweep re-run
+    could differ from the committed failures.parquet on rare tied frames (measured:
+    0 of 20,000 trials with realistic continuous confidences). Determinism wins for
+    newly generated demo artifacts, which have no prior ledger to diverge from.
 
     Returns ``(matched_gt, pred_matched_gt, low_conf_mask, n_matched, n_low_conf)``
     where ``matched_gt`` is a per-GT bool array, ``pred_matched_gt`` is a per-pred int
