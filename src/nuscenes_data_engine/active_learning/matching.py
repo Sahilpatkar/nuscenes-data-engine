@@ -41,6 +41,71 @@ def iou_matrix(boxes_a: np.ndarray[Any, Any], boxes_b: np.ndarray[Any, Any]) -> 
     return np.where(union > 0, inter / np.maximum(union, 1e-9), 0.0)
 
 
+def _greedy_assign(
+    pred_boxes: np.ndarray[Any, Any],
+    pred_classes: np.ndarray[Any, Any],
+    pred_conf: np.ndarray[Any, Any],
+    gt_boxes: np.ndarray[Any, Any],
+    gt_classes: np.ndarray[Any, Any],
+    *,
+    iou: float,
+    conf_hit: float,
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any], int, int]:
+    """Shared greedy per-class assignment core for ``match_frame``/``match_frame_boxes``.
+
+    Predictions are processed in descending-confidence order (per class) and each
+    claims its best-IoU unmatched GT box (IoU >= ``iou``); this is the exact loop
+    ``match_frame`` used before the refactor — behavior is unchanged except for one
+    labelled deviation: the order is a ``kind="stable"`` argsort, an intentional
+    determinism improvement aligned with the demo pipeline's no-RNG policy. It is
+    provably a no-op for frames with <= 16 same-class predictions (numpy's introsort
+    is insertion-sort, i.e. already stable, at that size — which is why the
+    equivalence tests cannot distinguish it). Above that, exactly-tied confidences
+    may claim GT in a different order than the pre-refactor code, so a sweep re-run
+    could differ from the committed failures.parquet on rare tied frames (measured:
+    0 of 20,000 trials with realistic continuous confidences). Determinism wins for
+    newly generated demo artifacts, which have no prior ledger to diverge from.
+
+    Returns ``(matched_gt, pred_matched_gt, low_conf_mask, n_matched, n_low_conf)``
+    where ``matched_gt`` is a per-GT bool array, ``pred_matched_gt`` is a per-pred int
+    array of the claimed GT row index (or -1), ``low_conf_mask`` is a per-pred bool
+    array (True only for predictions that claimed a GT box with ``conf < conf_hit`` —
+    a subset of the claimed predictions), and ``n_matched``/``n_low_conf`` are the
+    aggregate counts ``match_frame`` returns (low-conf claims count toward both
+    ``n_matched`` and ``n_low_conf`` — a match below ``conf_hit`` is still a match).
+    """
+    n_gt = len(gt_boxes)
+    n_pred = len(pred_boxes)
+    matched_gt = np.zeros(n_gt, dtype=bool)
+    pred_matched_gt = np.full(n_pred, -1, dtype=int)
+    low_conf_mask = np.zeros(n_pred, dtype=bool)
+    n_matched = 0
+    n_low_conf = 0
+
+    for cls in np.unique(gt_classes) if n_gt else []:
+        gt_idx = np.flatnonzero(gt_classes == cls)
+        pred_idx = np.flatnonzero(pred_classes == cls)
+        if len(pred_idx) == 0:
+            continue
+        order = pred_idx[np.argsort(-pred_conf[pred_idx], kind="stable")]
+        ious = iou_matrix(pred_boxes[order], gt_boxes[gt_idx])
+        claimed = np.zeros(len(gt_idx), dtype=bool)
+        for row, pred_i in enumerate(order):
+            candidates = np.where(claimed, -1.0, ious[row])
+            best = int(np.argmax(candidates)) if len(candidates) else -1
+            if best >= 0 and candidates[best] >= iou:
+                claimed[best] = True
+                matched_gt[gt_idx[best]] = True
+                pred_matched_gt[pred_i] = gt_idx[best]
+                n_matched += 1
+                if pred_conf[pred_i] < conf_hit:
+                    n_low_conf += 1
+                    low_conf_mask[pred_i] = True
+        del claimed
+
+    return matched_gt, pred_matched_gt, low_conf_mask, n_matched, n_low_conf
+
+
 def match_frame(
     pred_boxes: np.ndarray[Any, Any],
     pred_classes: np.ndarray[Any, Any],
@@ -53,32 +118,60 @@ def match_frame(
 ) -> FrameFailure:
     """Greedy per-class matching of one frame's predictions against its GT."""
     n_gt = len(gt_boxes)
-    matched_gt = np.zeros(n_gt, dtype=bool)
-    n_matched = 0
-    n_low_conf = 0
-
-    for cls in np.unique(gt_classes) if n_gt else []:
-        gt_idx = np.flatnonzero(gt_classes == cls)
-        pred_idx = np.flatnonzero(pred_classes == cls)
-        if len(pred_idx) == 0:
-            continue
-        order = pred_idx[np.argsort(-pred_conf[pred_idx])]
-        ious = iou_matrix(pred_boxes[order], gt_boxes[gt_idx])
-        claimed = np.zeros(len(gt_idx), dtype=bool)
-        for row, pred_i in enumerate(order):
-            candidates = np.where(claimed, -1.0, ious[row])
-            best = int(np.argmax(candidates)) if len(candidates) else -1
-            if best >= 0 and candidates[best] >= iou:
-                claimed[best] = True
-                matched_gt[gt_idx[best]] = True
-                n_matched += 1
-                if pred_conf[pred_i] < conf_hit:
-                    n_low_conf += 1
-        del claimed
+    matched_gt, _pred_matched_gt, _low_conf_mask, n_matched, n_low_conf = _greedy_assign(
+        pred_boxes, pred_classes, pred_conf, gt_boxes, gt_classes, iou=iou, conf_hit=conf_hit
+    )
 
     return FrameFailure(
         n_gt=n_gt,
         n_matched=n_matched,
         n_fn=int(n_gt - matched_gt.sum()),
         n_low_conf=n_low_conf,
+    )
+
+
+@dataclass
+class FrameBoxMatches:
+    """Per-box assignment: what each prediction is, and which GT went unmatched."""
+
+    pred_status: np.ndarray[Any, Any]  # object array: "tp" | "fp" | "low_conf"
+    pred_matched_gt: np.ndarray[Any, Any]  # int: GT row index or -1
+    gt_matched: np.ndarray[Any, Any]  # bool per GT row
+
+
+def match_frame_boxes(
+    pred_boxes: np.ndarray[Any, Any],
+    pred_classes: np.ndarray[Any, Any],
+    pred_conf: np.ndarray[Any, Any],
+    gt_boxes: np.ndarray[Any, Any],
+    gt_classes: np.ndarray[Any, Any],
+    *,
+    iou: float = 0.5,
+    conf_hit: float = 0.4,
+) -> FrameBoxMatches:
+    """``match_frame`` with the assignments kept instead of reduced to counts.
+
+    Same greedy algorithm, same thresholds — the demo's tp/fp/low_conf language must
+    mean exactly what failures.parquet's counts mean (property-tested equivalence).
+
+    A prediction that claims a GT box is "tp" (``conf >= conf_hit``) or "low_conf"
+    (``conf < conf_hit``) — both count toward the claimed GT box's ``gt_matched``
+    flag, mirroring ``n_matched``/``n_low_conf`` in ``FrameFailure``: a low-confidence
+    match is still a match. A prediction that claims nothing is "fp".
+    """
+    matched_gt, pred_matched_gt, low_conf_mask, _n_matched, _n_low_conf = _greedy_assign(
+        pred_boxes, pred_classes, pred_conf, gt_boxes, gt_classes, iou=iou, conf_hit=conf_hit
+    )
+
+    pred_status = np.full(len(pred_boxes), "fp", dtype=object)
+    matched_mask = pred_matched_gt >= 0
+    pred_status[matched_mask] = "tp"
+    # low_conf_mask is already a subset of matched_mask (set only when a claim's
+    # conf < conf_hit inside _greedy_assign) — the "< conf_hit" predicate lives once.
+    pred_status[low_conf_mask] = "low_conf"
+
+    return FrameBoxMatches(
+        pred_status=pred_status,
+        pred_matched_gt=pred_matched_gt,
+        gt_matched=matched_gt,
     )

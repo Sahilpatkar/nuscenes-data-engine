@@ -1005,6 +1005,148 @@ demo_app = typer.Typer(no_args_is_help=True, help="Public-demo artifact builder.
 app.add_typer(demo_app, name="demo")
 
 
+@demo_app.command("curate")
+def demo_curate(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Curate deterministic buckets into a frame manifest + rsync filelist."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.demo.curate import _front_camera_hits, run_curate
+
+    cfg = load_yaml(config)
+    curation_cfg = cfg["curation"]
+    settings = get_settings()
+
+    # The LanceDB frame store spans all six camera channels, but curation only wants
+    # CAM_FRONT (run_curate's I2 guard) — a raw top-quota query is ~5/6 non-CAM_FRONT
+    # and a hit slipping through blows up the WHOLE curate run at the guard, not just
+    # this bucket. Over-request by 8x so filtering still leaves enough headroom.
+    semantic_oversample = 8
+
+    def semantic_hits(queries: list[str]) -> list[tuple[str, list[str]]]:
+        quota = curation_cfg["quotas"].get("semantic", 0)
+        try:
+            from nuscenes_data_engine.data_engine.search import SearchEngine
+
+            engine = SearchEngine(
+                Path(cfg["paths"]["lancedb_path"]), cfg["paths"]["lancedb_table"],
+                settings.search_model_name, device=settings.search_device,
+            )
+            hits: list[tuple[str, list[str]]] = []
+            seen: set[str] = set()
+            for search_query in queries:
+                raw = engine.search_text(search_query, quota * semantic_oversample)
+                front = _front_camera_hits(raw, quota)
+                dropped = len(raw) - len(front)
+                if dropped:
+                    logger.info(
+                        "demo curate: semantic query %r dropped %d/%d non-CAM_FRONT hits",
+                        search_query, dropped, len(raw),
+                    )
+                for token, bucket_labels in front:
+                    if token not in seen:
+                        seen.add(token)
+                        hits.append((token, bucket_labels))
+            return hits
+        except (ImportError, FileNotFoundError) as exc:
+            logger.warning("demo curate: semantic bucket skipped (%s)", exc)
+            return []
+
+    manifest = run_curate(
+        processed_dir=Path(cfg["paths"]["processed_dir"]),
+        al_dir=Path(cfg["paths"]["active_learning_dir"]),
+        staging_dir=Path(curation_cfg["staging_dir"]),
+        quotas=curation_cfg["quotas"],
+        al_arm=curation_cfg["al_arm"],
+        weak_arm=curation_cfg["weak_arm"],
+        semantic_hits=semantic_hits,
+        semantic_queries=curation_cfg["semantic_queries"],
+    )
+    logger.info(
+        "demo curate: %d tokens staged -> %s", len(manifest), curation_cfg["staging_dir"]
+    )
+
+
+@demo_app.command("infer")
+def demo_infer(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+    al_config: Path = typer.Option(
+        Path("configs/active_learning.yaml"),
+        "--al-config",
+        help="Source of the visibility_min/iou/conf_hit matching params (mirrors the sweep).",
+    ),
+) -> None:
+    """Run local inference over the curated val frames (box matching, crops, exemplars)."""
+    import pandas as pd
+
+    from nuscenes_data_engine.config import load_yaml
+    from nuscenes_data_engine.demo.infer import make_ultralytics_predictor, run_infer
+
+    cfg = load_yaml(config)
+    curation_cfg = cfg["curation"]
+    sweep_cfg = load_yaml(al_config).get("sweep", {})
+
+    # Preflight: fail with a directive message *before* loading any ultralytics
+    # checkpoint (slow, and misleading if the real problem is "you never rsynced").
+    staging_dir = Path(curation_cfg["staging_dir"])
+    manifest_path = staging_dir / "frame_manifest.parquet"
+    if not manifest_path.is_file():
+        raise ValueError(
+            f"demo infer: no curated frame manifest at {manifest_path} — "
+            "run `demo curate`, then rsync the frames — see docs/DEMO.md"
+        )
+    images_root = Path(curation_cfg["images_root"])
+    if not images_root.is_dir() or not any(images_root.iterdir()):
+        raise ValueError(
+            f"demo infer: images_root {images_root} is missing or empty — "
+            "run `demo curate`, then rsync the frames there — see docs/DEMO.md"
+        )
+
+    manifest = pd.read_parquet(manifest_path)
+    curated_tokens = set(manifest["sample_data_token"])
+
+    processed_dir = Path(cfg["paths"]["processed_dir"])
+    annotations = pd.read_parquet(processed_dir / "annotations.parquet")
+    annotations = annotations[
+        annotations["sample_data_token"].isin(curated_tokens)
+        & (annotations["channel"] == "CAM_FRONT")
+    ]
+
+    mlruns_dir = Path(cfg["paths"]["mlruns_dir"])
+    conf = float(sweep_cfg.get("conf_low", 0.05))
+    models: dict[str, Any] = {}
+    for name, spec in cfg["models"].items():
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"demo infer: models.{name} must be a {{run, imgsz}} mapping — a flat "
+                "run-id carries no per-checkpoint imgsz"
+            )
+        imgsz = int(spec["imgsz"])
+        logger.info("demo infer: %s @ imgsz=%d", name, imgsz)
+        weights = mlruns_dir / "artifacts" / spec["run"] / "artifacts" / "weights" / "best.pt"
+        models[name] = make_ultralytics_predictor(weights, imgsz=imgsz, conf=conf)
+
+    # sweep.py treats a null visibility_min as "no filter at all" (config.get(...)
+    # returns None for an explicit `visibility_min: null`, not the missing-key
+    # default) -- str()-wrapping that would produce the literal string "None", which
+    # crashes inside run_infer's int() call. Pass None through unchanged; only a
+    # real (present, non-null) value gets str()-wrapped.
+    visibility_min_raw = sweep_cfg.get("visibility_min", "2")
+    visibility_min = None if visibility_min_raw is None else str(visibility_min_raw)
+
+    out = run_infer(
+        staging_dir=staging_dir,
+        annotations=annotations,
+        models=models,
+        crop_size=tuple(curation_cfg["crop_size"]),
+        iou=float(sweep_cfg.get("iou", 0.5)),
+        conf_hit=float(sweep_cfg.get("conf_hit", 0.4)),
+        images_root=images_root,
+        visibility_min=visibility_min,
+    )
+    logger.info("demo infer: %s", out)
+
+
 @demo_app.command("build")
 def demo_build(
     config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),

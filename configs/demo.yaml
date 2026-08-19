@@ -9,8 +9,18 @@ paths:
   out_dir: demo_data
 
 models:              # MLflow run ids (weights + artifacts live under mlruns/artifacts/<id>/)
-  baseline: e465844a6b0249a3bc08ae894e530b22
-  graph_rate_night: b7e251d4fb624097bea3d4e9e4a80c62
+                      # + the imgsz each checkpoint was trained at (must match, or the
+                      # comparison silently handicaps whichever model is under-scaled --
+                      # see each run's mlruns/artifacts/<id>/artifacts/ultralytics_run/args.yaml)
+  baseline:
+    run: e465844a6b0249a3bc08ae894e530b22
+    imgsz: 640
+  graph_rate_night:
+    run: b7e251d4fb624097bea3d4e9e4a80c62
+    imgsz: 640
+  champion:           # yolov8m, the third of Task 5's three checkpoints
+    run: 3869d068100a4af6a274c6d134feed2f
+    imgsz: 960
 
 hero:
   run: baseline      # key into models
@@ -23,3 +33,22 @@ flagship:
   expected_sql_count: 30
   cypher_count: 30                 # sourced, not computed, until Phase 6
   cypher_source: docs/GRAPH.md
+
+curation:
+  staging_dir: data/demo_curation
+  images_root: data/raw/demo_frames   # rsync destination (demo infer resolves images here)
+  quotas:
+    night_failure: 60
+    day_failure: 40
+    hard_braking: 40
+    al_selected: 30
+    weak_accepted: 20
+    weak_rejected: 20
+    clean_success: 20
+    semantic: 20
+  semantic_queries:
+    - foggy road with heavy lens glare
+    - crowded nighttime pedestrian crossing
+  weak_arm: graph_rate_night
+  al_arm: graph_rate_night
+  crop_size: [960, 540]
