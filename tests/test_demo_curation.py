@@ -813,3 +813,52 @@ def test_demo_infer_cli_rejects_legacy_flat_model_shape(tmp_path: Path) -> None:
     assert isinstance(result.exception, ValueError)
     assert "models.baseline" in str(result.exception)
     assert "run, imgsz" in str(result.exception)
+
+
+def test_front_camera_hits_drops_non_cam_front_and_preserves_rank_order() -> None:
+    """Task-5 live-run fix: real SigLIP search returned a CAM_BACK token
+    (85f49850a882409ea01b2e8f3d006d05) that reached run_curate's channel guard and
+    blew up the whole curate run -- filtering has to happen at the semantic source,
+    before curation ever sees a non-CAM_FRONT token. Rank order (nearest-first) must
+    survive filtering -- it only drops entries, never re-sorts."""
+    from nuscenes_data_engine.demo.curate import _front_camera_hits
+
+    results = [
+        {"sample_data_token": "f1", "channel": "CAM_FRONT"},
+        {"sample_data_token": "b1", "channel": "CAM_BACK"},
+        {"sample_data_token": "f2", "channel": "CAM_FRONT"},
+        {"sample_data_token": "l1", "channel": "CAM_FRONT_LEFT"},
+        {"sample_data_token": "f3", "channel": "CAM_FRONT"},
+    ]
+    hits = _front_camera_hits(results, quota=2)
+    assert hits == [("f1", ["semantic"]), ("f2", ["semantic"])]
+
+
+def test_front_camera_hits_returns_all_matches_when_under_quota() -> None:
+    from nuscenes_data_engine.demo.curate import _front_camera_hits
+
+    results = [
+        {"sample_data_token": "b1", "channel": "CAM_BACK"},
+        {"sample_data_token": "f1", "channel": "CAM_FRONT"},
+    ]
+    hits = _front_camera_hits(results, quota=5)
+    assert hits == [("f1", ["semantic"])]
+
+
+def test_front_camera_hits_all_non_cam_front_yields_empty() -> None:
+    from nuscenes_data_engine.demo.curate import _front_camera_hits
+
+    results = [
+        {"sample_data_token": "b1", "channel": "CAM_BACK"},
+        {"sample_data_token": "l1", "channel": "CAM_FRONT_LEFT"},
+    ]
+    assert _front_camera_hits(results, quota=5) == []
+
+
+def test_front_camera_hits_empty_results_and_zero_quota() -> None:
+    from nuscenes_data_engine.demo.curate import _front_camera_hits
+
+    assert _front_camera_hits([], quota=5) == []
+    assert _front_camera_hits(
+        [{"sample_data_token": "f1", "channel": "CAM_FRONT"}], quota=0
+    ) == []

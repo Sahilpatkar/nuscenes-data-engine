@@ -90,6 +90,27 @@ def _warn_if_underfilled(bucket_name: str, selected: list[str], quota: int) -> N
         )
 
 
+def _front_camera_hits(
+    results: list[dict[str, Any]], quota: int
+) -> list[tuple[str, list[str]]]:
+    """Filter a rank-ordered semantic-search hit list to CAM_FRONT, then truncate.
+
+    The LanceDB frame store the semantic bucket draws from spans all six camera
+    channels, but every curated token must be CAM_FRONT (see the module docstring's
+    I2 invariant, enforced by ``run_curate``) — a raw top-``quota`` here would let a
+    non-CAM_FRONT hit reach that guard and blow up the WHOLE curate run (a live
+    SigLIP query returned CAM_BACK token 85f49850a882409ea01b2e8f3d006d05 and did
+    exactly this), instead of just quietly costing a slot. Filtering only drops
+    entries — it never re-sorts — so ``results``' rank order (nearest-first) survives
+    into the returned list. Callers are expected to over-request (``k`` well above
+    ``quota``, e.g. 8x) so filtering still leaves enough CAM_FRONT hits to fill it;
+    this function only filters and truncates, it does not know or care how ``results``
+    was fetched.
+    """
+    front = [row for row in results if row.get("channel") == "CAM_FRONT"]
+    return [(row["sample_data_token"], ["semantic"]) for row in front[:quota]]
+
+
 def run_curate(
     *,
     processed_dir: Path,

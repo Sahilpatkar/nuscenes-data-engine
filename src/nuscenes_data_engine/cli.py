@@ -1011,11 +1011,17 @@ def demo_curate(
 ) -> None:
     """Curate deterministic buckets into a frame manifest + rsync filelist."""
     from nuscenes_data_engine.config import get_settings, load_yaml
-    from nuscenes_data_engine.demo.curate import run_curate
+    from nuscenes_data_engine.demo.curate import _front_camera_hits, run_curate
 
     cfg = load_yaml(config)
     curation_cfg = cfg["curation"]
     settings = get_settings()
+
+    # The LanceDB frame store spans all six camera channels, but curation only wants
+    # CAM_FRONT (run_curate's I2 guard) — a raw top-quota query is ~5/6 non-CAM_FRONT
+    # and a hit slipping through blows up the WHOLE curate run at the guard, not just
+    # this bucket. Over-request by 8x so filtering still leaves enough headroom.
+    semantic_oversample = 8
 
     def semantic_hits(queries: list[str]) -> list[tuple[str, list[str]]]:
         quota = curation_cfg["quotas"].get("semantic", 0)
@@ -1029,11 +1035,18 @@ def demo_curate(
             hits: list[tuple[str, list[str]]] = []
             seen: set[str] = set()
             for search_query in queries:
-                for row in engine.search_text(search_query, quota):
-                    token = row["sample_data_token"]
+                raw = engine.search_text(search_query, quota * semantic_oversample)
+                front = _front_camera_hits(raw, quota)
+                dropped = len(raw) - len(front)
+                if dropped:
+                    logger.info(
+                        "demo curate: semantic query %r dropped %d/%d non-CAM_FRONT hits",
+                        search_query, dropped, len(raw),
+                    )
+                for token, bucket_labels in front:
                     if token not in seen:
                         seen.add(token)
-                        hits.append((token, ["semantic"]))
+                        hits.append((token, bucket_labels))
             return hits
         except (ImportError, FileNotFoundError) as exc:
             logger.warning("demo curate: semantic bucket skipped (%s)", exc)
