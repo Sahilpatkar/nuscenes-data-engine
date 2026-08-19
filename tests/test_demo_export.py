@@ -29,6 +29,11 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
     pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
+            # annotation_token: Task 1 (Phase 3) needs a joinable token on every
+            # annotations_3d row for the gt_boxes distance/size enrichment (proven
+            # 100% joinable on real data) -- f1..f3 are the flagship rows' tokens,
+            # otherwise unused by the flagship SQL itself.
+            "annotation_token": ["f1", "f2", "f3"],
             "sample_token": ["s1", "s1", "s2"],
             "category_group": ["pedestrian", "pedestrian", "car"],
             "distance_to_ego_m": [5.0, 20.0, 3.0],
@@ -206,29 +211,6 @@ def test_export_weaksup_reads_summaries(tmp_path: Path, tiny_inputs: dict[str, P
     assert "graph_rate_night" not in set(df["arm"])
 
 
-def test_export_hero_copies_the_configured_mosaic(tmp_path: Path) -> None:
-    from nuscenes_data_engine.demo.exporters import export_hero
-
-    mlruns = tmp_path / "mlruns"
-    run_dir = mlruns / "artifacts" / "run123" / "artifacts" / "ultralytics_run"
-    run_dir.mkdir(parents=True)
-    (run_dir / "val_batch0_pred.jpg").write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
-    out = tmp_path / "demo_data"
-    dest = export_hero(mlruns_dir=mlruns, run_id="run123", mosaic="val_batch0_pred.jpg", out_dir=out)
-    assert dest == out / "sample_frames" / "hero.jpg"
-    assert dest.read_bytes().startswith(b"\xff\xd8")
-
-
-def test_export_hero_missing_mosaic_raises(tmp_path: Path) -> None:
-    from nuscenes_data_engine.demo.exporters import export_hero
-
-    with pytest.raises(ValueError, match="hero mosaic"):
-        export_hero(
-            mlruns_dir=tmp_path, run_id="nope", mosaic="val_batch0_pred.jpg",
-            out_dir=tmp_path / "demo_data",
-        )
-
-
 def test_export_thumbs_writes_one_jpeg_per_token(tmp_path: Path) -> None:
     lancedb = pytest.importorskip("lancedb")
     from nuscenes_data_engine.demo.exporters import export_thumbs
@@ -299,21 +281,22 @@ def _write_demo_config(
         "n_boxes": 12, "mean_boxes_per_accepted_frame": 2.0,
         "mean_gt_boxes_per_accepted_frame": 3.0,
     }))
-    mlruns = tmp_path / "mlruns"
-    hero = mlruns / "artifacts" / "runX" / "artifacts" / "ultralytics_run"
-    hero.mkdir(parents=True)
-    (hero / "val_batch0_pred.jpg").write_bytes(b"\xff\xd8\xff\xe0hero")
     config = {
         "paths": {
             "processed_dir": str(tiny_inputs["processed"]),
             "active_learning_dir": str(al),
-            "mlruns_dir": str(mlruns),
+            "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
             "out_dir": str(tmp_path / "demo_data"),
         },
         "models": models,
-        "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
+        # Phase 3: hero is a hand-picked exemplar crop token from the curated-frames
+        # group, not an mlruns mosaic (see the dated amendment in
+        # docs/superpowers/specs/2026-08-12-demo-phase1-design.md) -- absent by
+        # default here, same as `curation:` below; tests that need a successful
+        # build opt in via `_stage_and_pick_hero`.
+        "hero": {"token": None},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30,
                      "cypher_source": "docs/GRAPH.md"},
@@ -326,6 +309,60 @@ def _write_demo_config(
     path = tmp_path / "demo.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
+
+
+def _stage_minimal_curation(staging_dir: Path) -> None:
+    """Write a minimal, fully-staged curation dir: one val token "v0" with
+    n_preds_baseline coverage, gt_boxes a1 (20x20 -> small) / a2 (200x200 -> large)
+    for v0, one predictions row for v0, and a single crop file v0.jpg.
+
+    Factored out of the per-test staging blocks below (test_build_includes_
+    curation_group_when_staged and its siblings) for the Task 1 gt-box-enrichment
+    and hero-token tests, which all need the same minimal shape -- the older
+    curation tests keep their own inline staging rather than being churned to
+    adopt this.
+    """
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "crops").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([1], dtype="Int64"),
+    }).to_parquet(staging_dir / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+    }).to_parquet(staging_dir / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
+        "category_group": ["pedestrian", "car"],
+        "x_min": [0.0, 0.0], "y_min": [0.0, 0.0],
+        "x_max": [20.0, 200.0], "y_max": [20.0, 200.0],
+        "matched_baseline": [True, True],
+    }).to_parquet(staging_dir / "gt_boxes.parquet")
+    (staging_dir / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+
+
+def _stage_and_pick_hero(config_path: Path, *, token: str = "v0") -> dict[str, Any]:
+    """Stage a minimal curated-frames group and point ``hero.token`` at it.
+
+    Most ``build_config``-based tests below don't care about curation or the hero
+    at all -- they need SOME successful build to exercise an unrelated code path
+    (manifest determinism, budget/flagship validation, ...). Since Phase 3's hero
+    flow always requires a real curated crop (see
+    test_build_null_hero_token_fails_loudly /
+    test_build_hero_token_without_curation_fails_loudly for the failure paths this
+    guards), every such test opts in explicitly via this helper rather than
+    ``build_config`` silently defaulting to "staged" -- which would make those two
+    curation-absent-specific tests unable to express their own precondition.
+    Returns the parsed config dict for further test-specific mutation.
+    """
+    config = yaml.safe_load(config_path.read_text())
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
+    config["hero"] = {"token": token}
+    config_path.write_text(yaml.safe_dump(config))
+    return config
 
 
 @pytest.fixture()
@@ -344,14 +381,17 @@ def test_build_accepts_legacy_flat_model_shape(
 ) -> None:
     """Carried review item: ``models:`` entries may still be a flat run-id string
     (the shape every fixture used before the Task 3 review round introduced
-    ``{run, imgsz}``) -- run_build's hero accessor must resolve that shape too, not
-    only the ``{run, imgsz}`` dict shape ``build_config`` now exercises by default.
+    ``{run, imgsz}``) -- ``_include_curation``'s val-coverage check iterates
+    ``config["models"]`` keys, which works identically for either value shape, and
+    the Phase 3 hero flow no longer reads ``config["models"]`` at all -- so this
+    just needs to confirm a build with the legacy shape still succeeds end to end.
     """
     from nuscenes_data_engine.demo.build import run_build
 
     config_path = _write_demo_config(tmp_path, tiny_inputs, models={"baseline": "runX"})
+    config = _stage_and_pick_hero(config_path)
     manifest = run_build(config_path)
-    out = Path(yaml.safe_load(config_path.read_text())["paths"]["out_dir"])
+    out = Path(config["paths"]["out_dir"])
     assert (out / "sample_frames" / "hero.jpg").is_file()
     assert manifest["validation"]["flagship_sql_count"] == 1
 
@@ -359,8 +399,9 @@ def test_build_accepts_legacy_flat_model_shape(
 def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
+    config = _stage_and_pick_hero(build_config)
     manifest = run_build(build_config)
-    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    out = Path(config["paths"]["out_dir"])
     on_disk = json.loads((out / "manifest.json").read_text())
     assert on_disk == manifest
     assert manifest["git_sha"]
@@ -373,7 +414,8 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
 def test_build_is_deterministic(build_config: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
-    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    config = _stage_and_pick_hero(build_config)
+    out = Path(config["paths"]["out_dir"])
     run_build(build_config)
     first = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
     run_build(build_config)
@@ -384,7 +426,7 @@ def test_build_is_deterministic(build_config: Path) -> None:
 def test_build_fails_on_wrong_flagship_count(build_config: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     config["flagship"]["expected_sql_count"] = 30      # tiny fixture yields 1, not 30
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="flagship"):
@@ -394,7 +436,7 @@ def test_build_fails_on_wrong_flagship_count(build_config: Path) -> None:
 def test_build_fails_over_size_budget(build_config: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     config["budgets"]["max_package_mb"] = 0
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="budget"):
@@ -422,7 +464,7 @@ def test_build_wipes_stale_residue(build_config: Path) -> None:
     """A leftover file from a removed exporter or failed prior build must not survive."""
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     out_dir = Path(config["paths"]["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     # manifest.json makes this look like an existing demo package (not a typo'd
@@ -463,7 +505,7 @@ def test_build_recovers_from_a_failed_build_without_manual_cleanup(build_config:
     """
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     config["flagship"]["expected_sql_count"] = 30  # tiny fixture yields 1, not 30 -> fails
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="flagship"):
@@ -485,10 +527,11 @@ def test_build_rewipes_an_existing_demo_package(build_config: Path) -> None:
     """A dir that already looks like a demo package (has manifest.json) is fine to wipe."""
     from nuscenes_data_engine.demo.build import run_build
 
+    config = _stage_and_pick_hero(build_config)
     run_build(build_config)  # first build creates out_dir/manifest.json
     manifest = run_build(build_config)  # second build must not raise the new guard
 
-    out_dir = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    out_dir = Path(config["paths"]["out_dir"])
     assert (out_dir / "manifest.json").is_file()
     assert manifest["validation"]["n_arms"] == 5
 
@@ -497,7 +540,7 @@ def test_build_proceeds_when_out_dir_absent(build_config: Path) -> None:
     """An out_dir that simply doesn't exist yet (the common case) is fine, not an error."""
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     out_dir = Path(config["paths"]["out_dir"])
     assert not out_dir.exists()
 
@@ -512,7 +555,7 @@ def test_build_fails_when_weak_retention_headline_missing(build_config: Path) ->
     not silently publish `"headline": null` to the committed package."""
     from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
+    config = _stage_and_pick_hero(build_config)
     al_dir = Path(config["paths"]["active_learning_dir"])
     results_path = al_dir / "results.json"
     results = json.loads(results_path.read_text())
@@ -528,22 +571,33 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
     """manifest['inputs'] must cover everything the build actually reads, not just results.json."""
     from nuscenes_data_engine.demo.build import run_build
 
+    _stage_and_pick_hero(build_config)
     manifest = run_build(build_config)
     assert len(manifest["inputs"]) >= 7
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
 
 
 def test_build_skips_absent_curation_with_manifest_note(build_config: Path) -> None:
-    """No `demo curate`/`demo infer` staging (build_config's default) must not fail
-    the build -- Task 2's TRINITY-unreachable fallback means Tasks 1-4 still merge
-    on their own. It must, however, say so loudly in the manifest, not silently
-    proceed as if the curation group never existed."""
-    from nuscenes_data_engine.demo.build import run_build
+    """No `demo curate`/`demo infer` staging (build_config's default) must not be
+    hidden as if the curation group never existed -- `_include_curation` returns
+    "absent" and logs a warning rather than silently proceeding, satisfying Task 2's
+    TRINITY-unreachable fallback.
 
-    manifest = run_build(build_config)
-    assert manifest["validation"]["curation"] == "absent"
-    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
-    assert not (out / "frame_manifest.parquet").exists()
+    Adapted for Task 1 (Phase 3): the full `run_build` pipeline can no longer
+    succeed with curation absent, because the hero crop now always comes from
+    curated frames (see test_build_hero_token_without_curation_fails_loudly for
+    that specific failure path). This test now exercises `_include_curation`
+    directly, which is where "absent means a warning, not a crash" is still true
+    and independently testable.
+    """
+    from nuscenes_data_engine.demo.build import _include_curation
+
+    config = yaml.safe_load(build_config.read_text())
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+    status = _include_curation(config, out_dir)
+    assert status == "absent"
+    assert not (out_dir / "frame_manifest.parquet").exists()
 
 
 def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path: Path) -> None:
@@ -568,6 +622,8 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
         "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
     }).to_parquet(staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    config["hero"] = {"token": "v0"}
+    build_config.write_text(yaml.safe_dump(config))
     manifest = run_build(build_config)
     assert manifest["validation"]["curation"] == "included"
     out = Path(config["paths"]["out_dir"])
@@ -692,6 +748,8 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
                           "x_min", "y_min", "x_max", "y_max"]).to_parquet(
         staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    config["hero"] = {"token": "v0"}
+    build_config.write_text(yaml.safe_dump(config))
 
     manifest = run_build(build_config)
     assert manifest["validation"]["curation"] == "included"
@@ -748,6 +806,8 @@ def test_build_tolerates_a_corrupt_lancedb_store(
         "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
     }).to_parquet(staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    config["hero"] = {"token": "v0"}
+    build_config.write_text(yaml.safe_dump(config))
 
     # Exists (is_dir() True) but has no valid lance table inside -- open_table raises.
     Path(config["paths"]["lancedb_path"]).mkdir(parents=True)
@@ -756,3 +816,90 @@ def test_build_tolerates_a_corrupt_lancedb_store(
         manifest = run_build(build_config)
     assert manifest["validation"]["curation"] == "included"
     assert "thumbnail export skipped" in caplog.text
+
+
+def test_build_enriches_gt_boxes_with_distance_and_size(build_config: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
+    config["hero"] = {"token": "v0"}
+    build_config.write_text(yaml.safe_dump(config))
+    processed = Path(config["paths"]["processed_dir"])
+    # a1/a2 join onto the annotation_token values _stage_minimal_curation already
+    # staged for v0's gt_boxes. This APPENDS to (rather than overwrites) the fixture's
+    # existing annotations_3d.parquet: the flagship rows (f1..f3, see tiny_inputs'
+    # extended annotation_token column) must survive untouched so the flagship SQL
+    # count doesn't move -- a1/a2 carry no sample_token, so the flagship join (which
+    # requires a matching canbus.sample_token) simply never sees them.
+    existing = pd.read_parquet(processed / "annotations_3d.parquet")
+    extra = pd.DataFrame({
+        "annotation_token": ["a1", "a2"],
+        "distance_to_ego_m": [4.5, 31.0],
+    })
+    pd.concat([existing, extra], ignore_index=True).to_parquet(
+        processed / "annotations_3d.parquet"
+    )
+    manifest = run_build(build_config)
+    out = Path(config["paths"]["out_dir"])
+    gt = pd.read_parquet(out / "gt_boxes.parquet").set_index("annotation_token")
+    assert gt.loc["a1", "distance_to_ego_m"] == 4.5
+    assert gt.loc["a1", "size_bucket"] == "small"     # 20x20 = 400 < 1024
+    assert gt.loc["a2", "size_bucket"] == "large"     # 200x200 = 40000 >= 9216
+    assert manifest["validation"]["curation"] == "included"
+
+
+def test_size_bucket_boundaries_exact() -> None:
+    from nuscenes_data_engine.demo.build import _size_bucket
+
+    assert _size_bucket(32.0 * 32.0 - 1) == "small"
+    assert _size_bucket(32.0 * 32.0) == "medium"
+    assert _size_bucket(96.0 * 96.0 - 1) == "medium"
+    assert _size_bucket(96.0 * 96.0) == "large"
+
+
+def test_build_hero_from_token_copies_crop_and_records_token(build_config: Path) -> None:
+    import json as _json
+
+    import yaml
+
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
+    config["hero"] = {"token": "v0"}          # v0 is a staged crop in the fixture
+    build_config.write_text(yaml.safe_dump(config))
+    run_build(build_config)
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "sample_frames" / "hero.jpg").read_bytes() == (
+        out / "sample_frames" / "crops" / "v0.jpg"
+    ).read_bytes()
+    metrics = _json.loads((out / "overview_metrics.json").read_text())
+    assert metrics["hero_token"] == "v0"
+
+
+def test_build_null_hero_token_fails_loudly(build_config: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
+    config["hero"] = {"token": None}
+    build_config.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="hero token"):
+        run_build(build_config)
+
+
+def test_build_hero_token_without_curation_fails_loudly(build_config: Path) -> None:
+    import yaml
+
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())   # fixture has no staging by default
+    config["hero"] = {"token": "v0"}
+    build_config.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="hero"):
+        run_build(build_config)

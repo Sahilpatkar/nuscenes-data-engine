@@ -22,9 +22,13 @@ models:              # MLflow run ids (weights + artifacts live under mlruns/art
     run: 3869d068100a4af6a274c6d134feed2f
     imgsz: 960
 
-hero:
-  run: baseline      # key into models
-  mosaic: val_batch0_pred.jpg
+hero:                # Phase 3: a hand-picked exemplar crop token from the curated-
+                      # frames group (demo_data/sample_frames/crops/<token>.jpg),
+                      # not an mlruns mosaic -- see the dated amendment in
+                      # docs/superpowers/specs/2026-08-12-demo-phase1-design.md.
+                      # `demo build` fails loudly on a null token (see docs/DEMO.md).
+  token: null         # picked in the Task-5 operational run from the
+                      # fixes_fn_vs_baseline_graph_rate_night exemplars
 
 budgets:
   max_package_mb: 100

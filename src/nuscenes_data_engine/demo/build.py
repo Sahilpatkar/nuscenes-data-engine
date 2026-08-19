@@ -48,6 +48,17 @@ def _git_sha() -> str:
         return "unknown"
 
 
+# COCO detection-eval size convention (https://cocodataset.org/#detection-eval):
+# small < 32^2 px^2, medium < 96^2 px^2, else large. ``area`` is the 2D box area at
+# native (1600x900) scale, not display-crop scale.
+def _size_bucket(area: float) -> str:
+    if area < 32.0 * 32.0:
+        return "small"
+    if area < 96.0 * 96.0:
+        return "medium"
+    return "large"
+
+
 def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     """Copy the demo-phase-2 curation group into the package, or note its absence.
 
@@ -103,8 +114,31 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     tokens = list(manifest["sample_data_token"])
     token_set = set(tokens)
 
-    for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
+    for name in ("frame_manifest.parquet", "predictions.parquet"):
         shutil.copy2(staging_dir / name, out_dir / name)
+
+    # Transform-on-copy (Phase 3): the staged gt_boxes.parquet itself stays
+    # untouched on disk (it is still hashed as an input below) -- the PUBLISHED copy
+    # gains distance_to_ego_m (left-joined from the processed annotations_3d table
+    # on annotation_token, proven 100% joinable on real data) and size_bucket (COCO
+    # area convention, see _size_bucket). A left join keeps any row that fails to
+    # match as NA rather than silently dropping it -- dropped GT boxes would be a
+    # much worse failure than an unenriched one.
+    gt_boxes = pd.read_parquet(gt_path)
+    annotations_3d = pd.read_parquet(
+        Path(config["paths"]["processed_dir"]) / "annotations_3d.parquet"
+    )[["annotation_token", "distance_to_ego_m"]]
+    gt_boxes = gt_boxes.merge(annotations_3d, on="annotation_token", how="left")
+    missing_distance = int(gt_boxes["distance_to_ego_m"].isna().sum())
+    if missing_distance:
+        logger.warning(
+            "demo build: %d/%d gt_boxes rows have no distance_to_ego_m match in "
+            "annotations_3d (annotation_token not found)",
+            missing_distance, len(gt_boxes),
+        )
+    box_area = (gt_boxes["x_max"] - gt_boxes["x_min"]) * (gt_boxes["y_max"] - gt_boxes["y_min"])
+    gt_boxes["size_bucket"] = box_area.map(_size_bucket)
+    gt_boxes.to_parquet(out_dir / "gt_boxes.parquet", index=False)
 
     crops_dest = out_dir / "sample_frames" / "crops"
     crops_dest.mkdir(parents=True, exist_ok=True)
@@ -192,7 +226,6 @@ def run_build(config_path: Path) -> dict[str, Any]:
     processed = Path(paths["processed_dir"])
     al_dir = Path(paths["active_learning_dir"])
     out_dir = Path(paths["out_dir"])
-    mlruns_dir = Path(paths["mlruns_dir"])
 
     # The package is fully regenerated on every build; anything not produced by this
     # build must not survive — a partial tree from a failed build carries
@@ -217,17 +250,36 @@ def run_build(config_path: Path) -> dict[str, Any]:
     )
     al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir)
     weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir)
-    # `models:` entries are either a plain run-id string (test fixtures, and demo.yaml
-    # before the Task 3 review round) or a {run, imgsz} mapping (demo.yaml since —
-    # imgsz varies per checkpoint, see configs/demo.yaml's `models:` comment). Accept
-    # both rather than forcing every fixture/config onto one shape for a single field.
-    hero_entry = config["models"][config["hero"]["run"]]
-    hero_run = hero_entry["run"] if isinstance(hero_entry, dict) else hero_entry
-    hero_mosaic = config["hero"]["mosaic"]
-    exporters.export_hero(
-        mlruns_dir=mlruns_dir, run_id=hero_run, mosaic=hero_mosaic, out_dir=out_dir,
-    )
     curation_status = _include_curation(config, out_dir)
+
+    # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group
+    # (configs/demo.yaml `hero.token`), not an mlruns mosaic — see the dated
+    # amendment in docs/superpowers/specs/2026-08-12-demo-phase1-design.md. It is
+    # resolved AFTER curation because the crop it copies only exists once curation
+    # has been included; export_overview ran BEFORE curation (Overview must stay
+    # renderable even with curation absent), so overview_metrics.json's hero_token
+    # is patched in here via the same _write_json helper the exporters use, rather
+    # than passed to export_overview at call time.
+    hero_token = (config.get("hero") or {}).get("token")
+    if not hero_token:
+        raise ValueError(
+            "demo build: no hero token configured (hero.token in configs/demo.yaml) "
+            "— pick a hero token (see docs/DEMO.md)"
+        )
+    if curation_status != "included":
+        raise ValueError(
+            f"demo build: hero token {hero_token!r} is configured but curation is "
+            f"{curation_status!r} — the hero crop comes from the curated-frames "
+            "group; run `demo curate` + `demo infer` first (see docs/DEMO.md)"
+        )
+    hero_crop = out_dir / "sample_frames" / "crops" / f"{hero_token}.jpg"
+    if not hero_crop.is_file():
+        raise ValueError(f"demo build: hero crop not found for token {hero_token!r}: {hero_crop}")
+    (out_dir / "sample_frames" / "hero.jpg").write_bytes(hero_crop.read_bytes())
+    overview_path = out_dir / "overview_metrics.json"
+    overview_metrics = json.loads(overview_path.read_text())
+    overview_metrics["hero_token"] = hero_token
+    exporters._write_json(overview_path, overview_metrics)
 
     expected = config["flagship"]["expected_sql_count"]
     if metrics["flagship"]["sql"] != expected:
@@ -254,15 +306,14 @@ def run_build(config_path: Path) -> dict[str, Any]:
             entry["rows"] = len(pd.read_parquet(path))
         outputs[str(path.relative_to(out_dir))] = entry
 
-    # Hash everything the build actually read, not just results.json: the
-    # processed parquets, every weak-sup summary, and the hero mosaic source —
-    # an unnoticed change to any of these silently changes the published numbers.
-    hero_src = (
-        mlruns_dir / "artifacts" / hero_run / "artifacts" / "ultralytics_run" / hero_mosaic
-    )
+    # Hash everything the build actually read, not just results.json: the processed
+    # parquets and every weak-sup summary — an unnoticed change to any of these
+    # silently changes the published numbers. The hero source is now a curated crop
+    # (out_dir/sample_frames/crops/<token>.jpg, itself copied from staging_dir's
+    # crops/ — see the curation-staging hash loop below) rather than a separate
+    # mlruns mosaic, so there is no extra hero-specific input to hash here.
     inputs: dict[str, str] = {
         str(al_dir / "results.json"): _sha256(al_dir / "results.json"),
-        str(hero_src): _sha256(hero_src),
     }
     for name in exporters.PROCESSED_INPUTS:
         path = processed / name

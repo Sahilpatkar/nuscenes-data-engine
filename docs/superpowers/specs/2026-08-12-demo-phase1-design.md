@@ -62,6 +62,10 @@ internal functions until a later phase actually needs a partial rebuild (YAGNI �
 `demo build` takes seconds at Phase-1 scope). The exporter functions and their
 tests are unchanged.
 
+**Amendment (2026-08-18, Phase 3):** the mosaic hero is superseded — hero.jpg is
+now a hand-picked exemplar crop chosen in configs/demo.yaml hero.token, with
+hero_token recorded in overview_metrics.json.
+
 ## 2. The package — `demo_data/`
 
 Committed to the repo root (gitignore exception). Phase 1 contents:

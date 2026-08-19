@@ -73,6 +73,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
+            # annotation_token: required since Task 1 (Phase 3) -- gt_boxes.parquet
+            # (staged below) is joined onto this table by annotation_token to add
+            # distance_to_ego_m; f1..f3 are otherwise unused by the flagship SQL.
+            "annotation_token": ["f1", "f2", "f3"],
             "sample_token": ["s1", "s1", "s2"],
             "category_group": ["pedestrian", "pedestrian", "car"],
             "distance_to_ego_m": [5.0, 20.0, 3.0],
@@ -120,29 +124,47 @@ def built_demo_data(tmp_path: Path) -> Path:
             }
         )
     )
-    mlruns = tmp_path / "mlruns"
-    hero_dir = mlruns / "artifacts" / "runX" / "artifacts" / "ultralytics_run"
-    hero_dir.mkdir(parents=True)
-    # A genuine (if tiny) JPEG: st.image() in the AppTest run below actually decodes
-    # it, unlike test_export_hero_copies_the_configured_mosaic's byte-copy check.
+    # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group,
+    # not an mlruns mosaic -- stage a minimal one-token curation group (val token
+    # "v0") so run_build's now-mandatory hero-token resolution has a real crop to
+    # copy. A genuine (if tiny) JPEG: st.image() in the AppTest run below actually
+    # decodes it.
+    staging = tmp_path / "curation_staging"
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+        "n_preds_baseline": pd.array([1], dtype="Int64"),
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+    }).to_parquet(staging / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
+        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+    }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
-    (hero_dir / "val_batch0_pred.jpg").write_bytes(hero_bytes.getvalue())
+    (staging / "crops" / "v0.jpg").write_bytes(hero_bytes.getvalue())
 
     out = tmp_path / "demo_data"
     config = {
         "paths": {
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
-            "mlruns_dir": str(mlruns),
+            "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
             "out_dir": str(out),
         },
         "models": {"baseline": {"run": "runX", "imgsz": 640}},
-        "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
+        "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30, "cypher_source": "docs/GRAPH.md"},
+        "curation": {"staging_dir": str(staging)},
     }
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))
