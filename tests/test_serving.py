@@ -10,8 +10,9 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -22,6 +23,7 @@ import cv2
 import numpy as np
 from fastapi.testclient import TestClient
 
+from nuscenes_data_engine.data_engine.chat.transports import TransportError
 from nuscenes_data_engine.serving import model as serving_model
 from nuscenes_data_engine.serving.app import app
 from nuscenes_data_engine.serving.model import _localize_source_uri
@@ -236,3 +238,193 @@ class TestLocalizeSourceUri:
     def test_foreign_uri_without_mlruns_untouched(self, tmp_path: Path) -> None:
         source = "file:///nonexistent/elsewhere/weights"
         assert _localize_source_uri(source, tmp_path / "mlruns") == source
+
+
+# ---------------------------------------------------------------------------
+# POST /chat, POST /chat/stream — Task 5 (demo-phase-4): the additive `charts`
+# field on /chat's response, and the new SSE streaming endpoint. This file had no
+# prior /chat coverage of its own — transport injection mirrors the ESTABLISHED
+# pattern from tests/test_chat.py's `chat_client` fixture + `_patch_transport`
+# helper (which already exercise POST /chat end-to-end against this same app),
+# adapted to this file's TestClient conventions (string-path monkeypatch.setattr,
+# like the existing `degraded_client` fixture above).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def con() -> Any:
+    """A tiny DuckDB catalog with one `samples` view (mirrors
+    tests/test_chat_stream.py's `con` fixture — duckdb lives in the 'engine' extra,
+    so this skips gracefully when it's absent rather than failing at import time)."""
+    pytest.importorskip("duckdb")
+    import duckdb
+
+    connection = duckdb.connect()
+    connection.execute(
+        "CREATE VIEW samples AS SELECT * FROM (VALUES "
+        "('t1','boston-seaport',TRUE), ('t2','singapore-onenorth',FALSE)) "
+        "AS s(sample_data_token, location, is_night)"
+    )
+    return connection
+
+
+@pytest.fixture()
+def chat_client(con: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Client for the chat endpoints: detection model degraded (irrelevant here), a
+    DuckDB catalog and no vector store stubbed onto app.state — mirrors
+    tests/test_chat.py's chat_client fixture."""
+
+    def boom(settings: object = None) -> tuple[object, str]:
+        raise RuntimeError("model load failed")
+
+    monkeypatch.setattr("nuscenes_data_engine.serving.app.load_production_model", boom)
+    monkeypatch.setenv("CHAT_LOG_PATH", str(tmp_path / "chatlog.jsonl"))
+    monkeypatch.setenv("SEARCH_LANCEDB_PATH", str(tmp_path / "no-lancedb"))
+    with TestClient(app) as test_client:
+        test_client.app.state.chat_catalog = con
+        test_client.app.state.search_engine = None
+        yield test_client
+
+
+def _patch_transport(monkeypatch: pytest.MonkeyPatch, transport: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import transports
+
+    monkeypatch.setattr(transports, "make_transport", lambda settings, **kw: transport)
+
+
+def _parse_sse(lines: Iterable[str]) -> list[tuple[str, str]]:
+    """Pair up `event:`/`data:` lines from an SSE stream into (kind, payload) tuples."""
+    events: list[tuple[str, str]] = []
+    kind: str | None = None
+    for line in lines:
+        if line.startswith("event: "):
+            kind = line[len("event: ") :]
+        elif line.startswith("data: ") and kind is not None:
+            events.append((kind, line[len("data: ") :]))
+            kind = None
+    return events
+
+
+class _StreamScriptedTransport:
+    """Stream-capable transport: turn 1 calls run_sql, turn 2 answers with tokens
+    (mirrors tests/test_chat_stream.py's _StreamFake)."""
+
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    def complete_stream(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], on_token: Any
+    ) -> dict[str, Any]:
+        self.turn += 1
+        if self.turn == 1:
+            on_token("checking…")
+            return {
+                "content": "checking…",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "function": {
+                            "name": "run_sql",
+                            "arguments": '{"sql": "SELECT count(*) FROM samples"}',
+                        },
+                    }
+                ],
+            }
+        for piece in ("There are ", "2 samples."):
+            on_token(piece)
+        return {"content": "There are 2 samples.", "tool_calls": []}
+
+    def complete(self, messages: Any, tools: Any) -> dict[str, Any]:
+        raise AssertionError("complete must not be called when streaming")
+
+
+class _RaisingStreamTransport:
+    """A transport whose complete_stream always fails, for the error-event test."""
+
+    model = "fake-model"
+
+    def complete_stream(self, messages: Any, tools: Any, on_token: Any) -> dict[str, Any]:
+        raise TransportError("connection refused — is `ollama serve` running?")
+
+
+class _ChartingTransport:
+    """Non-streaming transport scripted to call make_chart on its first turn."""
+
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    def complete(self, messages: Any, tools: Any) -> dict[str, Any]:
+        self.turn += 1
+        if self.turn == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "function": {
+                            "name": "make_chart",
+                            "arguments": json.dumps(
+                                {
+                                    "kind": "bar",
+                                    "title": "Night scenes per location",
+                                    "columns": ["location", "scenes"],
+                                    "rows": [["boston", 3], ["singapore", 5]],
+                                }
+                            ),
+                        },
+                    }
+                ],
+            }
+        return {"content": "Charted.", "tool_calls": []}
+
+
+class TestChatCharts:
+    def test_chat_response_carries_charts(
+        self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_transport(monkeypatch, _ChartingTransport())
+        response = chat_client.post("/chat", json={"message": "chart it", "history": []})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["charts"][0]["kind"] == "bar"
+        assert body["charts"][0]["title"] == "Night scenes per location"
+
+
+class TestChatStream:
+    def test_emits_turn_token_step_final(
+        self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_transport(monkeypatch, _StreamScriptedTransport())
+        with chat_client.stream(
+            "POST", "/chat/stream", json={"message": "How many?", "history": []}
+        ) as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+            events = _parse_sse(response.iter_lines())
+        kinds = [kind for kind, _payload in events]
+        assert kinds[0] == "turn"
+        assert "token" in kinds
+        assert "step" in kinds
+        assert kinds[-1] == "final"
+        final_payload = next(payload for kind, payload in reversed(events) if kind == "final")
+        final = json.loads(final_payload)
+        assert final["answer"] == "There are 2 samples."
+        assert "charts" in final and "frames" in final
+
+    def test_error_event_on_transport_failure(
+        self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_transport(monkeypatch, _RaisingStreamTransport())
+        with chat_client.stream(
+            "POST", "/chat/stream", json={"message": "q", "history": []}
+        ) as response:
+            assert response.status_code == 200
+            events = _parse_sse(response.iter_lines())
+        kinds = [kind for kind, _payload in events]
+        assert kinds[-1] == "error"
+        error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
+        assert "ollama serve" in error_payload
