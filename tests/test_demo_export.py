@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -284,8 +285,13 @@ def test_export_thumbs_malformed_token_raises_value_error(tmp_path: Path) -> Non
     assert bad_token in str(exc_info.value)
 
 
-@pytest.fixture()
-def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
+def _write_demo_config(
+    tmp_path: Path, tiny_inputs: dict[str, Path], *, models: dict[str, Any]
+) -> Path:
+    """Shared demo.yaml builder for ``build_config`` and the legacy-model-shape test
+    below — factored out so the two differ only in ``models``, not in every other
+    path/budget/flagship field.
+    """
     al = tiny_inputs["al"]
     (al / "random_pseudo_summary.json").write_text(json.dumps({
         "arm": "random", "n_candidates": 10, "n_accepted": 6, "retention": 0.6,
@@ -305,15 +311,48 @@ def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
             "lancedb_table": "frames",
             "out_dir": str(tmp_path / "demo_data"),
         },
-        "models": {"baseline": "runX"},
+        "models": models,
         "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30,
                      "cypher_source": "docs/GRAPH.md"},
+        # Task 4: absent by default -- no `demo curate`/`demo infer` run has staged
+        # anything under this dir in most fixtures here, so run_build must skip the
+        # curation group loudly rather than erroring. The curation-specific tests
+        # below stage real files under this same staging_dir.
+        "curation": {"staging_dir": str(tmp_path / "curation_staging")},
     }
     path = tmp_path / "demo.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
+
+
+@pytest.fixture()
+def build_config(tmp_path: Path, tiny_inputs: dict[str, Path]) -> Path:
+    # Production shape: a {run, imgsz} mapping (configs/demo.yaml since the Task 3
+    # review round) -- the shape every other fixture in this module now exercises.
+    # The flat run-id-string legacy shape gets its own dedicated coverage in
+    # test_build_accepts_legacy_flat_model_shape below.
+    return _write_demo_config(
+        tmp_path, tiny_inputs, models={"baseline": {"run": "runX", "imgsz": 640}}
+    )
+
+
+def test_build_accepts_legacy_flat_model_shape(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    """Carried review item: ``models:`` entries may still be a flat run-id string
+    (the shape every fixture used before the Task 3 review round introduced
+    ``{run, imgsz}``) -- run_build's hero accessor must resolve that shape too, not
+    only the ``{run, imgsz}`` dict shape ``build_config`` now exercises by default.
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config_path = _write_demo_config(tmp_path, tiny_inputs, models={"baseline": "runX"})
+    manifest = run_build(config_path)
+    out = Path(yaml.safe_load(config_path.read_text())["paths"]["out_dir"])
+    assert (out / "sample_frames" / "hero.jpg").is_file()
+    assert manifest["validation"]["flagship_sql_count"] == 1
 
 
 def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> None:
@@ -491,3 +530,71 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
     manifest = run_build(build_config)
     assert len(manifest["inputs"]) >= 7
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
+
+
+def test_build_skips_absent_curation_with_manifest_note(build_config: Path) -> None:
+    """No `demo curate`/`demo infer` staging (build_config's default) must not fail
+    the build -- Task 2's TRINITY-unreachable fallback means Tasks 1-4 still merge
+    on their own. It must, however, say so loudly in the manifest, not silently
+    proceed as if the curation group never existed."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["curation"] == "absent"
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert not (out / "frame_manifest.parquet").exists()
+
+
+def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+    }).to_parquet(staging / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
+        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+    }).to_parquet(staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    manifest = run_build(build_config)
+    assert manifest["validation"]["curation"] == "included"
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "frame_manifest.parquet").is_file()
+    assert (out / "sample_frames" / "crops" / "v0.jpg").is_file()
+    assert "frame_manifest.parquet" in manifest["outputs"]
+    # staging parquets are hashed as inputs (they are what the build actually read)
+    assert any(
+        Path(key).name == "frame_manifest.parquet" for key in manifest["inputs"]
+    )
+
+
+def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) -> None:
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame(columns=["sample_data_token", "model", "category_group", "x_min",
+                          "y_min", "x_max", "y_max", "conf", "status",
+                          "matched_annotation_token"]).to_parquet(
+        staging / "predictions.parquet")
+    pd.DataFrame(columns=["annotation_token", "sample_data_token", "category_group",
+                          "x_min", "y_min", "x_max", "y_max"]).to_parquet(
+        staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    with pytest.raises(ValueError, match="predictions"):
+        run_build(build_config)

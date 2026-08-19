@@ -1103,6 +1103,11 @@ def demo_infer(
     conf = float(sweep_cfg.get("conf_low", 0.05))
     models: dict[str, Any] = {}
     for name, spec in cfg["models"].items():
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"demo infer: models.{name} must be a {{run, imgsz}} mapping — a flat "
+                "run-id carries no per-checkpoint imgsz"
+            )
         imgsz = int(spec["imgsz"])
         logger.info("demo infer: %s @ imgsz=%d", name, imgsz)
         weights = mlruns_dir / "artifacts" / spec["run"] / "artifacts" / "weights" / "best.pt"

@@ -139,7 +139,7 @@ def built_demo_data(tmp_path: Path) -> Path:
             "lancedb_table": "frames",
             "out_dir": str(out),
         },
-        "models": {"baseline": "runX"},
+        "models": {"baseline": {"run": "runX", "imgsz": 640}},
         "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30, "cypher_source": "docs/GRAPH.md"},

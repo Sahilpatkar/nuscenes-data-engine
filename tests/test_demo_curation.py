@@ -105,6 +105,12 @@ def _curation_fixture(tmp_path: Path) -> dict[str, Path]:
         "sample_token": [f"st{i}" for i in range(8)] + ["st8", "st9", "st10"],
         "channel": ["CAM_FRONT"] * 11,
         "filename": [f"samples/CAM_FRONT/{i}.jpg" for i in range(11)],
+        # Deliberately DIFFERENT from failures.parquet's uniform "s" scene_name below,
+        # so a test that accidentally sourced scene_name from failures.parquet instead
+        # of here would fail loudly rather than passing by coincidence (carried review
+        # item: scene_name must be sourced from samples.parquet for every row, the
+        # same treatment is_night/is_rain already get).
+        "scene_name": [f"scene-{i}" for i in range(8)] + ["scene-8", "scene-9", "scene-10"],
         # Matches failures.parquet's is_night for v0..v7; arbitrary-but-fixed for the
         # pool tokens t1..t3, which have no failures.parquet row of their own — I3
         # requires is_night/is_rain to be sourced from here for every manifest row.
@@ -263,6 +269,9 @@ def test_curate_manifest_dtypes_are_bool_and_nullable(tmp_path: Path) -> None:
     assert (manifest["split"] == "train_pool").any()
     assert manifest["is_night"].dtype == np.dtype(bool)
     assert manifest["is_night"].isna().sum() == 0
+    # scene_name (carried review item): sourced from samples.parquet for every row,
+    # val and train_pool alike -- no NA even for tokens absent from failures.parquet.
+    assert manifest["scene_name"].isna().sum() == 0
     # boolean filtering must not crash even with train_pool rows present
     filtered = manifest[manifest["is_night"]]
     assert len(filtered) >= 1
@@ -297,6 +306,7 @@ def test_curate_al_selected_excludes_weak_claimed_tokens(tmp_path: Path) -> None
         "sample_token": [f"s{i}" for i in range(1, 6)],
         "channel": ["CAM_FRONT"] * 5,
         "filename": [f"samples/CAM_FRONT/{i}.jpg" for i in range(1, 6)],
+        "scene_name": [f"scene-{i}" for i in range(1, 6)],
         "is_night": [False] * 5,
         "is_rain": [False] * 5,
     }).to_parquet(processed / "samples.parquet")

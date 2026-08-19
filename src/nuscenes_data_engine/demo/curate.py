@@ -43,19 +43,19 @@ _KNOWN_BUCKETS = frozenset(
 # n_gt/n_matched/n_fn/n_low_conf use pandas' nullable Int64, failure_score Float64 —
 # plain numpy dtypes would force these to float64/object on the NA rows, which is a
 # smaller version of the same "NaN poisons a boolean-shaped column" bug C1 fixes for
-# canbus (see the is_night/is_rain handling below).
+# canbus (see the scene_name/is_night/is_rain handling below, sourced from
+# samples.parquet instead for exactly that reason).
 _INT_STAT_COLUMNS = ("n_gt", "n_matched", "n_fn", "n_low_conf")
 _FLOAT_STAT_COLUMNS = ("failure_score",)
-_OBJECT_STAT_COLUMNS = ("scene_name",)
 
 _MANIFEST_COLUMNS = (
     "sample_data_token",
     "split",
     "curation_buckets",
     "filename",
+    "scene_name",
     "is_night",
     "is_rain",
-    *_OBJECT_STAT_COLUMNS,
     *_INT_STAT_COLUMNS,
     *_FLOAT_STAT_COLUMNS,
 )
@@ -251,16 +251,19 @@ def run_curate(
             "filename": samples_lookup.loc[token, "filename"],
             # Sourced from samples.parquet for every row (val and train_pool alike) —
             # non-null for every token, unlike the failure-ledger stats below which
-            # only exist for val tokens. failures.parquet's own is_night column is
-            # not used here for exactly that reason (it would be missing/NaN for
-            # train_pool rows, turning this column object-dtype with None holes —
-            # the same class of bug C1 fixes for canbus, just for the manifest's own
-            # output instead of an input).
+            # only exist for val tokens. failures.parquet's own scene_name/is_night
+            # columns are not used here for exactly that reason (they would be
+            # missing/NaN for train_pool rows, turning these columns object-dtype
+            # with None holes — the same class of bug C1 fixes for canbus, just for
+            # the manifest's own output instead of an input; the reviewer verified
+            # samples.parquet's scene_name agrees with failures.parquet's on every
+            # val token, so this is a like-for-like source swap).
+            "scene_name": samples_lookup.loc[token, "scene_name"],
             "is_night": bool(samples_lookup.loc[token, "is_night"]),
             "is_rain": bool(samples_lookup.loc[token, "is_rain"]),
         }
         if token in failure_lookup.index:
-            for col in (*_OBJECT_STAT_COLUMNS, *_INT_STAT_COLUMNS, *_FLOAT_STAT_COLUMNS):
+            for col in (*_INT_STAT_COLUMNS, *_FLOAT_STAT_COLUMNS):
                 row[col] = failure_lookup.loc[token, col]
         rows.append(row)
 
