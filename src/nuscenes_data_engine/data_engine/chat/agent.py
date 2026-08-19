@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.data_engine.chat import catalog
+from nuscenes_data_engine.data_engine.chat.transports import stream_with_fallback
 from nuscenes_data_engine.data_engine.graph import guard as graph_guard
 
 logger = logging.getLogger("nuscenes_data_engine")
@@ -138,6 +140,9 @@ def answer(
     log_path: Path | None = None,
     graph_driver: Any | None = None,
     graph_database: str = "neo4j",
+    on_turn: Callable[[], None] | None = None,
+    on_token: Callable[[str], None] | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> ChatResult:
     """Run the tool loop for one question and return the answer + working."""
     started = time.time()
@@ -155,7 +160,13 @@ def answer(
     result = ChatResult(answer="", model=transport.model)
     seen_calls: set[str] = set()
     for _ in range(max_turns):
-        reply = transport.complete(messages, tools)
+        if on_turn:
+            on_turn()
+        reply = (
+            stream_with_fallback(transport, messages, tools, on_token=on_token)
+            if on_token
+            else transport.complete(messages, tools)
+        )
         tool_calls = reply.get("tool_calls") or []
         messages.append(
             {"role": "assistant", "content": reply.get("content"), "tool_calls": tool_calls}
@@ -188,7 +199,10 @@ def answer(
                         name, args, con, search_engine, result,
                         graph_driver=graph_driver, graph_database=graph_database,
                     )
-            result.steps.append({"tool": name, "input": args, "output": _summarize(output)})
+            step = {"tool": name, "input": args, "output": _summarize(output)}
+            result.steps.append(step)
+            if on_step:
+                on_step(step)
             messages.append(
                 {
                     "role": "tool",

@@ -10,6 +10,22 @@ import pytest
 from nuscenes_data_engine.data_engine.chat.transports import assemble_openai_stream
 
 
+@pytest.fixture()
+def con() -> Any:
+    """A real DuckDB catalog over a two-row samples table (mirrors test_chat_eval.py's
+    ``tiny_con``, named ``con`` here to match agent.answer's parameter name)."""
+    pytest.importorskip("duckdb")
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE VIEW samples AS SELECT * FROM (VALUES "
+        "('t1','boston-seaport',TRUE), ('t2','singapore-onenorth',FALSE)) "
+        "AS s(sample_data_token, location, is_night)"
+    )
+    return con
+
+
 def test_assemble_content_deltas_and_forwards_tokens() -> None:
     lines = [
         'data: {"choices":[{"delta":{"role":"assistant","content":"Hel"}}]}',
@@ -181,3 +197,53 @@ def test_fallback_transport_without_complete_stream_still_streams_one_token() ->
     reply = stream_with_fallback(_PlainFake(), [], [], on_token=seen.append)
     assert reply["content"] == "whole answer"
     assert seen == ["whole answer"]
+
+
+def test_answer_fires_callbacks_in_order(con: Any) -> None:
+    """turn -> tokens -> step -> turn -> tokens, with the final answer intact."""
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _StreamFake:
+        model = "fake"
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        def complete_stream(self, messages, tools, on_token):
+            self.turn += 1
+            if self.turn == 1:
+                on_token("checking…")
+                return {"content": "checking…", "tool_calls": [
+                    {"id": "c1", "function": {"name": "run_sql",
+                                              "arguments": '{"sql": "SELECT count(*) FROM samples"}'}}]}
+            for piece in ("There are ", "2 samples."):
+                on_token(piece)
+            return {"content": "There are 2 samples.", "tool_calls": []}
+
+        def complete(self, messages, tools):  # unused when streaming
+            raise AssertionError("complete must not be called when on_token is set")
+
+    events: list[tuple[str, str]] = []
+    result = agent.answer(
+        "How many?", transport=_StreamFake(), con=con, search_engine=None,
+        on_turn=lambda: events.append(("turn", "")),
+        on_token=lambda t: events.append(("token", t)),
+        on_step=lambda s: events.append(("step", s["tool"])),
+    )
+    assert result.answer == "There are 2 samples."
+    kinds = [k for k, _v in events]
+    assert kinds == ["turn", "token", "step", "turn", "token", "token"]
+
+
+def test_answer_without_callbacks_unchanged(con: Any) -> None:
+    """No callbacks -> the plain complete path; ScriptedTransport-style fakes fine."""
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _Plain:
+        model = "fake"
+
+        def complete(self, messages, tools):
+            return {"content": "plain answer", "tool_calls": []}
+
+    result = agent.answer("q", transport=_Plain(), con=con, search_engine=None)
+    assert result.answer == "plain answer"
