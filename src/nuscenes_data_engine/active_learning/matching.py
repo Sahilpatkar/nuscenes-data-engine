@@ -50,24 +50,30 @@ def _greedy_assign(
     *,
     iou: float,
     conf_hit: float,
-) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], int, int]:
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any], int, int]:
     """Shared greedy per-class assignment core for ``match_frame``/``match_frame_boxes``.
 
     Predictions are processed in descending-confidence order (per class) and each
     claims its best-IoU unmatched GT box (IoU >= ``iou``); this is the exact loop
-    ``match_frame`` used before the refactor — behavior is unchanged.
+    ``match_frame`` used before the refactor — behavior is unchanged. The order is a
+    ``kind="stable"`` argsort so tie-broken confidences resolve by original array
+    position instead of an unspecified quicksort order — verified against the
+    25-trial equivalence property test and the full existing match_frame suite with
+    no verdict changes (frozen behavior would win over this if it ever did).
 
-    Returns ``(matched_gt, pred_matched_gt, n_matched, n_low_conf)`` where
-    ``matched_gt`` is a per-GT bool array, ``pred_matched_gt`` is a per-pred int
-    array of the claimed GT row index (or -1), and ``n_matched``/``n_low_conf``
-    are the aggregate counts ``match_frame`` returns (low-conf claims count
-    toward both ``n_matched`` and ``n_low_conf`` — a match below ``conf_hit`` is
-    still a match).
+    Returns ``(matched_gt, pred_matched_gt, low_conf_mask, n_matched, n_low_conf)``
+    where ``matched_gt`` is a per-GT bool array, ``pred_matched_gt`` is a per-pred int
+    array of the claimed GT row index (or -1), ``low_conf_mask`` is a per-pred bool
+    array (True only for predictions that claimed a GT box with ``conf < conf_hit`` —
+    a subset of the claimed predictions), and ``n_matched``/``n_low_conf`` are the
+    aggregate counts ``match_frame`` returns (low-conf claims count toward both
+    ``n_matched`` and ``n_low_conf`` — a match below ``conf_hit`` is still a match).
     """
     n_gt = len(gt_boxes)
     n_pred = len(pred_boxes)
     matched_gt = np.zeros(n_gt, dtype=bool)
     pred_matched_gt = np.full(n_pred, -1, dtype=int)
+    low_conf_mask = np.zeros(n_pred, dtype=bool)
     n_matched = 0
     n_low_conf = 0
 
@@ -76,7 +82,7 @@ def _greedy_assign(
         pred_idx = np.flatnonzero(pred_classes == cls)
         if len(pred_idx) == 0:
             continue
-        order = pred_idx[np.argsort(-pred_conf[pred_idx])]
+        order = pred_idx[np.argsort(-pred_conf[pred_idx], kind="stable")]
         ious = iou_matrix(pred_boxes[order], gt_boxes[gt_idx])
         claimed = np.zeros(len(gt_idx), dtype=bool)
         for row, pred_i in enumerate(order):
@@ -89,9 +95,10 @@ def _greedy_assign(
                 n_matched += 1
                 if pred_conf[pred_i] < conf_hit:
                     n_low_conf += 1
+                    low_conf_mask[pred_i] = True
         del claimed
 
-    return matched_gt, pred_matched_gt, n_matched, n_low_conf
+    return matched_gt, pred_matched_gt, low_conf_mask, n_matched, n_low_conf
 
 
 def match_frame(
@@ -106,7 +113,7 @@ def match_frame(
 ) -> FrameFailure:
     """Greedy per-class matching of one frame's predictions against its GT."""
     n_gt = len(gt_boxes)
-    matched_gt, _pred_matched_gt, n_matched, n_low_conf = _greedy_assign(
+    matched_gt, _pred_matched_gt, _low_conf_mask, n_matched, n_low_conf = _greedy_assign(
         pred_boxes, pred_classes, pred_conf, gt_boxes, gt_classes, iou=iou, conf_hit=conf_hit
     )
 
@@ -147,14 +154,16 @@ def match_frame_boxes(
     flag, mirroring ``n_matched``/``n_low_conf`` in ``FrameFailure``: a low-confidence
     match is still a match. A prediction that claims nothing is "fp".
     """
-    matched_gt, pred_matched_gt, _n_matched, _n_low_conf = _greedy_assign(
+    matched_gt, pred_matched_gt, low_conf_mask, _n_matched, _n_low_conf = _greedy_assign(
         pred_boxes, pred_classes, pred_conf, gt_boxes, gt_classes, iou=iou, conf_hit=conf_hit
     )
 
     pred_status = np.full(len(pred_boxes), "fp", dtype=object)
     matched_mask = pred_matched_gt >= 0
     pred_status[matched_mask] = "tp"
-    pred_status[matched_mask & (pred_conf < conf_hit)] = "low_conf"
+    # low_conf_mask is already a subset of matched_mask (set only when a claim's
+    # conf < conf_hit inside _greedy_assign) — the "< conf_hit" predicate lives once.
+    pred_status[low_conf_mask] = "low_conf"
 
     return FrameBoxMatches(
         pred_status=pred_status,

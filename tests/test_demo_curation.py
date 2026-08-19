@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from nuscenes_data_engine.active_learning.matching import match_frame, match_frame_boxes
 
@@ -103,9 +105,17 @@ def _curation_fixture(tmp_path: Path) -> dict[str, Path]:
         "sample_token": [f"st{i}" for i in range(8)] + ["st8", "st9", "st10"],
         "channel": ["CAM_FRONT"] * 11,
         "filename": [f"samples/CAM_FRONT/{i}.jpg" for i in range(11)],
+        # Matches failures.parquet's is_night for v0..v7; arbitrary-but-fixed for the
+        # pool tokens t1..t3, which have no failures.parquet row of their own — I3
+        # requires is_night/is_rain to be sourced from here for every manifest row.
+        "is_night": [True, True, True, False, False, False, False, False, False, True, False],
+        "is_rain": [False] * 8 + [False, True, False],
     }).to_parquet(processed / "samples.parquet")
     pd.DataFrame({
-        "sample_token": ["st0", "st9"], "is_hard_braking": [True, True],
+        "sample_token": ["st0", "st9", "st3"],
+        # is_hard_braking is `bool | null` on real data (docs/DATA.md:166) — st3's
+        # None (no CAN window) must not crash the curation mask (C1).
+        "is_hard_braking": [True, True, None],
     }).to_parquet(processed / "canbus.parquet")
     pd.DataFrame({"sample_data_token": ["t1", "t2", "t3"]}).to_parquet(
         al / "graph_rate_night.parquet"
@@ -126,7 +136,7 @@ def test_curate_buckets_split_and_dedup(tmp_path: Path) -> None:
         processed_dir=paths["processed"], al_dir=paths["al"],
         staging_dir=tmp_path / "staging", quotas=quotas,
         al_arm="graph_rate_night", weak_arm="graph_rate_night",
-        semantic_hits=lambda queries: {"v5": ["semantic"], "t2": ["semantic"]},
+        semantic_hits=lambda queries: [("v5", ["semantic"]), ("t2", ["semantic"])],
         semantic_queries=["q"],
     )
     by_token = manifest.set_index("sample_data_token")
@@ -152,7 +162,7 @@ def test_curate_is_deterministic(tmp_path: Path) -> None:
         quotas={"night_failure": 2, "day_failure": 1, "hard_braking": 1, "al_selected": 2,
                 "weak_accepted": 1, "weak_rejected": 1, "clean_success": 1, "semantic": 0},
         al_arm="graph_rate_night", weak_arm="graph_rate_night",
-        semantic_hits=lambda queries: {}, semantic_queries=[],
+        semantic_hits=lambda queries: [], semantic_queries=[],
     )
     first = run_curate(staging_dir=tmp_path / "s1", **kwargs)
     second = run_curate(staging_dir=tmp_path / "s2", **kwargs)
@@ -169,7 +179,202 @@ def test_curate_clean_success_requires_no_failures(tmp_path: Path) -> None:
         quotas={"night_failure": 0, "day_failure": 0, "hard_braking": 0, "al_selected": 0,
                 "weak_accepted": 0, "weak_rejected": 0, "clean_success": 2, "semantic": 0},
         al_arm="graph_rate_night", weak_arm="graph_rate_night",
-        semantic_hits=lambda queries: {}, semantic_queries=[],
+        semantic_hits=lambda queries: [], semantic_queries=[],
     )
     stats = manifest.set_index("sample_data_token")
     assert all(stats["n_fn"] == 0) and all(stats["n_gt"] >= 3)
+
+
+def test_curate_null_is_hard_braking_does_not_crash(tmp_path: Path) -> None:
+    """C1: is_hard_braking is bool|null on real data (docs/DATA.md:166); a plain
+    boolean mask over a None-containing object column raises. st3's None row in the
+    fixture (added alongside st0/st9) exercises this on every hard_braking-quota run.
+    """
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    quotas = {"night_failure": 0, "day_failure": 0, "hard_braking": 5, "al_selected": 0,
+              "weak_accepted": 0, "weak_rejected": 0, "clean_success": 0, "semantic": 0}
+    manifest = run_curate(
+        processed_dir=paths["processed"], al_dir=paths["al"],
+        staging_dir=tmp_path / "staging", quotas=quotas,
+        al_arm="graph_rate_night", weak_arm="graph_rate_night",
+        semantic_hits=lambda queries: [], semantic_queries=[],
+    )
+    by_token = manifest.set_index("sample_data_token")
+    # st0/st9 -> v0/t2 are real hard-braking hits; st3's null must not appear as one.
+    assert "hard_braking" in by_token.loc["v0", "curation_buckets"]
+    assert "hard_braking" in by_token.loc["t2", "curation_buckets"]
+    assert "v3" not in by_token.index or "hard_braking" not in by_token.loc["v3", "curation_buckets"]
+
+
+def test_curate_rejects_non_cam_front_token(tmp_path: Path) -> None:
+    """I2: every curated token must be CAM_FRONT -- the semantic bucket is the one
+    door not already CAM_FRONT-filtered (LanceDB spans all six channels)."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    samples_path = paths["processed"] / "samples.parquet"
+    samples = pd.read_parquet(samples_path)
+    samples = pd.concat(
+        [
+            samples,
+            pd.DataFrame({
+                "sample_data_token": ["b1"],
+                "sample_token": ["stb1"],
+                "channel": ["CAM_BACK"],
+                "filename": ["samples/CAM_BACK/b1.jpg"],
+                "is_night": [False],
+                "is_rain": [False],
+            }),
+        ],
+        ignore_index=True,
+    )
+    samples.to_parquet(samples_path)
+
+    quotas = {"night_failure": 0, "day_failure": 0, "hard_braking": 0, "al_selected": 0,
+              "weak_accepted": 0, "weak_rejected": 0, "clean_success": 0, "semantic": 1}
+    with pytest.raises(ValueError, match="b1"):
+        run_curate(
+            processed_dir=paths["processed"], al_dir=paths["al"],
+            staging_dir=tmp_path / "staging", quotas=quotas,
+            al_arm="graph_rate_night", weak_arm="graph_rate_night",
+            semantic_hits=lambda queries: [("b1", ["semantic"])],
+            semantic_queries=["q"],
+        )
+
+
+def test_curate_manifest_dtypes_are_bool_and_nullable(tmp_path: Path) -> None:
+    """I3: is_night/is_rain come from samples.parquet for every row (bool, no NA);
+    failure-ledger stat columns use pandas nullable dtypes so train_pool rows carry
+    pd.NA instead of poisoning the column to object/float64."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    quotas = {"night_failure": 2, "day_failure": 1, "hard_braking": 0, "al_selected": 0,
+              "weak_accepted": 1, "weak_rejected": 1, "clean_success": 0, "semantic": 0}
+    manifest = run_curate(
+        processed_dir=paths["processed"], al_dir=paths["al"],
+        staging_dir=tmp_path / "staging", quotas=quotas,
+        al_arm="graph_rate_night", weak_arm="graph_rate_night",
+        semantic_hits=lambda queries: [], semantic_queries=[],
+    )
+    assert (manifest["split"] == "val").any()
+    assert (manifest["split"] == "train_pool").any()
+    assert manifest["is_night"].dtype == np.dtype(bool)
+    assert manifest["is_night"].isna().sum() == 0
+    # boolean filtering must not crash even with train_pool rows present
+    filtered = manifest[manifest["is_night"]]
+    assert len(filtered) >= 1
+    assert str(manifest["n_gt"].dtype) == "Int64"
+    assert str(manifest["failure_score"].dtype) == "Float64"
+    pool_row = manifest.set_index("sample_data_token").loc["t1"]
+    assert pool_row["n_gt"] is pd.NA
+
+
+def test_curate_al_selected_excludes_weak_claimed_tokens(tmp_path: Path) -> None:
+    """I4: al_selected must draw from tokens the weak buckets didn't already claim,
+    not re-slice the same token-ascending prefix of the same arm pool."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    al = tmp_path / "al"
+    al.mkdir()
+    tokens = [f"t{i}" for i in range(1, 6)]
+    pd.DataFrame({
+        "sample_data_token": pd.Series([], dtype="object"),
+        "scene_name": pd.Series([], dtype="object"),
+        "is_night": pd.Series([], dtype="bool"),
+        "n_gt": pd.Series([], dtype="int64"),
+        "n_matched": pd.Series([], dtype="int64"),
+        "n_fn": pd.Series([], dtype="int64"),
+        "n_low_conf": pd.Series([], dtype="int64"),
+        "failure_score": pd.Series([], dtype="float64"),
+    }).to_parquet(al / "failures.parquet")
+    pd.DataFrame({
+        "sample_data_token": tokens,
+        "sample_token": [f"s{i}" for i in range(1, 6)],
+        "channel": ["CAM_FRONT"] * 5,
+        "filename": [f"samples/CAM_FRONT/{i}.jpg" for i in range(1, 6)],
+        "is_night": [False] * 5,
+        "is_rain": [False] * 5,
+    }).to_parquet(processed / "samples.parquet")
+    pd.DataFrame({
+        "sample_token": pd.Series([], dtype="object"),
+        "is_hard_braking": pd.Series([], dtype="object"),
+    }).to_parquet(processed / "canbus.parquet")
+    pd.DataFrame({"sample_data_token": tokens}).to_parquet(al / "graph_rate_night.parquet")
+    pd.DataFrame({"sample_data_token": ["t1"]}).to_parquet(
+        al / "graph_rate_night_accepted.parquet"
+    )
+
+    quotas = {"night_failure": 0, "day_failure": 0, "hard_braking": 0, "al_selected": 2,
+              "weak_accepted": 1, "weak_rejected": 2, "clean_success": 0, "semantic": 0}
+    manifest = run_curate(
+        processed_dir=processed, al_dir=al, staging_dir=tmp_path / "staging",
+        quotas=quotas, al_arm="graph_rate_night", weak_arm="graph_rate_night",
+        semantic_hits=lambda queries: [], semantic_queries=[],
+    )
+    by_token = manifest.set_index("sample_data_token")
+    # weak_accepted=[t1], weak_rejected=[t2,t3] claim the first three tokens (sorted
+    # ascending); al_selected (quota 2) must draw from what's left: t4, t5.
+    assert "al_selected" in by_token.loc["t4", "curation_buckets"]
+    assert "al_selected" in by_token.loc["t5", "curation_buckets"]
+    assert "al_selected" not in by_token.loc["t1", "curation_buckets"]
+    assert "al_selected" not in by_token.loc["t2", "curation_buckets"]
+    assert "al_selected" not in by_token.loc["t3", "curation_buckets"]
+    assert len(set(manifest["sample_data_token"])) == 5  # t1..t5 all curated, no redundancy
+
+
+def test_curate_empty_quotas_returns_empty_manifest_with_columns(tmp_path: Path) -> None:
+    """M1: an all-empty quotas dict must not KeyError on column access downstream --
+    the manifest is empty but still has every expected column."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    manifest = run_curate(
+        processed_dir=paths["processed"], al_dir=paths["al"],
+        staging_dir=tmp_path / "staging", quotas={},
+        al_arm="graph_rate_night", weak_arm="graph_rate_night",
+        semantic_hits=lambda queries: [], semantic_queries=[],
+    )
+    assert len(manifest) == 0
+    assert "filename" in manifest.columns
+    assert "sample_data_token" in manifest.columns
+    assert (tmp_path / "staging" / "rsync_filelist.txt").read_text() == ""
+
+
+def test_curate_warns_when_bucket_underfills(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M2: requesting more than a bucket can supply logs a warning instead of
+    silently shipping a short manifest."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    quotas = {"night_failure": 100, "day_failure": 0, "hard_braking": 0, "al_selected": 0,
+              "weak_accepted": 0, "weak_rejected": 0, "clean_success": 0, "semantic": 0}
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        run_curate(
+            processed_dir=paths["processed"], al_dir=paths["al"],
+            staging_dir=tmp_path / "staging", quotas=quotas,
+            al_arm="graph_rate_night", weak_arm="graph_rate_night",
+            semantic_hits=lambda queries: [], semantic_queries=[],
+        )
+    assert "night_failure" in caplog.text
+
+
+def test_curate_rejects_unknown_quota_keys(tmp_path: Path) -> None:
+    """M3: a typo'd quota key must fail loudly, not be silently ignored."""
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    paths = _curation_fixture(tmp_path)
+    quotas = {"night_failure": 1, "bogus_bucket": 5}
+    with pytest.raises(ValueError, match="bogus_bucket"):
+        run_curate(
+            processed_dir=paths["processed"], al_dir=paths["al"],
+            staging_dir=tmp_path / "staging", quotas=quotas,
+            al_arm="graph_rate_night", weak_arm="graph_rate_night",
+            semantic_hits=lambda queries: [], semantic_queries=[],
+        )
