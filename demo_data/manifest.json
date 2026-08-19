@@ -1,6 +1,6 @@
 {
-  "built_at": "2026-08-18T22:55:27-0700",
-  "git_sha": "bb8e321e7d873a39faae3dfb4b25b9d6c15e02c4",
+  "built_at": "2026-08-18T23:19:49-0700",
+  "git_sha": "fb56198305b731f4d409c71cdc2bf0a532a8b105",
   "inputs": {
     "data/active_learning/graph_rate_night_pseudo_summary.json": "dc0f3637a8785647addabbee8123823f14014c99959ea0590ad4078678f911ab",
     "data/active_learning/random_pseudo_summary.json": "aaac4d750f3bce819c92ba2949a5d34c607d65b6f1ae46d8a0e395c7be042e0e",
@@ -2049,6 +2049,7 @@
       "sha256": "e801316d08dadd8e29fb592af8c9aab3c0759981c6cd2d3fc5bc9401deb4fc16"
     }
   },
+  "package_version": "0.3",
   "validation": {
     "curation": "included",
     "flagship_sql_count": 30,

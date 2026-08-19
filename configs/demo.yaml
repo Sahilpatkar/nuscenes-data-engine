@@ -26,9 +26,14 @@ hero:                # Phase 3: a hand-picked exemplar crop token from the curat
                       # frames group (demo_data/sample_frames/crops/<token>.jpg),
                       # not an mlruns mosaic -- see the dated amendment in
                       # docs/superpowers/specs/2026-08-12-demo-phase1-design.md.
-                      # `demo build` fails loudly on a null token (see docs/DEMO.md).
+                      # `demo build` fails loudly on a null token ONLY once curation
+                      # is included -- a null token is fine (and expected) while
+                      # curation is absent, e.g. a fresh clone. See docs/DEMO.md's
+                      # "Picking the hero token" section.
   token: 5994f34b836043b3b5be191bceba2e3e         # picked in the Task-5 operational run from the
-                      # fixes_fn_vs_baseline_graph_rate_night exemplars
+                      # fixes_fn_vs_baseline_graph_rate_night exemplars -- if you pick
+                      # a different token, also update app/demo/views/overview.py's
+                      # _HERO_CAPTION to describe what it actually shows
 
 budgets:
   max_package_mb: 100

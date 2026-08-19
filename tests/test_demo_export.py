@@ -393,6 +393,7 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
+    assert manifest["package_version"] == "0.3"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:

@@ -57,16 +57,37 @@ manifest always names the commit it was built from, not the one that carries it.
 
 | file | contents |
 |---|---|
-| `manifest.json` | provenance: git sha, input/output SHA256s, counts, validation |
+| `manifest.json` | provenance: git sha, `package_version`, input/output SHA256s, counts, validation |
 | `overview_metrics.json` | scale, headline results, flagship parity, CAN r |
 | `active_learning_results.parquet` | all 13 arms: overall/night mAP50-95 + deltas |
 | `weak_supervision_results.parquet` | per-arm verifier retention + box stats |
-| `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car + pedestrian that graph_rate_night catches) — rendered live with overlays on Overview |
+| `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car AND a pedestrian — graph_rate_night recovers only the pedestrian, a low-confidence hit; the car defeats all three models) — rendered live with overlays on Overview |
 | `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched) |
 | `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
 | `sample_frames/thumbs/` | 250 × 256×144 LanceDB thumbnails |
+
+## Picking the hero token
+
+The Overview page's hero image is a hand-picked exemplar crop, not a mosaic or an
+algorithmically-chosen frame. To change it: pick a `sample_data_token` from
+`frame_manifest.parquet`'s val rows with `fixes_fn_vs_baseline_graph_rate_night ==
+True` (a frame where `graph_rate_night` catches a false negative `baseline`
+misses), ideally with 2-6 GT boxes for legibility, set `configs/demo.yaml`
+`hero.token` to it, and rebuild. `demo build` fails loudly on a null token, but
+only once curation is included — a null token is the ordinary, expected state on
+a fresh clone (`data/demo_curation/` is gitignored) or before `demo curate` +
+`demo infer` have run; a *non-null* token with curation absent is still an error
+(the config references curated data that isn't there).
+
+The hero's caption (`app/demo/views/overview.py`'s `_HERO_CAPTION`) is a fixed
+string describing what THIS SPECIFIC token's boxes actually show — it is not
+generated from the data. Picking a different token means rewriting that string to
+match its ground truth, or the caption will describe a frame the viewer isn't
+looking at (this is exactly the bug the final Phase 3 review round caught and
+fixed: the caption claimed a single miss the retrain catches, when the real frame
+has two misses and the retrain only catches one of them).
 
 ## Streamlit-Cloud contract
 
@@ -116,15 +137,19 @@ skips the curation group and still produces the Phase-1 package
 ## Failure Explorer (Phase 3)
 
 `app/demo/views/failures.py` — filters (lighting, rain, model, class, size bucket,
-distance-to-ego, failure type, curation bucket) over the 125 **val** frames only
-(train_pool frames carry no predictions by design; later pages use them). The
-GT/Predictions/Overlay toggle renders through the shared `draw_overlay` visual
-language: GT green, misses orange-dashed, FPs red, low-confidence yellow-dotted.
-FN here means what `failures.parquet` means: GT unmatched by the selected model,
-with low-confidence claims counting as matches. Leaving the distance slider at
-full extent applies no distance filter (narrowing it excludes zero-GT frames —
-stated in the widget's help). Exemplar badges credit the model that *catches* a
-box another model missed.
+distance-to-ego, failure type, curation bucket — multi-select, any-overlap: a
+frame matches if any of its own buckets is selected) over the 125 **val** frames
+only (train_pool frames carry no predictions by design; later pages use them).
+The filtered grid can be sorted by failure count (n_fn+n_fp+n_low_conf for the
+selected model, worst first), distance to the nearest GT box (nearest first, a
+zero-GT frame sorts last), or scene name. The GT/Predictions/Overlay toggle
+renders through the shared `draw_overlay` visual language: GT green, misses
+orange-dashed, FPs red, low-confidence yellow-dotted. FN here means what
+`failures.parquet` means: GT unmatched by the selected model, with low-confidence
+claims counting as matches. Leaving the distance slider at full extent applies no
+distance filter (narrowing it excludes zero-GT frames — stated in the widget's
+help). Exemplar badges credit the model that *catches* a box another model
+missed.
 
 ## Dataset attribution & license
 

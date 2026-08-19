@@ -353,3 +353,12 @@ def test_overview_hero_renders_overlay(
     at = AppTest.from_file(str(DEMO_DIR / "main.py"))
     at.run(timeout=30)
     assert not at.exception   # hero overlay path must not raise even with tiny fixture boxes
+    # Final-review fix: the old caption text was generic enough to read
+    # identically whether the overlay path or the plain-image fallback rendered,
+    # so this assertion previously passed on vibes. This fixture's hero token
+    # ("v0") has real GT+pred boxes staged for it (built_demo_data), so
+    # _hero_overlay must take the live-overlay branch, not the fallback -- pin a
+    # substring unique to the corrected caption so a regression to the fallback
+    # (or a wrong caption) fails loudly instead of silently matching either path.
+    hero_captions = [caption for img in at.image for caption in img.captions]
+    assert any("defeats all three models" in caption for caption in hero_captions)

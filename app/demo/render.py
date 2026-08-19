@@ -152,7 +152,12 @@ def _draw_label(draw: ImageDraw.ImageDraw, xyxy: _XYXY, text: str, style: BoxSty
     x_min, y_min, x_max, _y_max = xyxy
     if (x_max - x_min) < _MIN_LABEL_WIDTH_PX:
         return
-    draw.text((x_min, y_min), text, fill=style.color)
+    # Clamp to the visible canvas: a box that extends past the top/left edge
+    # (x_min/y_min < 0 -- e.g. an annotation only partially inside the frame)
+    # would otherwise draw its label starting off-canvas, clipping it. Collision
+    # avoidance between overlapping labels is out of scope (accepted cosmetic) --
+    # this only keeps an edge label from being partially invisible.
+    draw.text((max(x_min, 0.0), max(y_min, 0.0)), text, fill=style.color)
 
 
 def draw_overlay(

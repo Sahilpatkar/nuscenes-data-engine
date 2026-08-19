@@ -10,10 +10,22 @@ from data import crop_path, hero_path, load_gt_boxes, load_overview, load_predic
 
 # Phase 3: docs/superpowers/specs/2026-08-18-demo-phase3-design.md §4 -- fixed
 # hero caption, always the baseline model (the hero is a baseline-vs-GT story,
-# not a per-viewer model choice).
+# not a per-viewer model choice). This is a description of THIS SPECIFIC
+# hero_token's content (configs/demo.yaml hero.token), not a generic label --
+# picking a different token means rewriting this string to match (see
+# docs/DEMO.md's "Picking the hero token" section). Ground truth for the token
+# picked in the Task-5 operational run (final-review correction): baseline
+# misses a shadowed car AND a pedestrian; graph_rate_night recovers ONLY the
+# pedestrian (a low-confidence match, still a hit per the matching rules) -- the
+# far car defeats all three models. The original caption ("the orange dashed
+# box is a miss ... catches", singular) was wrong on both counts: it claimed a
+# single miss where two dashed boxes render, and implied the visually-dominant
+# one (the far car) is the one that gets caught, when it's the one nothing
+# catches.
 _HERO_CAPTION = (
-    "baseline yolov8n: the orange dashed box is a miss the night-targeted "
-    "retrain catches — explore more in the Failure Explorer"
+    "baseline misses a shadowed car and a pedestrian; the night-targeted "
+    "retrain recovers the pedestrian (a low-confidence hit) — the far car "
+    "defeats all three models. Explore more in the Failure Explorer."
 )
 
 

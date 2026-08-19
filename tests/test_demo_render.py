@@ -183,3 +183,21 @@ def test_draw_overlay_inverted_box_raises() -> None:
         with pytest.raises(ValueError, match="inverted") as exc_info:
             draw_overlay(_blank(), _gt(True).iloc[0:0], preds, mode="pred", scale=0.6)
         assert "car" in str(exc_info.value)
+
+
+def test_draw_overlay_label_clamped_at_frame_edge() -> None:
+    """A box whose top-left corner is off-canvas (x_min/y_min < 0 -- e.g. an
+    annotation only partially inside the frame) must still draw its label ON the
+    visible canvas, not clipped away above/left of it (final-review fix)."""
+    gt = pd.DataFrame({
+        "x_min": [-50.0], "y_min": [-50.0], "x_max": [50.0], "y_max": [0.0],
+        "category_group": ["car"], "matched": [True],
+    })
+    out = draw_overlay(_blank(), gt, _preds("tp").iloc[0:0], mode="gt", scale=1.0)
+    # Same "car"-glyph region test_draw_overlay_label_suppressed_under_min_width
+    # uses (glyph bbox (0, 4, 14, 10) at the label's drawn origin, verified via
+    # ImageDraw.textbbox) -- clear of the GT outline itself. Unclamped, the label
+    # would draw at (-50, -50): entirely off-canvas, so this region would stay
+    # pure background.
+    region = [(x, y) for x in range(2, 14) for y in range(4, 10)]
+    assert any(out.getpixel(p) != (10, 10, 10) for p in region)

@@ -27,6 +27,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # recovery must not require a manual rm -rf.
 _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 
+# Bumped by hand alongside docs/DEMO.md's package-layout table whenever a rebuild
+# changes the package's shape (new/removed columns or files), not on every build --
+# most rebuilds (a results.json update, a re-picked hero token) keep this the same.
+# Currently 0.3: gt_boxes gained distance_to_ego_m/size_bucket, hero.jpg became a
+# real exemplar crop (see the dated amendment in
+# docs/superpowers/specs/2026-08-12-demo-phase1-design.md).
+_PACKAGE_VERSION = "0.3"
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -339,9 +347,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # Hash everything the build actually read, not just results.json: the processed
     # parquets and every weak-sup summary — an unnoticed change to any of these
     # silently changes the published numbers. The hero source is now a curated crop
-    # (out_dir/sample_frames/crops/<token>.jpg, itself copied from staging_dir's
-    # crops/ — see the curation-staging hash loop below) rather than a separate
-    # mlruns mosaic, so there is no extra hero-specific input to hash here.
+    # (out_dir/sample_frames/crops/<token>.jpg) rather than a separate mlruns
+    # mosaic, so there is no extra hero-specific INPUT to hash here — it isn't
+    # covered by the curation-staging hash loop below either (that loop only
+    # covers the three staged parquets, not crop imagery). The crop (and the
+    # hero.jpg copy of it) is still captured, just as an OUTPUT: the outputs loop
+    # above hashes every file under out_dir, sample_frames/crops/ and hero.jpg
+    # included.
     inputs: dict[str, str] = {
         str(al_dir / "results.json"): _sha256(al_dir / "results.json"),
     }
@@ -359,6 +371,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
     manifest = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "git_sha": _git_sha(),
+        "package_version": _PACKAGE_VERSION,
         "inputs": inputs,
         "outputs": outputs,
         "validation": {

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from filters import filter_frames
+from filters import failure_counts, filter_frames, sort_frames
 from PIL import Image
 from render import draw_overlay
 
@@ -25,6 +25,11 @@ _FAILURE_LABELS = {
     "Has FP": "has_fp",
     "Has low-conf": "has_low_conf",
     "Clean": "clean",
+}
+_SORT_LABELS = {
+    "Failure count": "failure_count",
+    "Distance (nearest GT)": "distance",
+    "Scene name": "scene_name",
 }
 
 
@@ -43,17 +48,6 @@ def _bool_options(series: pd.Series, *, true_label: str, false_label: str) -> li
     present = sorted(series.dropna().unique().tolist(), reverse=True)
     labels = {True: true_label, False: false_label}
     return ["All"] + [labels[v] for v in present]
-
-
-def _box_counts(gt: pd.DataFrame, preds: pd.DataFrame, token: str, model: str) -> tuple[int, int, int]:
-    """(n_fn, n_fp, n_low_conf) for one frame+model — counts, not the boolean
-    flags failure_flags exposes, for the grid caption."""
-    gt_token = gt.loc[gt["sample_data_token"] == token]
-    n_fn = int(gt_token[f"matched_{model}"].eq(False).sum())
-    preds_token = preds.loc[(preds["sample_data_token"] == token) & (preds["model"] == model)]
-    n_fp = int((preds_token["status"] == "fp").sum())
-    n_low_conf = int((preds_token["status"] == "low_conf").sum())
-    return n_fn, n_fp, n_low_conf
 
 
 def _frame_image_path(token: str) -> Path | None:
@@ -168,13 +162,24 @@ def render() -> None:
         size_bucket=size_bucket,
         distance_range=distance_arg,
         failure_type=failure_type,
+        # Empty multiselect -> None: filter_frames's own no-op contract (buckets
+        # not None but empty would still be a no-op via `if buckets:`, but None
+        # says so explicitly at the call site).
+        buckets=bucket_choice or None,
     )
-    if bucket_choice:
-        frames = frames.loc[
-            frames["curation_buckets"].apply(lambda bs: any(b in bs for b in bucket_choice))
-        ].reset_index(drop=True)
 
     st.caption(f"{len(frames)} / {len(val_manifest)} val frames match the current filters")
+
+    sort_label = st.sidebar.selectbox("Sort by", list(_SORT_LABELS))
+    frames = sort_frames(frames, gt=gt, preds=preds, model=model, key=_SORT_LABELS[sort_label])
+
+    # One failure_counts call over every filtered token, not per-row inside the
+    # grid loop: the same counts also back the "failure_count" sort key above, so
+    # computing them once keeps the displayed n_fn/n_fp/n_low_conf and the sort
+    # order from ever silently disagreeing with each other.
+    counts = failure_counts(gt, preds, frames["sample_data_token"], model=model).set_index(
+        "sample_data_token"
+    )
 
     # No pagination: the curated set tops out at 125 val frames today, which
     # renders comfortably in one scroll. If that grows substantially, page
@@ -184,7 +189,11 @@ def render() -> None:
     for position, row in enumerate(frames.itertuples()):
         token = row.sample_data_token
         image_path = _frame_image_path(token)
-        n_fn, n_fp, n_low_conf = _box_counts(gt, preds, token, model)
+        n_fn, n_fp, n_low_conf = (
+            int(counts.loc[token, "n_fn"]),
+            int(counts.loc[token, "n_fp"]),
+            int(counts.loc[token, "n_low_conf"]),
+        )
         with columns[position % 4]:
             if image_path is not None:
                 st.image(str(image_path))
@@ -221,9 +230,9 @@ def render() -> None:
     # list dtype), not a plain Python list -- `array or []` would raise
     # ("truth value of an array with more than one element is ambiguous") for any
     # frame in more than one bucket, so check emptiness by length, not truthiness.
-    buckets = frame_row.get("curation_buckets")
-    buckets_list = list(buckets) if buckets is not None else []
-    meta_cols[3].metric("Buckets", ", ".join(buckets_list) if buckets_list else "none")
+    frame_buckets = frame_row.get("curation_buckets")
+    frame_buckets_list = list(frame_buckets) if frame_buckets is not None else []
+    meta_cols[3].metric("Buckets", ", ".join(frame_buckets_list) if frame_buckets_list else "none")
 
     manifest_models = _models_from_manifest(manifest)
     if manifest_models:

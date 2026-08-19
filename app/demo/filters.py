@@ -5,10 +5,13 @@ importable and testable without a Streamlit runtime; pandas is the only dependen
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import pandas as pd
 
 _LIGHTING = {"night": True, "day": False}
 _FAILURE_TYPES = ("has_fn", "has_fp", "has_low_conf", "clean")
+_SORT_KEYS = ("failure_count", "distance", "scene_name")
 
 
 def failure_flags(
@@ -59,7 +62,7 @@ def filter_frames(
     size_bucket: str | None = None,
     distance_range: tuple[float, float] | None = None,
     failure_type: str | None = None,
-    bucket: str | None = None,
+    buckets: list[str] | None = None,
 ) -> pd.DataFrame:
     """Compose ``failure_flags`` with the sidebar's filter criteria.
 
@@ -67,9 +70,12 @@ def filter_frames(
     match against ``is_rain``. ``category`` / ``size_bucket`` / ``distance_range``:
     keep a frame if ANY of its GT rows (val-only, any model — GT boxes are not
     model-specific) satisfies the criterion. ``failure_type``: one of
-    "has_fn"/"has_fp"/"has_low_conf"/"clean". ``bucket``: membership in the frame's
-    ``curation_buckets`` list. Every criterion left as None is a no-op; with none
-    set, the full val-split frame set (with flags attached) is returned.
+    "has_fn"/"has_fp"/"has_low_conf"/"clean". ``buckets``: any-overlap membership
+    against the frame's ``curation_buckets`` list (keep a frame if ANY of its own
+    buckets appears in ``buckets`` — the sidebar's multiselect is OR, not AND,
+    across selections). ``None`` or an empty list is a no-op, same as every other
+    criterion left as ``None``; with nothing set, the full val-split frame set
+    (with flags attached) is returned.
     """
     flags = failure_flags(manifest, gt, preds, model=model)
     gt_val = gt.loc[gt["sample_data_token"].isin(set(flags["sample_data_token"]))]
@@ -105,7 +111,73 @@ def filter_frames(
             )
         mask &= flags[failure_type].astype(bool)
 
-    if bucket is not None:
-        mask &= flags["curation_buckets"].apply(lambda buckets: bucket in buckets)
+    if buckets:
+        bucket_set = set(buckets)
+        mask &= flags["curation_buckets"].apply(lambda bs: bool(bucket_set & set(bs)))
 
     return flags[mask].reset_index(drop=True)
+
+
+def failure_counts(
+    gt: pd.DataFrame, preds: pd.DataFrame, tokens: Iterable[str], *, model: str
+) -> pd.DataFrame:
+    """Per-token (n_fn, n_fp, n_low_conf, failure_count) for ``model``, restricted
+    to ``tokens`` — the grid caption's "2fn/1fp/0lowconf" summary and
+    ``sort_frames``'s "failure_count" key share this, so the two always agree.
+    Unlike ``failure_flags``'s booleans, these are real counts (a frame can have
+    more than one FN GT box or FP/low-conf prediction). A token with none of the
+    three gets zeros, not a missing row.
+    """
+    token_list = list(dict.fromkeys(tokens))  # de-duplicate, preserve order
+    matched_col = f"matched_{model}"
+
+    gt_scope = gt.loc[gt["sample_data_token"].isin(token_list)]
+    is_fn = gt_scope[matched_col].eq(False).fillna(False)
+    n_fn = gt_scope.loc[is_fn].groupby("sample_data_token").size()
+
+    preds_scope = preds.loc[
+        preds["sample_data_token"].isin(token_list) & (preds["model"] == model)
+    ]
+    n_fp = preds_scope.loc[preds_scope["status"] == "fp"].groupby("sample_data_token").size()
+    n_low_conf = preds_scope.loc[preds_scope["status"] == "low_conf"].groupby(
+        "sample_data_token"
+    ).size()
+
+    out = pd.DataFrame({"sample_data_token": token_list}).set_index("sample_data_token")
+    out["n_fn"] = n_fn
+    out["n_fp"] = n_fp
+    out["n_low_conf"] = n_low_conf
+    out = out.fillna(0).astype(int)
+    out["failure_count"] = out["n_fn"] + out["n_fp"] + out["n_low_conf"]
+    return out.reset_index()
+
+
+def sort_frames(
+    frames: pd.DataFrame, *, gt: pd.DataFrame, preds: pd.DataFrame, model: str, key: str
+) -> pd.DataFrame:
+    """Sort a ``filter_frames``/``failure_flags`` result for the grid.
+
+    ``key``: "failure_count" (``failure_counts``'s n_fn+n_fp+n_low_conf for
+    ``model`` — descending, worst first), "distance" (each token's nearest/min GT
+    ``distance_to_ego_m`` — ascending, NA last, so a frame with no GT distance
+    data doesn't float to the top by accident), or "scene_name" (alphabetical).
+    Returns a new, re-indexed DataFrame; ``frames`` itself is not mutated.
+    """
+    if key not in _SORT_KEYS:
+        raise ValueError(f"sort_frames: unknown key {key!r} — expected one of {_SORT_KEYS}")
+
+    if key == "scene_name":
+        return frames.sort_values("scene_name", kind="stable").reset_index(drop=True)
+
+    if key == "distance":
+        min_dist = gt.groupby("sample_data_token")["distance_to_ego_m"].min()
+        out = frames.assign(_sort_key=frames["sample_data_token"].map(min_dist))
+        out = out.sort_values("_sort_key", kind="stable", na_position="last")
+        return out.drop(columns="_sort_key").reset_index(drop=True)
+
+    counts = failure_counts(gt, preds, frames["sample_data_token"], model=model)
+    out = frames.merge(
+        counts[["sample_data_token", "failure_count"]], on="sample_data_token", how="left"
+    )
+    out = out.sort_values("failure_count", ascending=False, kind="stable")
+    return out.drop(columns="failure_count").reset_index(drop=True)
