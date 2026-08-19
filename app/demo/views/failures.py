@@ -95,7 +95,11 @@ def render() -> None:
 
     st.sidebar.header("Filters")
     default_index = gt_models.index("baseline") if "baseline" in gt_models else 0
-    model = st.sidebar.radio("Model", gt_models, index=default_index)
+    # Explicit key: tests drive the model choice directly via
+    # at.radio(key="failure_model").set_value(...) rather than relying on
+    # streamlit's identity-derived default key, which isn't guaranteed stable
+    # across reruns for a plain positional call like this.
+    model = st.sidebar.radio("Model", gt_models, index=default_index, key="failure_model")
 
     lighting_label = st.sidebar.selectbox(
         "Lighting", _bool_options(val_manifest["is_night"], true_label="Night", false_label="Day")
@@ -126,8 +130,26 @@ def render() -> None:
     if max_dist <= min_dist:
         max_dist = min_dist + 1.0
     distance_range = st.sidebar.slider(
-        "Distance to ego (m)", min_value=min_dist, max_value=max_dist, value=(min_dist, max_dist)
+        "Distance to ego (m)",
+        min_value=min_dist,
+        max_value=max_dist,
+        value=(min_dist, max_dist),
+        help=(
+            "Narrowing this excludes frames with zero GT boxes entirely (there's "
+            "nothing that can be 'in range') -- e.g. an all-hallucination frame "
+            "during hard braking. Leave at the full extent to include those."
+        ),
     )
+    # filters.py's contract: distance_range=None is a no-op (every frame passes);
+    # a concrete range only keeps a frame if >= 1 of its GT rows falls inside it,
+    # so a frame with zero GT rows can never be "in range" under ANY concrete
+    # range. The slider always returns a concrete tuple, so passing it straight
+    # through would make the default (full-extent) state silently exclude every
+    # zero-GT frame -- exactly the all-hallucination frames this page exists to
+    # surface. Only pass a real range once the user has actually narrowed it;
+    # narrowing is then an intentional opt-in to GT-based filtering, which
+    # legitimately excludes zero-GT frames (nothing there to match).
+    distance_arg = None if distance_range == (min_dist, max_dist) else distance_range
 
     failure_label = st.sidebar.radio("Failure type", list(_FAILURE_LABELS))
     failure_type = _FAILURE_LABELS[failure_label]
@@ -144,7 +166,7 @@ def render() -> None:
         rain=rain,
         category=category,
         size_bucket=size_bucket,
-        distance_range=distance_range,
+        distance_range=distance_arg,
         failure_type=failure_type,
     )
     if bucket_choice:
@@ -154,6 +176,10 @@ def render() -> None:
 
     st.caption(f"{len(frames)} / {len(val_manifest)} val frames match the current filters")
 
+    # No pagination: the curated set tops out at 125 val frames today, which
+    # renders comfortably in one scroll. If that grows substantially, page
+    # `frames` here (e.g. st.session_state-backed offset + a fixed page size)
+    # before this loop rather than rendering the whole filtered set.
     columns = st.columns(4)
     for position, row in enumerate(frames.itertuples()):
         token = row.sample_data_token
@@ -210,20 +236,46 @@ def render() -> None:
     # a miss.
     matched_series = gt_token[f"matched_{model}"]
     gt_status = matched_series.map({True: "matched", False: "fn"}).fillna("not_evaluated")
+    # Explicit dtypes on the NA-filled columns (not a bare `pd.NA`/object-dtype
+    # broadcast): pandas emits a FutureWarning ("concatenation with empty or
+    # all-NA entries is deprecated") when concat has to guess the dtype of a
+    # column that's entirely NA in one frame — giving it the same dtype the
+    # OTHER frame's real values already have (float64 for conf/distance, object
+    # for size_bucket) sidesteps the guess entirely.
     gt_table = gt_token.assign(
-        kind="gt", conf=pd.NA, status=gt_status
+        kind="gt",
+        conf=pd.Series([float("nan")] * len(gt_token), dtype="float64", index=gt_token.index),
+        status=gt_status,
     )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
-    pred_table = preds_token.assign(kind="pred", distance_to_ego_m=pd.NA, size_bucket=pd.NA)[
-        ["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]
-    ]
+    pred_table = preds_token.assign(
+        kind="pred",
+        distance_to_ego_m=pd.Series(
+            [float("nan")] * len(preds_token), dtype="float64", index=preds_token.index
+        ),
+        size_bucket=pd.Series([None] * len(preds_token), dtype="object", index=preds_token.index),
+    )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
     st.dataframe(pd.concat([gt_table, pred_table], ignore_index=True))
 
-    exemplar_cols = [c for c in manifest.columns if c.startswith(f"fixes_fn_vs_{model}_")]
-    is_exemplar = any(bool(frame_row.get(c)) for c in exemplar_cols if pd.notna(frame_row.get(c)))
-    if is_exemplar:
-        st.success(
-            f"Exemplar: `{model}` fixes a false negative another model missed on this frame."
-        )
+    # fixes_fn_vs_<A>_<B> means "A missed this GT box, B caught it" (infer.py's
+    # fixes-loop: fn_a = ~gt_matched_by_model[A]; fixed = any(fn_a &
+    # gt_matched_by_model[B])). The selected model is credited as the FIXER (B),
+    # so the column to look up per candidate "other" model is
+    # fixes_fn_vs_{other}_{model} -- NOT fixes_fn_vs_{model}_{other}, which would
+    # instead ask "did the selected model miss something `other` caught" and
+    # credit the model that MISSED. The model list is taken from gt_models (the
+    # matched_<model> columns already discovered above), never parsed back out
+    # of a fixes_fn_vs_ column name: model names themselves contain underscores
+    # (e.g. "graph_rate_night"), so a fixes_fn_vs_baseline_graph_rate_night
+    # column name cannot be split unambiguously into its two model names.
+    fixers_of = []
+    for other in gt_models:
+        if other == model:
+            continue
+        fixed = frame_row.get(f"fixes_fn_vs_{other}_{model}")
+        if pd.notna(fixed) and bool(fixed):
+            fixers_of.append(other)
+    for other in fixers_of:
+        st.success(f"Exemplar: `{model}` catches a box `{other}` misses on this frame")
 
     st.caption(
         "FN = GT unmatched by the selected model; low-confidence claims count as "

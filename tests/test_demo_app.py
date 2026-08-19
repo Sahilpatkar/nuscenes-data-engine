@@ -125,44 +125,88 @@ def built_demo_data(tmp_path: Path) -> Path:
         )
     )
     # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group,
-    # not an mlruns mosaic -- stage a minimal one-token curation group (val token
-    # "v0") so run_build's now-mandatory hero-token resolution has a real crop to
-    # copy. A genuine (if tiny) JPEG: st.image() in the AppTest run below actually
-    # decodes it.
+    # not an mlruns mosaic -- stage a minimal two-token curation group so
+    # run_build's now-mandatory hero-token resolution has a real crop to copy. A
+    # genuine (if tiny) JPEG: st.image() in the AppTest run below actually decodes
+    # it. Two val tokens across two models (review round, quality pass on Task 4):
+    #   - "v0": baseline misses GT box a2 (pedestrian) that graph_rate_night
+    #     catches -- fixes_fn_vs_baseline_graph_rate_night=True. This is the only
+    #     shape that exercises the exemplar-badge column (fixes_fn_vs_<A>_<B>
+    #     never existed with a single model staged, so the inverted-badge bug
+    #     from the first review round was untestable until now).
+    #   - "v1": zero GT rows, all-FP predictions from both models (a hallucination
+    #     frame during a notionally hard-braking moment) -- this is exactly the
+    #     shape the distance-slider-default bug hid: a frame with no GT boxes can
+    #     never be "in range" under ANY concrete distance_range, so it must only
+    #     ever be excluded by an explicit user choice, never by the slider's
+    #     full-extent default.
     staging = tmp_path / "curation_staging"
     (staging / "crops").mkdir(parents=True)
     pd.DataFrame({
-        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
-        # Two buckets, not one: curation_buckets round-trips through parquet as a
-        # numpy array (pyarrow's list dtype) -- a single-element array is falsy-
-        # safe by accident (`bool()` of a length-1 array just returns that
+        "sample_data_token": ["v0", "v1"],
+        "split": ["val", "val"],
+        "filename": ["images/v0.jpg", "images/v1.jpg"],
+        # scene_name: the grid loop's caption reads this straight off each row
+        # (row.scene_name) -- absent here, that line never ran in any test before
+        # this review round, because bug #2 (the distance-slider default) also
+        # happened to filter v0 itself out of every prior single-model fixture
+        # (its only GT row had a NaN distance), leaving `frames` empty and the
+        # grid loop body dead code from the page's very first test.
+        "scene_name": ["scene-v0", "scene-v1"],
+        # Two buckets on v0, not one: curation_buckets round-trips through parquet
+        # as a numpy array (pyarrow's list dtype) -- a single-element array is
+        # falsy-safe by accident (`bool()` of a length-1 array just returns that
         # element's truthiness), so this needs >= 2 entries to actually exercise
         # `array or []`-style bugs in the page (`ValueError: truth value of an
         # array with more than one element is ambiguous`).
-        "curation_buckets": [["night_failure", "al_selected"]],
-        # is_night/is_rain: Task 4's Failure Explorer sidebar builds its lighting/
-        # rain filter options straight off these columns' actual values -- absent
-        # here, the page would KeyError before an AppTest ever gets to render.
-        "is_night": [True], "is_rain": [False],
-        "n_preds_baseline": pd.array([1], dtype="Int64"),
+        "curation_buckets": [["night_failure", "al_selected"], ["hard_braking"]],
+        # is_night/is_rain: the Failure Explorer sidebar builds its lighting/rain
+        # filter options straight off these columns' actual values -- absent here,
+        # the page would KeyError before an AppTest ever gets to render.
+        "is_night": [True, False], "is_rain": [False, False],
+        "n_preds_baseline": pd.array([1, 2], dtype="Int64"),
+        "n_preds_graph_rate_night": pd.array([2, 2], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True, False], dtype="boolean"),
+        "fixes_fn_vs_graph_rate_night_baseline": pd.array([False, False], dtype="boolean"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
-        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
-        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
-        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+        "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
+        "model": [
+            "baseline", "graph_rate_night", "graph_rate_night",
+            "baseline", "baseline", "graph_rate_night", "graph_rate_night",
+        ],
+        "category_group": ["car", "car", "pedestrian", "car", "car", "car", "car"],
+        "x_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "y_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "x_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "y_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "conf": [0.9, 0.9, 0.8, 0.4, 0.5, 0.4, 0.5],
+        # v0: baseline only ever claims a1 (misses a2); graph_rate_night claims
+        # both a1 and a2 (a genuine catch). v1 has zero GT rows, so every claim
+        # from either model is necessarily a false positive.
+        "status": ["tp", "tp", "tp", "fp", "fp", "fp", "fp"],
+        "matched_annotation_token": ["a1", "a1", "a2", None, None, None, None],
     }).to_parquet(staging / "predictions.parquet")
     pd.DataFrame({
-        "annotation_token": ["a1"], "sample_data_token": ["v0"],
-        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
-        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+        "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
+        "category_group": ["car", "pedestrian"],
+        "x_min": [1.0, 10.0], "y_min": [1.0, 10.0],
+        "x_max": [2.0, 30.0], "y_max": [2.0, 30.0],
+        "matched_baseline": pd.array([True, False], dtype="boolean"),
+        "matched_graph_rate_night": pd.array([True, True], dtype="boolean"),
         # below_visibility_min: real gt_boxes always carries this column: the
         # Failure Explorer drops such rows everywhere (rendering + the box table),
-        # so it must be present for the page to even read gt_boxes.parquet.
-        "below_visibility_min": [False],
+        # so it must be present for the page to even read gt_boxes.parquet. v1 has
+        # no gt_boxes rows at all (the zero-GT case both review-fix regression
+        # tests below depend on).
+        "below_visibility_min": [False, False],
     }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
     (staging / "crops" / "v0.jpg").write_bytes(hero_bytes.getvalue())
+    v1_bytes = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(60, 60, 60)).save(v1_bytes, format="JPEG")
+    (staging / "crops" / "v1.jpg").write_bytes(v1_bytes.getvalue())
 
     out = tmp_path / "demo_data"
     config = {
@@ -174,7 +218,10 @@ def built_demo_data(tmp_path: Path) -> Path:
             "lancedb_table": "frames",
             "out_dir": str(out),
         },
-        "models": {"baseline": {"run": "runX", "imgsz": 640}},
+        "models": {
+            "baseline": {"run": "runX", "imgsz": 640},
+            "graph_rate_night": {"run": "runY", "imgsz": 640},
+        },
         "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30, "cypher_source": "docs/GRAPH.md"},
@@ -251,6 +298,37 @@ def test_failure_explorer_renders_grid_and_detail(
     at.switch_page("views/failures.py").run(timeout=30)
     assert not at.exception
     assert any("val frames" in str(m.value) for m in at.caption)   # val-only caption present
+
+    # Review fix #2 regression: the distance slider's default (full-extent) value
+    # must be a true no-op. filter_frames only keeps a frame if >= 1 of its GT
+    # rows falls inside a concrete distance_range, so "v1" (zero GT rows, an
+    # all-FP hallucination frame) can never be "in range" under ANY concrete
+    # range -- if the page ever passes the slider's default value straight
+    # through instead of treating full-extent as None, v1 silently vanishes from
+    # even the completely unfiltered grid. Pin: default state shows every val
+    # frame (2 here), not just the ones with GT boxes.
+    default_caption = next(str(m.value) for m in at.caption if "val frames" in str(m.value))
+    matched, total = (int(n) for n in default_caption.split(" val frames")[0].split(" / "))
+    assert matched == total == 2
+
+    # Review fix #1 regression: the exemplar badge direction. "v0" is staged so
+    # baseline misses GT box a2 (pedestrian) that graph_rate_night catches --
+    # fixes_fn_vs_baseline_graph_rate_night=True means "baseline (A) missed it,
+    # graph_rate_night (B) fixed it" (infer.py's fixes_fn_vs_<A>_<B> convention).
+    # Selecting baseline (the misser) must show NO badge; selecting
+    # graph_rate_night (the fixer) must show the badge, crediting the right
+    # model on each side.
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert not any("Exemplar" in str(s.value) for s in at.success)   # baseline: misser, no badge
+
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert any(
+        "Exemplar: `graph_rate_night` catches a box `baseline` misses" in str(s.value)
+        for s in at.success
+    )
 
     # Beyond the plan's floor: also drive the detail view (grid buttons write
     # st.session_state["failure_token"], which a plain AppTest.run() never
