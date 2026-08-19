@@ -52,10 +52,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-# Kept for any caller still referencing the pre-Phase-3 private name.
-_write_json = write_json
-
-
 def _scalar(con: duckdb.DuckDBPyConnection, sql: str) -> Any:
     """Run a single-row, single-column aggregate query and return its value.
 

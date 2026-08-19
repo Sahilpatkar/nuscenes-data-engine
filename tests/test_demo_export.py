@@ -907,6 +907,8 @@ def test_build_hero_token_without_curation_fails_loudly(build_config: Path) -> N
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="hero"):
         run_build(build_config)
+
+
 def test_build_raises_on_annotation_token_join_fanout(build_config: Path) -> None:
     """A duplicate annotation_token in annotations_3d would silently fan a single
     staged gt_boxes row out into two published rows via the left join -- caught as a
