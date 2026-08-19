@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -247,3 +248,74 @@ def test_answer_without_callbacks_unchanged(con: Any) -> None:
 
     result = agent.answer("q", transport=_Plain(), con=con, search_engine=None)
     assert result.answer == "plain answer"
+
+
+def _chart_args(**overrides: Any) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "kind": "bar", "title": "Night scenes per location",
+        "columns": ["location", "scenes"],
+        "rows": [["boston", 3], ["singapore", 5]],
+    }
+    args.update(overrides)
+    return args
+
+
+def test_make_chart_appends_to_result(con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    result = agent.ChatResult(answer="", model="stub")
+    output = agent._run_tool(
+        "make_chart", _chart_args(), con=con, search_engine=None,
+        result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert output == {"charted": True, "title": "Night scenes per location"}
+    assert len(result.charts) == 1
+    assert result.charts[0]["kind"] == "bar"
+
+
+def test_make_chart_guards_are_model_visible(con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    result = agent.ChatResult(answer="", model="stub")
+    bad_kind = agent._run_tool("make_chart", _chart_args(kind="pie"), con=con,
+                               search_engine=None, result=result,
+                               graph_driver=None, graph_database="neo4j")
+    assert "error" in bad_kind and "pie" in bad_kind["error"]
+    ragged = agent._run_tool("make_chart", _chart_args(rows=[["a", 1], ["b"]]), con=con,
+                             search_engine=None, result=result,
+                             graph_driver=None, graph_database="neo4j")
+    assert "error" in ragged
+    huge = agent._run_tool("make_chart",
+                           _chart_args(rows=[["r", 1]] * 1001), con=con,
+                           search_engine=None, result=result,
+                           graph_driver=None, graph_database="neo4j")
+    assert "error" in huge and "2000" in huge["error"]
+    assert result.charts == []          # none of the bad calls appended
+
+
+def test_chart_reaches_the_jsonl_log(con: Any, tmp_path: Path) -> None:
+    """The logged record carries n_charts (spec: chart present in the log)."""
+    import json as _json
+
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _Charting:
+        model = "fake"
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        def complete(self, messages, tools):
+            self.turn += 1
+            if self.turn == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "c1", "function": {"name": "make_chart",
+                                              "arguments": _json.dumps(_chart_args())}}]}
+            return {"content": "Charted.", "tool_calls": []}
+
+    log = tmp_path / "log.jsonl"
+    result = agent.answer("chart it", transport=_Charting(), con=con,
+                          search_engine=None, log_path=log)
+    assert len(result.charts) == 1
+    record = _json.loads(log.read_text().splitlines()[-1])
+    assert record["n_charts"] == 1

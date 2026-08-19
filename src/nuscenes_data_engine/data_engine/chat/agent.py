@@ -37,6 +37,8 @@ dataset using your tools; never invent numbers.
 - When a question has concrete example frames (interesting rows with a
   sample_data_token, or search hits), call show_frames with up to 6 tokens so the
   user sees them; mention in the answer that examples are attached.
+- Use make_chart to visualize data you retrieved (call after run_sql; never with
+  invented numbers).
 - Answer concisely with the actual numbers; note assumptions or data limitations.
 
 {schema}
@@ -87,7 +89,34 @@ TOOL_SPECS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_chart",
+            "description": "Render a chart from data you retrieved — call after "
+            "run_sql, never with invented numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["bar", "line"]},
+                    "title": {"type": "string"},
+                    "columns": {"type": "array", "items": {"type": "string"}},
+                    "rows": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {}},
+                        "description": "Row-major data; each row has one value per column.",
+                    },
+                },
+                "required": ["kind", "title", "columns", "rows"],
+            },
+        },
+    },
 ]
+
+# Guard: total chart cells (rows * columns) beyond this are rejected as model-visible
+# errors rather than silently truncated — keeps chart payloads small and forces the
+# model to aggregate instead of dumping raw rows.
+MAX_CHART_CELLS = 2000
 
 # Offered only when a graph driver is available (composed per call in ``answer``).
 GRAPH_TOOL_SPEC: dict[str, Any] = {
@@ -117,6 +146,7 @@ class ChatResult:
     model: str
     steps: list[dict[str, Any]] = field(default_factory=list)
     frames: list[dict[str, Any]] = field(default_factory=list)
+    charts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _frame_meta(frame: dict[str, Any]) -> dict[str, Any]:
@@ -262,7 +292,34 @@ def _run_tool(
             return {"error": f"frame lookup failed: {exc}"}
         _collect(result, frames)
         return {"attached": [_frame_meta(frame) for frame in frames]}
+    if name == "make_chart":
+        return _make_chart(args, result)
     return {"error": f"Unknown tool: {name}"}
+
+
+def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
+    """Validate + collect one chart request; guards are model-visible so the model
+    can correct its own call rather than the answer silently losing the chart."""
+    kind = str(args.get("kind", ""))
+    if kind not in ("bar", "line"):
+        return {"error": f"Unknown chart kind {kind!r}: expected 'bar' or 'line'."}
+    title = str(args.get("title", ""))
+    columns = args.get("columns") or []
+    rows = args.get("rows") or []
+    if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
+        return {"error": "columns must be a list of strings."}
+    if not isinstance(rows, list) or any(
+        not isinstance(row, list) or len(row) != len(columns) for row in rows
+    ):
+        return {"error": f"Every row must have exactly {len(columns)} cells (one per column)."}
+    total_cells = len(rows) * len(columns)
+    if total_cells > MAX_CHART_CELLS:
+        return {
+            "error": f"Chart has {total_cells} cells, over the {MAX_CHART_CELLS} limit — "
+            "aggregate the data further before charting."
+        }
+    result.charts.append({"kind": kind, "title": title, "columns": columns, "rows": rows})
+    return {"charted": True, "title": title}
 
 
 def _collect(result: ChatResult, frames: list[dict[str, Any]]) -> None:
@@ -300,6 +357,7 @@ def _log(log_path: Path | None, question: str, result: ChatResult, latency: floa
             "model": result.model,
             "steps": result.steps,
             "n_frames": len(result.frames),
+            "n_charts": len(result.charts),
             "answer": result.answer,
             "latency_s": round(latency, 2),
         }
