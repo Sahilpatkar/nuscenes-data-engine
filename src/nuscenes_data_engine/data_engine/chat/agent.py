@@ -242,7 +242,10 @@ def _run_tool(
             _collect(result, frames)
             return {"results": [_frame_meta(frame) for frame in frames]}
         tokens = [str(token) for token in args.get("sample_data_tokens") or []][:MAX_FRAMES]
-        frames = search_engine.frames_by_tokens(tokens)
+        try:
+            frames = search_engine.frames_by_tokens(tokens)
+        except Exception as exc:  # store failures -> model-visible error, not a crash
+            return {"error": f"frame lookup failed: {exc}"}
         _collect(result, frames)
         return {"attached": [_frame_meta(frame) for frame in frames]}
     return {"error": f"Unknown tool: {name}"}

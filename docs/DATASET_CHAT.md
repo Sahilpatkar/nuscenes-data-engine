@@ -336,14 +336,19 @@ So **the live column ran with the frame-attachment tool disabled entirely, so it
 kind this branch exists to correct, caught in final review. The comparable subset
 above (17/20 cases, `frames` excluded) is the fair local/cloud comparison; the
 `frames` row itself says nothing about 32b's retrieval ability, only that the
-probe's all-or-nothing fallback ran during its eval and not the other two. (Not
-implemented here, flagged as a follow-up: the probe should disable only
-`search_text`, leaving token-based frame attachment available regardless of torch,
-matching what the pre-probe runs actually exercised.) None of the measured
-numbers change because of this — it is a property of the environment the eval ran
-in, not the grading logic — but this run says nothing about semantic search
-quality specifically, only about fallback robustness, and for `qwen2.5:32b`, about
-an instrument change mid-branch.
+probe's all-or-nothing fallback ran during its eval and not the other two. **Fixed
+in `demo-phase-4` (Task 1):** the probe now disables only `search_text` — a
+`probe.search_text(...)` failure logs a warning and leaves the engine in place, so
+`show_frames`'s token-based attachment (which never touches the encoder) keeps
+working regardless of torch; only a `SearchEngine` *construction* failure
+(`ImportError`/`FileNotFoundError`) still disables the engine outright. Future
+`chat-eval` runs exercise the same fallback the pre-probe runs did. This does not
+retroactively change the numbers above — the stored runs analyzed in this section
+were produced under the old all-or-nothing probe and remain non-comparable on the
+`frames` row exactly as described. None of the measured numbers change because of
+this — it is a property of the environment the eval ran in, not the grading logic
+— but this run says nothing about semantic search quality specifically, only about
+fallback robustness, and for `qwen2.5:32b`, about an instrument change mid-branch.
 
 **Finding 1 — language drift is far worse than the live transcripts suggest, and it
 is model-scale-bound, not a property of local serving.** 8 of 20 `qwen2.5:14b`
