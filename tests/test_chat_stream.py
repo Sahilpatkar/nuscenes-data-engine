@@ -319,3 +319,199 @@ def test_chart_reaches_the_jsonl_log(con: Any, tmp_path: Path) -> None:
     assert len(result.charts) == 1
     record = _json.loads(log.read_text().splitlines()[-1])
     assert record["n_charts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Quality fast-follow: callback containment (a raising callback must not lose
+# the answer or the JSONL log record — mirrors _log's own OSError containment).
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_openai_stream_survives_a_raising_on_token() -> None:
+    """The forwarding call site inside the SSE assembler must not let a broken
+    on_token abort assembly — the content is still accumulated."""
+    lines = [
+        'data: {"choices":[{"delta":{"role":"assistant","content":"Hel"}}]}',
+        'data: {"choices":[{"delta":{"content":"lo"}}]}',
+        "data: [DONE]",
+    ]
+
+    def _boom(_token: str) -> None:
+        raise RuntimeError("callback exploded")
+
+    message = assemble_openai_stream(lines, on_token=_boom)
+    assert message["content"] == "Hello"
+
+
+def test_anthropic_complete_stream_survives_a_raising_on_token() -> None:
+    """The text_stream forwarding loop must not let a broken on_token abort the
+    turn — the final message conversion still completes."""
+    from nuscenes_data_engine.data_engine.chat.transports import AnthropicTransport
+
+    class _Block:
+        def __init__(self, type_: str, **kw: Any) -> None:
+            self.type = type_
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    class _FinalMessage:
+        content: ClassVar[list[_Block]] = [_Block("text", text="Two samples.")]
+
+    class _Stream:
+        text_stream = iter(["Two ", "samples."])
+
+        def __enter__(self) -> _Stream:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def get_final_message(self) -> _FinalMessage:
+            return _FinalMessage()
+
+    transport = AnthropicTransport.__new__(AnthropicTransport)  # skip __init__
+    transport._model = "stub-claude"  # type: ignore[attr-defined]
+
+    class _Messages:
+        def stream(self, **kwargs: Any) -> _Stream:
+            return _Stream()
+
+    class _Client:
+        messages = _Messages()
+
+    transport._client = _Client()  # type: ignore[attr-defined]
+
+    def _boom(_token: str) -> None:
+        raise RuntimeError("callback exploded")
+
+    reply = transport.complete_stream([], [], on_token=_boom)
+    assert reply["content"] == "Two samples."
+
+
+def test_stream_with_fallback_survives_a_raising_on_token() -> None:
+    """The one-shot forwarding site (no complete_stream on the transport) must not
+    let a broken on_token lose the whole-answer reply."""
+    from nuscenes_data_engine.data_engine.chat.transports import stream_with_fallback
+
+    class _PlainFake:
+        model = "fake"
+
+        def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
+            return {"content": "whole answer", "tool_calls": []}
+
+    def _boom(_token: str) -> None:
+        raise RuntimeError("callback exploded")
+
+    reply = stream_with_fallback(_PlainFake(), [], [], on_token=_boom)
+    assert reply["content"] == "whole answer"
+
+
+def test_answer_survives_a_raising_on_token_and_still_logs(con: Any, tmp_path: Path) -> None:
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _Plain:
+        model = "fake"
+
+        def complete(self, messages, tools):
+            return {"content": "plain answer", "tool_calls": []}
+
+    def _boom(_token: str) -> None:
+        raise RuntimeError("on_token blew up")
+
+    log = tmp_path / "log.jsonl"
+    result = agent.answer(
+        "q", transport=_Plain(), con=con, search_engine=None,
+        on_token=_boom, log_path=log,
+    )
+    assert result.answer == "plain answer"
+    record = json.loads(log.read_text().splitlines()[-1])
+    assert record["answer"] == "plain answer"
+
+
+def test_answer_survives_a_raising_on_step_and_still_logs(con: Any, tmp_path: Path) -> None:
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _Transport:
+        model = "fake"
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        def complete(self, messages, tools):
+            self.turn += 1
+            if self.turn == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "c1", "function": {"name": "run_sql",
+                                              "arguments": '{"sql": "SELECT count(*) FROM samples"}'}}]}
+            return {"content": "There are 2 samples.", "tool_calls": []}
+
+    def _boom(_step: dict[str, Any]) -> None:
+        raise RuntimeError("on_step blew up")
+
+    log = tmp_path / "log.jsonl"
+    result = agent.answer(
+        "How many?", transport=_Transport(), con=con, search_engine=None,
+        on_step=_boom, log_path=log,
+    )
+    assert result.answer == "There are 2 samples."
+    record = json.loads(log.read_text().splitlines()[-1])
+    assert record["answer"] == "There are 2 samples."
+
+
+# ---------------------------------------------------------------------------
+# Quality fast-follow: make_chart shape guards (Task 6's renderer would
+# IndexError/choke on these shapes) + _summarize's "charted" branch.
+# ---------------------------------------------------------------------------
+
+
+def test_make_chart_shape_guards_reject_bad_data(con: Any) -> None:
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    result = agent.ChatResult(answer="", model="stub")
+
+    zero_columns = agent._run_tool(
+        "make_chart", _chart_args(columns=[], rows=[]), con=con,
+        search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in zero_columns
+
+    one_column = agent._run_tool(
+        "make_chart", _chart_args(columns=["location"], rows=[["boston"]]), con=con,
+        search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in one_column
+
+    empty_rows = agent._run_tool(
+        "make_chart", _chart_args(rows=[]), con=con,
+        search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in empty_rows
+
+    string_cell = agent._run_tool(
+        "make_chart", _chart_args(rows=[["boston", "not-a-number"]]), con=con,
+        search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in string_cell and "not-a-number" in string_cell["error"]
+
+    none_cell = agent._run_tool(
+        "make_chart", _chart_args(rows=[["boston", None]]), con=con,
+        search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in none_cell and "None" in none_cell["error"]
+
+    assert result.charts == []  # none of the bad calls appended
+
+    valid = agent._run_tool(
+        "make_chart", _chart_args(), con=con, search_engine=None,
+        result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert valid == {"charted": True, "title": "Night scenes per location"}
+    assert len(result.charts) == 1
+
+
+def test_summarize_reports_charted_output() -> None:
+    from nuscenes_data_engine.data_engine.chat.agent import _summarize
+
+    assert _summarize({"charted": True, "title": "Night scenes per location"}) == (
+        "charted: Night scenes per location"
+    )

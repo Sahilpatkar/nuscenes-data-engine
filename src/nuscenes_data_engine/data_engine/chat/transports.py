@@ -34,6 +34,17 @@ class TransportError(RuntimeError):
     """The model server could not be reached or returned a hard error."""
 
 
+def _safe_token(on_token: Callable[[str], None], piece: str) -> None:
+    """Invoke ``on_token`` without letting a raising callback abort the stream —
+    mirrors ``agent._log``'s own containment of a side channel (there: OSError on the
+    JSONL write; here: caller code we don't control) so a broken UI callback can never
+    cost the model its answer."""
+    try:
+        on_token(piece)
+    except Exception as exc:
+        logger.warning("on_token callback failed: %s", exc, exc_info=True)
+
+
 def assemble_openai_stream(
     lines: Iterable[str], on_token: Callable[[str], None]
 ) -> dict[str, Any]:
@@ -66,7 +77,7 @@ def assemble_openai_stream(
         piece = delta.get("content")
         if piece:
             content_parts.append(piece)
-            on_token(piece)
+            _safe_token(on_token, piece)
         for fragment in delta.get("tool_calls") or []:
             index = fragment.get("index", 0)
             if index not in tool_calls:
@@ -113,7 +124,7 @@ def stream_with_fallback(
     reply: dict[str, Any] = transport.complete(messages, tools)
     content = reply.get("content") or ""
     if content:
-        on_token(content)
+        _safe_token(on_token, content)
     return reply
 
 
@@ -241,7 +252,7 @@ class AnthropicTransport:
                 tools=[convert_tool(tool) for tool in tools],
             ) as stream:
                 for text in stream.text_stream:
-                    on_token(text)
+                    _safe_token(on_token, text)
                 final_message = stream.get_final_message()
         except anthropic.AnthropicError as exc:
             raise TransportError(f"Claude API error: {exc}") from exc

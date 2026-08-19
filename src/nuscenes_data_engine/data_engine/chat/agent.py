@@ -149,6 +149,17 @@ class ChatResult:
     charts: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _safe_callback(callback: Callable[..., None], *args: Any, label: str) -> None:
+    """Invoke a caller-supplied callback without letting it abort the turn or skip the
+    JSONL log — mirrors ``_log``'s own OSError containment: a side-channel failure
+    (here, UI-side callback code we don't control) must never cost the answer or the
+    every-interaction-logged promise in this module's docstring."""
+    try:
+        callback(*args)
+    except Exception as exc:
+        logger.warning("%s callback failed: %s", label, exc, exc_info=True)
+
+
 def _frame_meta(frame: dict[str, Any]) -> dict[str, Any]:
     """The model-visible part of a frame row (no thumbnail bytes)."""
     return {
@@ -191,7 +202,7 @@ def answer(
     seen_calls: set[str] = set()
     for _ in range(max_turns):
         if on_turn:
-            on_turn()
+            _safe_callback(on_turn, label="on_turn")
         reply = (
             stream_with_fallback(transport, messages, tools, on_token=on_token)
             if on_token
@@ -232,7 +243,7 @@ def answer(
             step = {"tool": name, "input": args, "output": _summarize(output)}
             result.steps.append(step)
             if on_step:
-                on_step(step)
+                _safe_callback(on_step, step, label="on_step")
             messages.append(
                 {
                     "role": "tool",
@@ -299,19 +310,39 @@ def _run_tool(
 
 def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
     """Validate + collect one chart request; guards are model-visible so the model
-    can correct its own call rather than the answer silently losing the chart."""
+    can correct its own call rather than the answer silently losing the chart — and so
+    the Streamlit renderer (``pd.DataFrame(rows, columns=columns).set_index(columns[0])``)
+    never IndexErrors or chokes on a non-numeric y value.
+
+    Deliberately reads ``columns``/``rows`` without an ``or []`` fallback: coercing a
+    falsy-but-present value (e.g. a stray ``0`` or ``null``) to ``[]`` would silently
+    hide a malformed call instead of surfacing it through the type check below.
+    """
     kind = str(args.get("kind", ""))
     if kind not in ("bar", "line"):
         return {"error": f"Unknown chart kind {kind!r}: expected 'bar' or 'line'."}
     title = str(args.get("title", ""))
-    columns = args.get("columns") or []
-    rows = args.get("rows") or []
+    columns = args.get("columns")
+    rows = args.get("rows")
     if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
         return {"error": "columns must be a list of strings."}
-    if not isinstance(rows, list) or any(
-        not isinstance(row, list) or len(row) != len(columns) for row in rows
-    ):
+    if len(columns) < 2:
+        return {
+            "error": f"columns needs at least 2 entries (one x-axis, one y-series); "
+            f"got {len(columns)}."
+        }
+    if not isinstance(rows, list):
+        return {"error": "rows must be a list of rows."}
+    if len(rows) < 1:
+        return {"error": "rows must not be empty."}
+    if any(not isinstance(row, list) or len(row) != len(columns) for row in rows):
         return {"error": f"Every row must have exactly {len(columns)} cells (one per column)."}
+    for row in rows:
+        for value in row[1:]:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                return {
+                    "error": f"Chart y-values must be numeric; got {value!r} in row {row!r}."
+                }
     total_cells = len(rows) * len(columns)
     if total_cells > MAX_CHART_CELLS:
         return {
@@ -342,6 +373,8 @@ def _summarize(output: dict[str, Any]) -> str:
         return f"{len(output['results'])} frames found"
     if "attached" in output:
         return f"{len(output['attached'])} frames attached"
+    if "charted" in output:
+        return f"charted: {output['title']}"
     return "ok"
 
 
