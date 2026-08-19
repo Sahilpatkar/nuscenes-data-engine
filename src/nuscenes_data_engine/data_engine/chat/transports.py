@@ -53,6 +53,8 @@ def assemble_openai_stream(
         line = raw_line.strip()
         if not line or not line.startswith("data:"):
             continue  # blank lines and SSE comments (e.g. ": keepalive") are framing
+        # SSE allows multi-line `data:` fields; compact JSON from OpenAI-compatible
+        # servers never spans lines — single-line assumed.
         data = line[len("data:"):].strip()
         if data == "[DONE]":
             break

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, ClassVar
+
+import pytest
 
 from nuscenes_data_engine.data_engine.chat.transports import assemble_openai_stream
 
@@ -51,6 +54,65 @@ def test_assemble_interleaved_text_and_two_tool_calls() -> None:
 def test_assemble_ignores_blank_and_non_data_lines() -> None:
     lines = ["", ": keepalive", 'data: {"choices":[{"delta":{"content":"x"}}]}', "data: [DONE]"]
     assert assemble_openai_stream(lines, on_token=lambda _t: None)["content"] == "x"
+
+
+def test_openai_complete_stream_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirrors tests/test_chat.py's test_openai_transport_roundtrip (MockTransport
+    pattern) but for the streaming path: an SSE body with content deltas and a
+    split tool-call fragment, through the real client.stream(...) code path."""
+    httpx = pytest.importorskip("httpx")
+    from nuscenes_data_engine.data_engine.chat.transports import OpenAICompatTransport
+
+    sse_body = (
+        b'data: {"choices":[{"delta":{"role":"assistant","content":"Hel"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
+        b'"function":{"name":"run_sql","arguments":"{\\"sql\\": \\"SELECT 1\\"}"}}]}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: Any) -> Any:
+        payload = json.loads(request.content)
+        assert payload["model"] == "test-model"
+        assert payload["stream"] is True
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    real_client = httpx.Client
+
+    def patched(**kwargs: Any) -> Any:
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", patched)
+    transport = OpenAICompatTransport("http://fake:1/v1", "test-model")
+    seen: list[str] = []
+    message = transport.complete_stream(
+        [{"role": "user", "content": "q"}], [], on_token=seen.append
+    )
+    assert message["content"] == "Hello"
+    assert seen == ["Hel", "lo"]
+    assert message["tool_calls"][0]["function"]["name"] == "run_sql"
+    assert message["tool_calls"][0]["function"]["arguments"] == '{"sql": "SELECT 1"}'
+
+
+def test_openai_complete_stream_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirrors test_openai_transport_unreachable: a connect error surfaces as the
+    same TransportError complete() raises, not a raw httpx exception."""
+    httpx = pytest.importorskip("httpx")
+    from nuscenes_data_engine.data_engine.chat.transports import (
+        OpenAICompatTransport,
+        TransportError,
+    )
+
+    def handler(request: Any) -> Any:
+        raise httpx.ConnectError("refused")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+    transport = OpenAICompatTransport("http://fake:1/v1", "m")
+    with pytest.raises(TransportError, match="ollama serve"):
+        transport.complete_stream([{"role": "user", "content": "q"}], [], on_token=lambda _t: None)
 
 
 def test_anthropic_stream_forwards_text_and_converts_final() -> None:
