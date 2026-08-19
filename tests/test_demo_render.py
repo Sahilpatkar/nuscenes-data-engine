@@ -141,6 +141,8 @@ def test_draw_overlay_label_suppressed_under_min_width() -> None:
     region = [(x, y) for x in range(2, 14) for y in range(4, 10)]
     assert any(wide_out.getpixel(p) != (10, 10, 10) for p in region)      # label drawn
     assert all(narrow_out.getpixel(p) == (10, 10, 10) for p in region)    # suppressed
+
+
 def test_draw_overlay_dashed_edges_align_with_solid_rectangle() -> None:
     """Regression pin for the stroke-geometry fix: ``draw.line``'s width-thickening
     is direction-dependent for even widths (verified against PIL 12 -- a vertical
@@ -164,3 +166,20 @@ def test_draw_overlay_dashed_edges_align_with_solid_rectangle() -> None:
         _draw_rect(ImageDraw.Draw(dashed_img), (10.0, 10.0, 40.0, 45.0), dashed)
 
         assert list(solid_img.getdata()) == list(dashed_img.getdata()), width
+
+
+def test_draw_overlay_inverted_box_raises() -> None:
+    """x_max < x_min used to behave asymmetrically by style: PIL's draw.rectangle
+    raises an unhelpful bare error for a solid style (tp), while a dashed style
+    (low_conf) silently vanishes -- _draw_dashed_edge's ``length <= 0`` early
+    return draws nothing at all rather than erroring. Both are now a named
+    ValueError instead, mirroring build.py's ``_size_bucket`` guard on a
+    degenerate GT box area: corrupt data must not half-render."""
+    for status in ("tp", "low_conf"):
+        preds = pd.DataFrame({
+            "x_min": [900.0], "y_min": [200.0], "x_max": [600.0], "y_max": [500.0],
+            "category_group": ["car"], "conf": [0.87], "status": [status],
+        })
+        with pytest.raises(ValueError, match="inverted") as exc_info:
+            draw_overlay(_blank(), _gt(True).iloc[0:0], preds, mode="pred", scale=0.6)
+        assert "car" in str(exc_info.value)

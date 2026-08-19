@@ -116,7 +116,8 @@ def _draw_rect(draw: ImageDraw.ImageDraw, xyxy: _XYXY, style: BoxStyle) -> None:
     of its four edges as dashed/dotted segments (see ``_draw_dashed_edge`` for why
     those segments are filled rectangles, not ``draw.line`` strokes) -- inset inward
     exactly like ``draw.rectangle`` does, so a dashed (FN) box and a solid (GT) box
-    at identical coordinates occupy the same pixels.
+    at identical coordinates occupy the same pixels whenever the box extent is >=
+    style.width; degenerate boxes below that may differ by design.
     """
     x_min, y_min, x_max, y_max = xyxy
     if style.dash is None:
@@ -126,6 +127,25 @@ def _draw_rect(draw: ImageDraw.ImageDraw, xyxy: _XYXY, style: BoxStyle) -> None:
     _draw_dashed_edge(draw, axis="x", fixed=y_max, start=x_min, end=x_max, style=style, inward=-1)
     _draw_dashed_edge(draw, axis="y", fixed=x_min, start=y_min, end=y_max, style=style, inward=1)
     _draw_dashed_edge(draw, axis="y", fixed=x_max, start=y_min, end=y_max, style=style, inward=-1)
+
+
+def _validate_xyxy(xyxy: _XYXY, *, kind: str, category: str) -> None:
+    """Reject an inverted box before it reaches PIL.
+
+    x_max < x_min (or y_max < y_min) used to behave asymmetrically by style: a
+    solid style hits PIL's own ``draw.rectangle`` bounds check and raises an
+    unhelpful bare error ("x1 must be greater than or equal to x0"), while a
+    dashed style silently vanishes (``_draw_dashed_edge``'s ``length <= 0`` early
+    return draws nothing at all). Neither is acceptable for corrupt input data --
+    this mirrors ``build.py``'s ``_size_bucket`` guard on a degenerate GT box area:
+    corrupt data must not half-render.
+    """
+    x_min, y_min, x_max, y_max = xyxy
+    if x_max < x_min or y_max < y_min:
+        raise ValueError(
+            f"draw_overlay: inverted {kind} box ({category!r}): "
+            f"x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}"
+        )
 
 
 def _draw_label(draw: ImageDraw.ImageDraw, xyxy: _XYXY, text: str, style: BoxStyle) -> None:
@@ -169,6 +189,7 @@ def draw_overlay(
             matched = row.matched
             style = STYLE_GT if (pd.isna(matched) or matched) else STYLE_FN
             xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
+            _validate_xyxy(xyxy, kind="GT", category=str(row.category_group))
             _draw_rect(draw, xyxy, style)
             _draw_label(draw, xyxy, str(row.category_group), style)
 
@@ -181,6 +202,7 @@ def draw_overlay(
                 )
             style = _PRED_STYLES[row.status]
             xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
+            _validate_xyxy(xyxy, kind="prediction", category=str(row.category_group))
             _draw_rect(draw, xyxy, style)
             label = f"{row.category_group} {row.conf:.2f}"
             _draw_label(draw, xyxy, label, style)

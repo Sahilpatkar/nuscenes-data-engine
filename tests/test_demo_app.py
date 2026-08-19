@@ -133,7 +133,17 @@ def built_demo_data(tmp_path: Path) -> Path:
     (staging / "crops").mkdir(parents=True)
     pd.DataFrame({
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
-        "curation_buckets": [["night_failure"]],
+        # Two buckets, not one: curation_buckets round-trips through parquet as a
+        # numpy array (pyarrow's list dtype) -- a single-element array is falsy-
+        # safe by accident (`bool()` of a length-1 array just returns that
+        # element's truthiness), so this needs >= 2 entries to actually exercise
+        # `array or []`-style bugs in the page (`ValueError: truth value of an
+        # array with more than one element is ambiguous`).
+        "curation_buckets": [["night_failure", "al_selected"]],
+        # is_night/is_rain: Task 4's Failure Explorer sidebar builds its lighting/
+        # rain filter options straight off these columns' actual values -- absent
+        # here, the page would KeyError before an AppTest ever gets to render.
+        "is_night": [True], "is_rain": [False],
         "n_preds_baseline": pd.array([1], dtype="Int64"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
@@ -145,6 +155,10 @@ def built_demo_data(tmp_path: Path) -> Path:
         "annotation_token": ["a1"], "sample_data_token": ["v0"],
         "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
         "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+        # below_visibility_min: real gt_boxes always carries this column: the
+        # Failure Explorer drops such rows everywhere (rendering + the box table),
+        # so it must be present for the page to even read gt_boxes.parquet.
+        "below_visibility_min": [False],
     }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
@@ -169,6 +183,18 @@ def built_demo_data(tmp_path: Path) -> Path:
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))
     run_build(config_path)
+
+    # No real LanceDB store is staged in this fixture, so run_build's thumbnail
+    # export skips with a warning (see build.py's _include_curation) -- the
+    # Failure Explorer grid and the Overview hero both prefer a thumb over a crop
+    # when one exists, so write one directly for the page tests below to exercise
+    # that path too (crops/v0.jpg alone would leave it untested here).
+    thumbs_dir = out / "sample_frames" / "thumbs"
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    thumb_bytes = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(80, 80, 80)).save(thumb_bytes, format="JPEG")
+    (thumbs_dir / "v0.jpg").write_bytes(thumb_bytes.getvalue())
+
     return out
 
 
@@ -201,3 +227,51 @@ def test_overview_page_renders_from_a_built_package(
     assert not at.exception
     metric_values = {m.label: m.value for m in at.metric}
     assert metric_values["Camera keyframes"] == "3"
+
+
+def test_failure_explorer_renders_grid_and_detail(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    # Navigate to the Failure Explorer page. The plan's assumed `at.navigation`
+    # page list does not exist on this installed streamlit (1.59.2) -- AppTest
+    # only exposes `switch_page(page_path)`, which resolves the target page by
+    # hashing a name derived from ``page_path``'s filename (no leading digits/
+    # emoji, underscores kept) and matching it against each `st.Page`'s
+    # `url_path` hash. main.py gives the Failure Explorer page an explicit
+    # `url_path="failures"` so that hash matches "views/failures.py"'s derived
+    # name exactly (verified empirically against this streamlit version).
+    at.switch_page("views/failures.py").run(timeout=30)
+    assert not at.exception
+    assert any("val frames" in str(m.value) for m in at.caption)   # val-only caption present
+
+    # Beyond the plan's floor: also drive the detail view (grid buttons write
+    # st.session_state["failure_token"], which a plain AppTest.run() never
+    # clicks) -- this is the only path that exercises draw_overlay, the per-box
+    # table, and the multi-bucket metadata panel, and it is where a real bug
+    # was caught during self-review (curation_buckets round-trips through
+    # parquet as a numpy array, and `array or []` raises ValueError for any
+    # frame in more than one bucket -- see the fixture's two-bucket comment).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+
+
+def test_overview_hero_renders_overlay(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception   # hero overlay path must not raise even with tiny fixture boxes

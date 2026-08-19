@@ -7,7 +7,7 @@ FastAPI service, the databases, or src/nuscenes_data_engine.
 from __future__ import annotations
 
 import streamlit as st
-from views import overview, stubs
+from views import failures, overview, stubs
 
 from data import package_missing
 
@@ -22,7 +22,12 @@ if package_missing():
 
 pages = [
     st.Page(overview.render, title="Overview", icon=":material/home:", default=True),
-    st.Page(stubs.failures, title="Failure Explorer", icon=":material/search:"),
+    # url_path is pinned to the module's filename stem ("failures", from
+    # views/failures.py) rather than left to the title-derived default: the
+    # AppTest smoke in tests/test_demo_app.py switches pages via
+    # switch_page("views/failures.py"), which resolves the target page by
+    # hashing that same filename-derived name against each page's url_path hash.
+    st.Page(failures.render, title="Failure Explorer", icon=":material/search:", url_path="failures"),
     st.Page(stubs.scenarios, title="Scenario Search", icon=":material/route:"),
     st.Page(stubs.active_learning, title="Active Learning", icon=":material/model_training:"),
     st.Page(stubs.weak_supervision, title="Weak Supervision", icon=":material/fact_check:"),
