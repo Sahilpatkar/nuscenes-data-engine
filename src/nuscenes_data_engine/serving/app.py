@@ -361,6 +361,18 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     failure: the HTTP response — and its 200 status — was already sent with the
     first byte of the stream, so a 500 status is no longer possible. The failure
     is instead surfaced as a terminal ``error`` SSE event.
+
+    Payload encoding: every ``data:`` payload is a JSON value, so clients can
+    ``json.loads`` each one uniformly — ``step``/``final`` are JSON objects,
+    and ``token`` is a JSON-encoded string (``json.dumps(delta)``). The token
+    encoding matters beyond consistency: a raw token delta routinely contains
+    embedded newlines (markdown answers are full of them), and SSE framing is
+    one event per blank-line-terminated block of `field: value` lines — an
+    un-escaped ``\n`` inside a bare ``data: <delta>`` line would split into a
+    second, un-prefixed line that a line-based SSE parser (browsers'
+    ``EventSource`` included) silently drops instead of treating as part of the
+    payload. JSON-encoding escapes it onto one line. ``turn``'s payload is the
+    literal empty string, not JSON — there is nothing to decode.
     """
     from nuscenes_data_engine.data_engine.chat import agent
     from nuscenes_data_engine.data_engine.chat.transports import TransportError, make_transport
@@ -393,7 +405,7 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
                     graph_driver=graph_driver,
                     graph_database=settings.neo4j_database,
                     on_turn=lambda: events.put(("turn", "")),
-                    on_token=lambda delta: events.put(("token", delta)),
+                    on_token=lambda delta: events.put(("token", json.dumps(delta))),
                     on_step=lambda step: events.put(("step", json.dumps(step, default=str))),
                 )
                 final = _assemble_chat_response(result)

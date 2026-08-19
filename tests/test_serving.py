@@ -332,7 +332,7 @@ class _StreamScriptedTransport:
                     }
                 ],
             }
-        for piece in ("There are ", "2 samples."):
+        for piece in ("There are ", "line1\nline2", "2 samples."):
             on_token(piece)
         return {"content": "There are 2 samples.", "tool_calls": []}
 
@@ -414,6 +414,18 @@ class TestChatStream:
         final = json.loads(final_payload)
         assert final["answer"] == "There are 2 samples."
         assert "charts" in final and "frames" in final
+
+        # Newline safety: one on_token delta is "line1\nline2". token payloads are
+        # JSON-encoded (json.dumps(delta)) specifically so an embedded raw newline is
+        # escaped onto a single `data:` line instead of splitting into a stray,
+        # un-prefixed line that a line-based SSE parser (this test's _parse_sse, or a
+        # browser/EventSource client) would silently drop. Both effects are checked:
+        # framing survives (all 4 on_token calls are still 4 distinct token events)
+        # and the payload round-trips with the real newline intact.
+        token_payloads = [payload for kind, payload in events if kind == "token"]
+        assert len(token_payloads) == 4
+        decoded_tokens = [json.loads(payload) for payload in token_payloads]
+        assert "line1\nline2" in decoded_tokens
 
     def test_error_event_on_transport_failure(
         self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
