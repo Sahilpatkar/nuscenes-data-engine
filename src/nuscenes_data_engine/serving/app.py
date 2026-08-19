@@ -360,7 +360,12 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     If ``agent.answer`` itself raises, the thread has no other way to report the
     failure: the HTTP response — and its 200 status — was already sent with the
     first byte of the stream, so a 500 status is no longer possible. The failure
-    is instead surfaced as a terminal ``error`` SSE event.
+    is instead surfaced as a terminal ``error`` SSE event. The full traceback is
+    always logged server-side first (``logger.exception``); what reaches the
+    client mirrors ``/chat``'s own split — a ``TransportError``'s message is
+    safe to show (it is already a curated, no-secrets string like "is `ollama
+    serve` running?"), anything else becomes a generic message so an unexpected
+    internal exception can never leak its text to the client.
 
     Payload encoding: every ``data:`` payload is a JSON value, so clients can
     ``json.loads`` each one uniformly — ``step``/``final`` are JSON objects,
@@ -411,7 +416,13 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
                 final = _assemble_chat_response(result)
                 events.put(("final", final.model_dump_json()))
             except Exception as exc:  # see docstring: headers are already sent
-                events.put(("error", str(exc)))
+                logger.exception("chat_stream worker failed")
+                message = (
+                    str(exc)
+                    if isinstance(exc, TransportError)
+                    else "internal error — see server logs"
+                )
+                events.put(("error", message))
             finally:
                 events.put(None)
 

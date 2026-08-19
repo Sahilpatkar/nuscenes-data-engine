@@ -21,6 +21,7 @@ pytest.importorskip("ultralytics")  # train extra
 
 import cv2
 import numpy as np
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from nuscenes_data_engine.data_engine.chat.transports import TransportError
@@ -349,6 +350,17 @@ class _RaisingStreamTransport:
         raise TransportError("connection refused — is `ollama serve` running?")
 
 
+class _CrashingStreamTransport:
+    """A transport whose complete_stream fails with a non-TransportError, for the
+    generic-error-message + server-side-logging test (worker exceptions that are
+    NOT TransportError must not leak their text to the client)."""
+
+    model = "fake-model"
+
+    def complete_stream(self, messages: Any, tools: Any, on_token: Any) -> dict[str, Any]:
+        raise RuntimeError("boom: unexpected crash")
+
+
 class _ChartingTransport:
     """Non-streaming transport scripted to call make_chart on its first turn."""
 
@@ -440,3 +452,44 @@ class TestChatStream:
         assert kinds[-1] == "error"
         error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
         assert "ollama serve" in error_payload
+
+    def test_error_event_generic_message_on_non_transport_exception(
+        self,
+        chat_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Parity with /chat: only TransportError's message reaches the client. Any
+        other worker exception gets a generic client-visible message, but the full
+        traceback must still be logged server-side (previously: not logged at all)."""
+        caplog.set_level("ERROR", logger="nuscenes_data_engine")
+        _patch_transport(monkeypatch, _CrashingStreamTransport())
+        with chat_client.stream(
+            "POST", "/chat/stream", json={"message": "q", "history": []}
+        ) as response:
+            assert response.status_code == 200
+            events = _parse_sse(response.iter_lines())
+        kinds = [kind for kind, _payload in events]
+        assert kinds[-1] == "error"
+        error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
+        assert error_payload == "internal error — see server logs"
+        assert "boom: unexpected crash" not in error_payload
+        assert "chat_stream worker failed" in caplog.text
+        assert "boom: unexpected crash" in caplog.text  # traceback captured server-side
+
+    def test_chat_stream_returns_503_before_streaming(
+        self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resources are resolved before the generator is defined — a getter
+        failure must surface as a normal 503 JSON response, never a 200 SSE stream
+        that then fails mid-body."""
+        import nuscenes_data_engine.serving.app as serving_app
+
+        def boom(request: Any) -> Any:
+            raise HTTPException(status_code=503, detail="Chat unavailable: no catalog")
+
+        monkeypatch.setattr(serving_app, "_get_chat_catalog", boom)
+        response = chat_client.post("/chat/stream", json={"message": "q", "history": []})
+        assert response.status_code == 503
+        assert response.headers["content-type"].startswith("application/json")
+        assert "no catalog" in response.json()["detail"]

@@ -132,6 +132,43 @@ def test_run_sql_row_cap_and_errors(con: Any) -> None:
     assert "error" in unparsable
 
 
+def test_run_sql_cursor_still_sees_views_and_the_guard(con: Any) -> None:
+    """Regression pin for the per-call-cursor fix (concurrency race): ``con.cursor()``
+    is an independent connection to the same in-memory database, so it must still see
+    the parent connection's registered views and still enforce the SQL guard."""
+    out = catalog.run_sql(con, "SELECT count(*) FROM samples")
+    assert out["rows"] == [[3]]
+    assert "error" in catalog.run_sql(con, "SELECT * FROM read_parquet('/etc/passwd')")
+
+
+def test_run_sql_concurrent_calls_do_not_cross_contaminate(con: Any) -> None:
+    """Regression test for the per-call-cursor fix: DuckDB's ``execute()`` mutates
+    the connection's own live-result state, so two threads sharing one ``con`` and
+    calling ``execute``/``fetchmany`` concurrently could interleave and each get back
+    the OTHER thread's rows (proven: 105 cross-contaminated rows in a two-thread
+    probe against the pre-fix implementation). Each thread runs 50 queries whose
+    result is a function of (thread id, iteration) so any contamination is
+    immediately visible as a value mismatch."""
+    import threading
+
+    mismatches: list[str] = []
+
+    def worker(thread_id: int) -> None:
+        for i in range(50):
+            n = thread_id * 1000 + i  # unique per (thread, iteration)
+            out = catalog.run_sql(con, f"SELECT {n} AS n")
+            if out.get("rows") != [[n]]:
+                mismatches.append(f"thread {thread_id} call {i}: expected [[{n}]], got {out!r}")
+
+    threads = [threading.Thread(target=worker, args=(thread_id,)) for thread_id in (0, 1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert mismatches == []
+
+
 def test_schema_prompt_matches_available_tables(con: Any) -> None:
     prompt = catalog.schema_prompt(catalog.catalog_tables(con))
     assert "samples —" in prompt and "labels —" in prompt
