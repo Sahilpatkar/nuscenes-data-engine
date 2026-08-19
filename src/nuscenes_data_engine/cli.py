@@ -1005,6 +1005,106 @@ demo_app = typer.Typer(no_args_is_help=True, help="Public-demo artifact builder.
 app.add_typer(demo_app, name="demo")
 
 
+@demo_app.command("curate")
+def demo_curate(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Curate deterministic buckets into a frame manifest + rsync filelist."""
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.demo.curate import run_curate
+
+    cfg = load_yaml(config)
+    curation_cfg = cfg["curation"]
+    settings = get_settings()
+
+    def semantic_hits(queries: list[str]) -> list[tuple[str, list[str]]]:
+        quota = curation_cfg["quotas"].get("semantic", 0)
+        try:
+            from nuscenes_data_engine.data_engine.search import SearchEngine
+
+            engine = SearchEngine(
+                Path(cfg["paths"]["lancedb_path"]), cfg["paths"]["lancedb_table"],
+                settings.search_model_name, device=settings.search_device,
+            )
+            hits: list[tuple[str, list[str]]] = []
+            seen: set[str] = set()
+            for search_query in queries:
+                for row in engine.search_text(search_query, quota):
+                    token = row["sample_data_token"]
+                    if token not in seen:
+                        seen.add(token)
+                        hits.append((token, ["semantic"]))
+            return hits
+        except (ImportError, FileNotFoundError) as exc:
+            logger.warning("demo curate: semantic bucket skipped (%s)", exc)
+            return []
+
+    manifest = run_curate(
+        processed_dir=Path(cfg["paths"]["processed_dir"]),
+        al_dir=Path(cfg["paths"]["active_learning_dir"]),
+        staging_dir=Path(curation_cfg["staging_dir"]),
+        quotas=curation_cfg["quotas"],
+        al_arm=curation_cfg["al_arm"],
+        weak_arm=curation_cfg["weak_arm"],
+        semantic_hits=semantic_hits,
+        semantic_queries=curation_cfg["semantic_queries"],
+    )
+    logger.info(
+        "demo curate: %d tokens staged -> %s", len(manifest), curation_cfg["staging_dir"]
+    )
+
+
+@demo_app.command("infer")
+def demo_infer(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+    al_config: Path = typer.Option(
+        Path("configs/active_learning.yaml"),
+        "--al-config",
+        help="Source of the visibility_min/iou/conf_hit matching params (mirrors the sweep).",
+    ),
+) -> None:
+    """Run local inference over the curated val frames (box matching, crops, exemplars)."""
+    import pandas as pd
+
+    from nuscenes_data_engine.config import load_yaml
+    from nuscenes_data_engine.demo.infer import make_ultralytics_predictor, run_infer
+
+    cfg = load_yaml(config)
+    curation_cfg = cfg["curation"]
+    sweep_cfg = load_yaml(al_config).get("sweep", {})
+
+    staging_dir = Path(curation_cfg["staging_dir"])
+    manifest = pd.read_parquet(staging_dir / "frame_manifest.parquet")
+    curated_tokens = set(manifest["sample_data_token"])
+
+    processed_dir = Path(cfg["paths"]["processed_dir"])
+    annotations = pd.read_parquet(processed_dir / "annotations.parquet")
+    annotations = annotations[
+        annotations["sample_data_token"].isin(curated_tokens)
+        & (annotations["channel"] == "CAM_FRONT")
+    ]
+
+    mlruns_dir = Path(cfg["paths"]["mlruns_dir"])
+    models = {
+        name: make_ultralytics_predictor(
+            mlruns_dir / "artifacts" / run_id / "artifacts" / "weights" / "best.pt"
+        )
+        for name, run_id in cfg["models"].items()
+    }
+
+    out = run_infer(
+        staging_dir=staging_dir,
+        annotations=annotations,
+        models=models,
+        crop_size=tuple(curation_cfg["crop_size"]),
+        iou=float(sweep_cfg.get("iou", 0.5)),
+        conf_hit=float(sweep_cfg.get("conf_hit", 0.4)),
+        images_root=Path(curation_cfg["images_root"]),
+        visibility_min=str(sweep_cfg.get("visibility_min", "2")),
+    )
+    logger.info("demo infer: %s", out)
+
+
 @demo_app.command("build")
 def demo_build(
     config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),

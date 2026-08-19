@@ -11,6 +11,7 @@ paths:
 models:              # MLflow run ids (weights + artifacts live under mlruns/artifacts/<id>/)
   baseline: e465844a6b0249a3bc08ae894e530b22
   graph_rate_night: b7e251d4fb624097bea3d4e9e4a80c62
+  champion: 3869d068100a4af6a274c6d134feed2f   # yolov8m, the third of Task 5's three checkpoints
 
 hero:
   run: baseline      # key into models
@@ -26,6 +27,7 @@ flagship:
 
 curation:
   staging_dir: data/demo_curation
+  images_root: data/raw/demo_frames   # rsync destination (demo infer resolves images here)
   quotas:
     night_failure: 60
     day_failure: 40

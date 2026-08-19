@@ -378,3 +378,229 @@ def test_curate_rejects_unknown_quota_keys(tmp_path: Path) -> None:
             al_arm="graph_rate_night", weak_arm="graph_rate_night",
             semantic_hits=lambda queries: [], semantic_queries=[],
         )
+
+
+def test_run_infer_writes_predictions_gt_and_exemplar_flags(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    # two val frames with 1600x900 fake images
+    from PIL import Image
+
+    for token in ("v0", "v1"):
+        Image.new("RGB", (1600, 900), "gray").save(staging / "images" / f"{token}.jpg")
+    manifest = pd.DataFrame({
+        "sample_data_token": ["v0", "v1", "t1"],
+        "split": ["val", "val", "train_pool"],
+        "filename": ["images/v0.jpg", "images/v1.jpg", "images/t1.jpg"],
+        "curation_buckets": [["night_failure"], ["day_failure"], ["weak_accepted"]],
+    })
+    manifest.to_parquet(staging / "frame_manifest.parquet")
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "t1.jpg")
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1", "a2", "a3"],
+        "sample_data_token": ["v0", "v0", "v1"],
+        "category_group": ["pedestrian", "car", "car"],
+        "x_min": [100.0, 500.0, 300.0], "y_min": [100.0, 300.0, 200.0],
+        "x_max": [200.0, 700.0, 500.0], "y_max": [300.0, 500.0, 400.0],
+        # Task 3 correction (2026-08-18): annotations must carry visibility_token so
+        # run_infer can mirror sweep.py's visibility_min filter; full visibility here
+        # (>= the default "2") keeps all three rows in the matched set for this test.
+        "visibility_token": ["4", "4", "4"],
+    })
+
+    # baseline misses the pedestrian; night model finds it -> exemplar flag
+    def fake_predict(model_name: str):
+        def predict(image_path: Path):
+            hits = {"baseline": [[500, 300, 700, 500, 0.9, "car"]],
+                    "night": [[500, 300, 700, 500, 0.9, "car"],
+                              [100, 100, 200, 300, 0.8, "pedestrian"]]}
+            rows = hits[model_name] if "v0" in str(image_path) else []
+            import numpy as np
+            return {
+                "boxes": np.array([r[:4] for r in rows], dtype=float).reshape(-1, 4),
+                "conf": np.array([r[4] for r in rows], dtype=float),
+                "classes": [r[5] for r in rows],
+            }
+        return predict
+
+    out = run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"baseline": fake_predict("baseline"), "night": fake_predict("night")},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    preds = pd.read_parquet(staging / "predictions.parquet")
+    assert set(preds["model"]) == {"baseline", "night"}
+    v0_base = preds[(preds.sample_data_token == "v0") & (preds.model == "baseline")]
+    assert list(v0_base["status"]) == ["tp"]
+    gt = pd.read_parquet(staging / "gt_boxes.parquet")
+    row = gt[(gt.annotation_token == "a1")].iloc[0]
+    assert row["matched_baseline"] == False and row["matched_night"] == True  # noqa: E712
+    updated = pd.read_parquet(staging / "frame_manifest.parquet")
+    v0 = updated.set_index("sample_data_token").loc["v0"]
+    assert v0["fixes_fn_vs_baseline_night"] == True  # noqa: E712
+    # crops written for every frame incl. train_pool, at 960x540
+    from PIL import Image as PILImage
+    crop = PILImage.open(staging / "crops" / "v0.jpg")
+    assert crop.size == (960, 540)
+    assert (staging / "crops" / "t1.jpg").is_file()
+    assert out["n_predictions"] == len(preds)
+
+
+def test_run_infer_missing_image_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["images/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    with pytest.raises(ValueError, match="v0"):
+        run_infer(
+            staging_dir=staging, annotations=pd.DataFrame(
+                columns=["annotation_token", "sample_data_token", "category_group",
+                         "x_min", "y_min", "x_max", "y_max", "visibility_token"]),
+            models={"baseline": lambda p: None}, crop_size=(960, 540),
+            iou=0.5, conf_hit=0.4,
+        )
+
+
+def test_run_infer_below_visibility_min_excluded_but_flagged(tmp_path: Path) -> None:
+    """Correction (2026-08-18, review round): sweep.py filters GT to
+    ``visibility_token >= visibility_min`` before matching, so run_infer must do the
+    same -- otherwise the demo's FN semantics disagree with failures.parquet. a3 sits
+    below the default ``visibility_min="2"`` threshold: it must be flagged in
+    gt_boxes.parquet, excluded from matching (NA rather than False -- unmatched is not
+    the same claim as "false negative"), and never a prediction's matched target even
+    when a prediction's box perfectly overlaps it.
+    """
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "v0.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["images/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1", "a3"],
+        "sample_data_token": ["v0", "v0"],
+        "category_group": ["car", "pedestrian"],
+        "x_min": [500.0, 100.0], "y_min": [300.0, 100.0],
+        "x_max": [700.0, 200.0], "y_max": [500.0, 300.0],
+        "visibility_token": ["4", "1"],  # a3 is below the default visibility_min="2"
+    })
+
+    def fake_predict(image_path: Path):
+        import numpy as np
+        # A perfect hit on a3's box -- must NOT be allowed to claim it (excluded).
+        return {
+            "boxes": np.array(
+                [[500.0, 300.0, 700.0, 500.0], [100.0, 100.0, 200.0, 300.0]], dtype=float
+            ),
+            "conf": np.array([0.9, 0.9]),
+            "classes": ["car", "pedestrian"],
+        }
+
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"baseline": fake_predict}, crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    gt = pd.read_parquet(staging / "gt_boxes.parquet").set_index("annotation_token")
+    assert gt.loc["a3", "below_visibility_min"] == True  # noqa: E712
+    assert gt.loc["a1", "below_visibility_min"] == False  # noqa: E712
+    assert pd.isna(gt.loc["a3", "matched_baseline"])  # unmatched, but NOT a false negative
+    assert gt.loc["a1", "matched_baseline"] == True  # noqa: E712
+
+    preds = pd.read_parquet(staging / "predictions.parquet")
+    assert "a3" not in set(preds["matched_annotation_token"].dropna())
+
+
+def test_run_infer_uses_custom_images_root(tmp_path: Path) -> None:
+    """``images_root`` defaults to ``staging_dir`` (what the tests above rely on); the
+    real CLI run passes ``data/raw/demo_frames``, the rsync destination, which is a
+    separate directory from the curation staging dir."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    images_root = tmp_path / "raw_frames"
+    (images_root / "samples" / "CAM_FRONT").mkdir(parents=True)
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(
+        images_root / "samples" / "CAM_FRONT" / "v0.jpg"
+    )
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["samples/CAM_FRONT/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame(
+        columns=["annotation_token", "sample_data_token", "category_group",
+                 "x_min", "y_min", "x_max", "y_max", "visibility_token"]
+    )
+    run_infer(
+        staging_dir=staging, annotations=annotations, models={},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4, images_root=images_root,
+    )
+    assert (staging / "crops" / "v0.jpg").is_file()
+
+
+def test_run_infer_exemplar_flags_for_every_ordered_model_pair(tmp_path: Path) -> None:
+    """fixes_fn_vs_<a>_<b> must exist for every ORDERED pair among 3+ models, not just
+    adjacent ones -- with 3 models {A, B, C} that's 6 columns, and the True/False
+    pattern for each must reflect that specific pair's (a missed it, b caught it)
+    relationship, not some aggregate."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "v0.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["images/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1"],
+        "sample_data_token": ["v0"],
+        "category_group": ["pedestrian"],
+        "x_min": [100.0], "y_min": [100.0], "x_max": [200.0], "y_max": [300.0],
+        "visibility_token": ["4"],
+    })
+
+    import numpy as np
+
+    def miss(image_path: Path) -> dict:
+        return {"boxes": np.zeros((0, 4)), "conf": np.zeros(0), "classes": []}
+
+    def hit(image_path: Path) -> dict:
+        return {
+            "boxes": np.array([[100.0, 100.0, 200.0, 300.0]]),
+            "conf": np.array([0.9]),
+            "classes": ["pedestrian"],
+        }
+
+    # Only "model_b" finds the pedestrian; "model_a" and "model_c" both miss it.
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"model_a": miss, "model_b": hit, "model_c": miss},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    manifest = pd.read_parquet(staging / "frame_manifest.parquet")
+    v0 = manifest.set_index("sample_data_token").loc["v0"]
+    assert v0["fixes_fn_vs_model_a_model_b"] == True  # noqa: E712
+    assert v0["fixes_fn_vs_model_c_model_b"] == True  # noqa: E712
+    assert v0["fixes_fn_vs_model_a_model_c"] == False  # noqa: E712
+    assert v0["fixes_fn_vs_model_b_model_a"] == False  # noqa: E712
+    assert v0["fixes_fn_vs_model_b_model_c"] == False  # noqa: E712
+    assert v0["fixes_fn_vs_model_c_model_a"] == False  # noqa: E712
