@@ -11,7 +11,7 @@ import pytest
 APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
-from filters import failure_flags, filter_frames, sort_frames  # noqa: E402
+from filters import failure_counts, failure_flags, filter_frames, sort_frames  # noqa: E402
 
 
 def _manifest() -> pd.DataFrame:
@@ -103,6 +103,45 @@ def test_filter_frames_criteria() -> None:
     assert set(everything["sample_data_token"]) == {"v0", "v1", "v2"}
 
 
+def test_filter_frames_category_size_distance_intersect_on_one_box() -> None:
+    """category/size_bucket/distance_range are conjunctive over the SAME GT row,
+    not independently against possibly-different rows on the same frame -- the
+    real bug the 81k-combination behavioral sweep caught: "pedestrian + 80-123m"
+    was returning frames with some pedestrian and some distant box, zero of which
+    actually had a pedestrian at that distance."""
+    manifest = pd.DataFrame({
+        "sample_data_token": ["v0", "v1"],
+        "split": ["val", "val"],
+        "is_night": [True, True],
+        "is_rain": [False, False],
+        "curation_buckets": [[], []],
+        "n_preds_baseline": pd.array([0, 0], dtype="Int64"),
+    })
+    gt = pd.DataFrame({
+        # v0: a NEAR pedestrian + a FAR car -- no single box is both a
+        # pedestrian AND far, so v0 must NOT match "pedestrian + far".
+        # v1: a FAR pedestrian -- one box satisfies both, so v1 must match.
+        "annotation_token": ["a", "b", "c"],
+        "sample_data_token": ["v0", "v0", "v1"],
+        "category_group": ["pedestrian", "car", "pedestrian"],
+        "size_bucket": ["small", "large", "small"],
+        "distance_to_ego_m": [5.0, 90.0, 90.0],
+        "matched_baseline": pd.array([True, True, True], dtype="boolean"),
+    })
+    preds = pd.DataFrame({
+        "sample_data_token": pd.array([], dtype="object"),
+        "model": pd.array([], dtype="object"),
+        "category_group": pd.array([], dtype="object"),
+        "conf": pd.array([], dtype="float64"),
+        "status": pd.array([], dtype="object"),
+    })
+    out = filter_frames(
+        manifest=manifest, gt=gt, preds=preds, model="baseline",
+        category="pedestrian", distance_range=(80.0, 100.0),
+    )
+    assert set(out["sample_data_token"]) == {"v1"}
+
+
 def test_filter_frames_buckets_any_overlap() -> None:
     kwargs = dict(manifest=_manifest(), gt=_gt(), preds=_preds(), model="baseline")
     # Single bucket -- same as the old singular `bucket` param's one case.
@@ -180,6 +219,28 @@ def test_sort_frames_by_scene_name() -> None:
     frames = filter_frames(manifest=_sort_manifest(), gt=_sort_gt(), preds=_sort_preds(), model="baseline")
     out = sort_frames(frames, key="scene_name", **_sort_kwargs())
     assert list(out["sample_data_token"]) == ["v1", "v2", "v0"]   # alpha, bravo, charlie
+
+
+def test_failure_counts_empty_tokens_has_object_dtype_column() -> None:
+    """A zero-length token list (e.g. a filter combo with zero matching frames)
+    must still produce a result with sample_data_token as object dtype, not
+    float64 -- pandas defaults an empty Python list to float64 when building a
+    DataFrame column from it, which then breaks sort_frames's merge against a
+    real (always object-dtype) token column ("merge on object and float64
+    columns"). Caught by the new empty-state page path (final-review round)."""
+    counts = failure_counts(_gt(), _preds(), [], model="baseline")
+    assert counts.empty
+    assert counts["sample_data_token"].dtype == object
+
+
+def test_sort_frames_on_an_empty_filter_result_does_not_raise() -> None:
+    empty = filter_frames(
+        manifest=_manifest(), gt=_gt(), preds=_preds(), model="baseline",
+        failure_type="has_fp", lighting="day",   # has_fp -> only v0; day -> only v1; no overlap
+    )
+    assert empty.empty
+    out = sort_frames(empty, gt=_gt(), preds=_preds(), model="baseline", key="failure_count")
+    assert out.empty
 
 
 def test_sort_frames_invalid_key_raises() -> None:

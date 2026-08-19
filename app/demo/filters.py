@@ -67,15 +67,23 @@ def filter_frames(
     """Compose ``failure_flags`` with the sidebar's filter criteria.
 
     ``lighting``: "night" | "day", matched against ``is_night``. ``rain``: exact
-    match against ``is_rain``. ``category`` / ``size_bucket`` / ``distance_range``:
-    keep a frame if ANY of its GT rows (val-only, any model — GT boxes are not
-    model-specific) satisfies the criterion. ``failure_type``: one of
-    "has_fn"/"has_fp"/"has_low_conf"/"clean". ``buckets``: any-overlap membership
-    against the frame's ``curation_buckets`` list (keep a frame if ANY of its own
-    buckets appears in ``buckets`` — the sidebar's multiselect is OR, not AND,
-    across selections). ``None`` or an empty list is a no-op, same as every other
-    criterion left as ``None``; with nothing set, the full val-split frame set
-    (with flags attached) is returned.
+    match against ``is_rain``. ``category`` / ``size_bucket`` / ``distance_range``
+    are CONJUNCTIVE over the SAME GT row (val-only, any model — GT boxes are not
+    model-specific): keep a frame only if at least one of its GT rows satisfies
+    EVERY one of these three that is set, not each criterion independently
+    against possibly-different rows. E.g. category="pedestrian" +
+    distance_range=(80, 123) requires an actual pedestrian box in that distance
+    range — a frame with a near pedestrian and an unrelated far car does not
+    qualify just because it has *some* row matching each criterion separately
+    (a real bug an 81k-combination behavioral sweep caught: that independent-
+    per-criterion version returned frames with zero boxes actually matching the
+    combined query). ``failure_type``: one of "has_fn"/"has_fp"/"has_low_conf"/
+    "clean". ``buckets``: any-overlap membership against the frame's
+    ``curation_buckets`` list (keep a frame if ANY of its own buckets appears in
+    ``buckets`` — the sidebar's multiselect is OR, not AND, across selections).
+    ``None`` or an empty list is a no-op, same as every other criterion left as
+    ``None``; with nothing set, the full val-split frame set (with flags
+    attached) is returned.
     """
     flags = failure_flags(manifest, gt, preds, model=model)
     gt_val = gt.loc[gt["sample_data_token"].isin(set(flags["sample_data_token"]))]
@@ -90,18 +98,24 @@ def filter_frames(
     if rain is not None:
         mask &= flags["is_rain"] == rain
 
-    if category is not None:
-        tokens = set(gt_val.loc[gt_val["category_group"] == category, "sample_data_token"])
-        mask &= flags["sample_data_token"].isin(tokens)
-
-    if size_bucket is not None:
-        tokens = set(gt_val.loc[gt_val["size_bucket"] == size_bucket, "sample_data_token"])
-        mask &= flags["sample_data_token"].isin(tokens)
-
-    if distance_range is not None:
-        lo, hi = distance_range
-        in_range = gt_val.loc[gt_val["distance_to_ego_m"].between(lo, hi)]
-        mask &= flags["sample_data_token"].isin(set(in_range["sample_data_token"]))
+    # category/size_bucket/distance_range: ONE conjunctive mask over GT rows,
+    # built from whichever of the three are set, then a frame matches if ANY of
+    # its rows satisfies all of them together -- not three independent token-set
+    # intersections (which would let a near pedestrian and an unrelated far car
+    # on the same frame satisfy "pedestrian" + "far" separately without either
+    # box actually being both).
+    box_criteria_set = category is not None or size_bucket is not None or distance_range is not None
+    if box_criteria_set:
+        box_mask = pd.Series(True, index=gt_val.index)
+        if category is not None:
+            box_mask &= gt_val["category_group"] == category
+        if size_bucket is not None:
+            box_mask &= gt_val["size_bucket"] == size_bucket
+        if distance_range is not None:
+            lo, hi = distance_range
+            box_mask &= gt_val["distance_to_ego_m"].between(lo, hi)
+        matching_tokens = set(gt_val.loc[box_mask, "sample_data_token"])
+        mask &= flags["sample_data_token"].isin(matching_tokens)
 
     if failure_type is not None:
         if failure_type not in _FAILURE_TYPES:
@@ -143,7 +157,15 @@ def failure_counts(
         "sample_data_token"
     ).size()
 
-    out = pd.DataFrame({"sample_data_token": token_list}).set_index("sample_data_token")
+    # dtype="object" forced explicitly: an empty Python list defaults to float64
+    # when pandas infers a column's dtype, which then breaks sort_frames's merge
+    # against a real (always object-dtype, since tokens are strings) frame
+    # column -- "merge on object and float64 columns" (caught by the new empty-
+    # state page path, final-review round). A non-empty token_list would infer
+    # object anyway; this just makes the empty case match it explicitly.
+    out = pd.DataFrame(
+        {"sample_data_token": pd.array(token_list, dtype="object")}
+    ).set_index("sample_data_token")
     out["n_fn"] = n_fn
     out["n_fp"] = n_fp
     out["n_low_conf"] = n_low_conf

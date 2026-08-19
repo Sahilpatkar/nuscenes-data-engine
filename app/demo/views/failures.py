@@ -145,7 +145,11 @@ def render() -> None:
     # legitimately excludes zero-GT frames (nothing there to match).
     distance_arg = None if distance_range == (min_dist, max_dist) else distance_range
 
-    failure_label = st.sidebar.radio("Failure type", list(_FAILURE_LABELS))
+    # Explicit key (same rationale as the model radio above): tests need to
+    # drive this directly to exercise the empty-state path deterministically.
+    failure_label = st.sidebar.radio(
+        "Failure type", list(_FAILURE_LABELS), key="failure_type_select"
+    )
     failure_type = _FAILURE_LABELS[failure_label]
 
     all_buckets = sorted({b for buckets in val_manifest["curation_buckets"] for b in buckets})
@@ -169,6 +173,11 @@ def render() -> None:
     )
 
     st.caption(f"{len(frames)} / {len(val_manifest)} val frames match the current filters")
+    if len(frames) == 0:
+        st.info(
+            "No frames match these filters — try relaxing one (the distance "
+            "and failure-type filters narrow fastest)."
+        )
 
     sort_label = st.sidebar.selectbox("Sort by", list(_SORT_LABELS))
     frames = sort_frames(frames, gt=gt, preds=preds, model=model, key=_SORT_LABELS[sort_label])
@@ -285,6 +294,23 @@ def render() -> None:
             fixers_of.append(other)
     for other in fixers_of:
         st.success(f"Exemplar: `{model}` catches a box `{other}` misses on this frame")
+
+    # Frequency context, shown regardless of whether THIS frame+model combo has
+    # a badge: fixes_fn_vs_ pairs are common across the curated set (97/125
+    # frames under some model selection in the real package) -- without this,
+    # the badge reads as a rare, special-case callout rather than the normal
+    # state of a multi-model comparison. "Any True per row" across every
+    # fixes_fn_vs_ column, not just the pair(s) involving the selected model:
+    # this is describing the exemplar-badge PANEL in general, not this frame's
+    # specific badge state.
+    fixes_cols = [c for c in manifest.columns if c.startswith("fixes_fn_vs_")]
+    if fixes_cols:
+        n_fix_pairs = int(val_manifest[fixes_cols].fillna(False).any(axis=1).sum())
+        st.caption(
+            f"Fix-pairs are common across the curated set ({n_fix_pairs} of "
+            f"{len(val_manifest)} val frames have at least one) — this panel "
+            "shows which models disagree on this frame."
+        )
 
     st.caption(
         "FN = GT unmatched by the selected model; low-confidence claims count as "

@@ -322,6 +322,14 @@ def test_failure_explorer_renders_grid_and_detail(
     at.run(timeout=30)
     assert not at.exception
     assert not any("Exemplar" in str(s.value) for s in at.success)   # baseline: misser, no badge
+    # Final-review fix #3: the frequency caption is shown regardless of whether
+    # THIS model+frame combo currently has a badge -- it's global context ("fix-
+    # pairs are common"), not per-badge decoration. Fixture: only "v0" has any
+    # fixes_fn_vs_ column True, out of 2 val frames -- "1 of 2".
+    assert any(
+        "Fix-pairs are common across the curated set (1 of 2 val frames" in str(c.value)
+        for c in at.caption
+    )
 
     at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
     assert not at.exception
@@ -329,6 +337,20 @@ def test_failure_explorer_renders_grid_and_detail(
         "Exemplar: `graph_rate_night` catches a box `baseline` misses" in str(s.value)
         for s in at.success
     )
+    assert any(
+        "Fix-pairs are common across the curated set (1 of 2 val frames" in str(c.value)
+        for c in at.caption
+    )
+
+    # Final-review fix #2: the empty state. graph_rate_night (now selected) has
+    # zero FN across both fixture frames (v0's GT is fully matched_graph_rate_
+    # night, v1 has no GT rows at all) -- "Has FN" must show 0 results AND the
+    # st.info nudge, not just a "0 / 2" caption with an otherwise-blank page.
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+    zero_caption = next(str(m.value) for m in at.caption if "val frames" in str(m.value))
+    assert zero_caption.startswith("0 / 2")
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
 
     # Beyond the plan's floor: also drive the detail view (grid buttons write
     # st.session_state["failure_token"], which a plain AppTest.run() never
