@@ -25,7 +25,7 @@ jobs:
       # serve extra is in too: it's torch-free (just streamlit/fastapi/uvicorn) and
       # without it `streamlit.*` falls back to the mypy override's ignore_missing_imports
       # (Any), which silently passes strict `disallow_untyped_decorators` on the wrong
-      # thing — the four @st.cache_data loaders in app/demo/data.py need the real
+      # thing — the seven @st.cache_data loaders in app/demo/data.py need the real
       # streamlit types for that check to mean anything.
       - name: Install deps (base + dev + data + engine + serve)
         run: uv sync --extra dev --extra data --extra engine --extra serve

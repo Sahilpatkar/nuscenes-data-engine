@@ -73,6 +73,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
+            # annotation_token: required since Task 1 (Phase 3) -- gt_boxes.parquet
+            # (staged below) is joined onto this table by annotation_token to add
+            # distance_to_ego_m; f1..f3 are otherwise unused by the flagship SQL.
+            "annotation_token": ["f1", "f2", "f3"],
             "sample_token": ["s1", "s1", "s2"],
             "category_group": ["pedestrian", "pedestrian", "car"],
             "distance_to_ego_m": [5.0, 20.0, 3.0],
@@ -120,33 +124,124 @@ def built_demo_data(tmp_path: Path) -> Path:
             }
         )
     )
-    mlruns = tmp_path / "mlruns"
-    hero_dir = mlruns / "artifacts" / "runX" / "artifacts" / "ultralytics_run"
-    hero_dir.mkdir(parents=True)
-    # A genuine (if tiny) JPEG: st.image() in the AppTest run below actually decodes
-    # it, unlike test_export_hero_copies_the_configured_mosaic's byte-copy check.
+    # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group,
+    # not an mlruns mosaic -- stage a minimal two-token curation group so
+    # run_build's now-mandatory hero-token resolution has a real crop to copy. A
+    # genuine (if tiny) JPEG: st.image() in the AppTest run below actually decodes
+    # it. Two val tokens across two models (review round, quality pass on Task 4):
+    #   - "v0": baseline misses GT box a2 (pedestrian) that graph_rate_night
+    #     catches -- fixes_fn_vs_baseline_graph_rate_night=True. This is the only
+    #     shape that exercises the exemplar-badge column (fixes_fn_vs_<A>_<B>
+    #     never existed with a single model staged, so the inverted-badge bug
+    #     from the first review round was untestable until now).
+    #   - "v1": zero GT rows, all-FP predictions from both models (a hallucination
+    #     frame during a notionally hard-braking moment) -- this is exactly the
+    #     shape the distance-slider-default bug hid: a frame with no GT boxes can
+    #     never be "in range" under ANY concrete distance_range, so it must only
+    #     ever be excluded by an explicit user choice, never by the slider's
+    #     full-extent default.
+    staging = tmp_path / "curation_staging"
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0", "v1"],
+        "split": ["val", "val"],
+        "filename": ["images/v0.jpg", "images/v1.jpg"],
+        # scene_name: the grid loop's caption reads this straight off each row
+        # (row.scene_name) -- absent here, that line never ran in any test before
+        # this review round, because bug #2 (the distance-slider default) also
+        # happened to filter v0 itself out of every prior single-model fixture
+        # (its only GT row had a NaN distance), leaving `frames` empty and the
+        # grid loop body dead code from the page's very first test.
+        "scene_name": ["scene-v0", "scene-v1"],
+        # Two buckets on v0, not one: curation_buckets round-trips through parquet
+        # as a numpy array (pyarrow's list dtype) -- a single-element array is
+        # falsy-safe by accident (`bool()` of a length-1 array just returns that
+        # element's truthiness), so this needs >= 2 entries to actually exercise
+        # `array or []`-style bugs in the page (`ValueError: truth value of an
+        # array with more than one element is ambiguous`).
+        "curation_buckets": [["night_failure", "al_selected"], ["hard_braking"]],
+        # is_night/is_rain: the Failure Explorer sidebar builds its lighting/rain
+        # filter options straight off these columns' actual values -- absent here,
+        # the page would KeyError before an AppTest ever gets to render.
+        "is_night": [True, False], "is_rain": [False, False],
+        "n_preds_baseline": pd.array([1, 2], dtype="Int64"),
+        "n_preds_graph_rate_night": pd.array([2, 2], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True, False], dtype="boolean"),
+        "fixes_fn_vs_graph_rate_night_baseline": pd.array([False, False], dtype="boolean"),
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
+        "model": [
+            "baseline", "graph_rate_night", "graph_rate_night",
+            "baseline", "baseline", "graph_rate_night", "graph_rate_night",
+        ],
+        "category_group": ["car", "car", "pedestrian", "car", "car", "car", "car"],
+        "x_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "y_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "x_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "y_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "conf": [0.9, 0.9, 0.8, 0.4, 0.5, 0.4, 0.5],
+        # v0: baseline only ever claims a1 (misses a2); graph_rate_night claims
+        # both a1 and a2 (a genuine catch). v1 has zero GT rows, so every claim
+        # from either model is necessarily a false positive.
+        "status": ["tp", "tp", "tp", "fp", "fp", "fp", "fp"],
+        "matched_annotation_token": ["a1", "a1", "a2", None, None, None, None],
+    }).to_parquet(staging / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
+        "category_group": ["car", "pedestrian"],
+        "x_min": [1.0, 10.0], "y_min": [1.0, 10.0],
+        "x_max": [2.0, 30.0], "y_max": [2.0, 30.0],
+        "matched_baseline": pd.array([True, False], dtype="boolean"),
+        "matched_graph_rate_night": pd.array([True, True], dtype="boolean"),
+        # below_visibility_min: real gt_boxes always carries this column: the
+        # Failure Explorer drops such rows everywhere (rendering + the box table),
+        # so it must be present for the page to even read gt_boxes.parquet. v1 has
+        # no gt_boxes rows at all (the zero-GT case both review-fix regression
+        # tests below depend on).
+        "below_visibility_min": [False, False],
+    }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
-    (hero_dir / "val_batch0_pred.jpg").write_bytes(hero_bytes.getvalue())
+    (staging / "crops" / "v0.jpg").write_bytes(hero_bytes.getvalue())
+    v1_bytes = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(60, 60, 60)).save(v1_bytes, format="JPEG")
+    (staging / "crops" / "v1.jpg").write_bytes(v1_bytes.getvalue())
 
     out = tmp_path / "demo_data"
     config = {
         "paths": {
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
-            "mlruns_dir": str(mlruns),
+            "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
             "out_dir": str(out),
         },
-        "models": {"baseline": {"run": "runX", "imgsz": 640}},
-        "hero": {"run": "baseline", "mosaic": "val_batch0_pred.jpg"},
+        "models": {
+            "baseline": {"run": "runX", "imgsz": 640},
+            "graph_rate_night": {"run": "runY", "imgsz": 640},
+        },
+        "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30, "cypher_source": "docs/GRAPH.md"},
+        "curation": {"staging_dir": str(staging)},
     }
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))
     run_build(config_path)
+
+    # No real LanceDB store is staged in this fixture, so run_build's thumbnail
+    # export skips with a warning (see build.py's _include_curation) -- the
+    # Failure Explorer grid and the Overview hero both prefer a thumb over a crop
+    # when one exists, so write one directly for the page tests below to exercise
+    # that path too (crops/v0.jpg alone would leave it untested here).
+    thumbs_dir = out / "sample_frames" / "thumbs"
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    thumb_bytes = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(80, 80, 80)).save(thumb_bytes, format="JPEG")
+    (thumbs_dir / "v0.jpg").write_bytes(thumb_bytes.getvalue())
+
     return out
 
 
@@ -179,3 +274,113 @@ def test_overview_page_renders_from_a_built_package(
     assert not at.exception
     metric_values = {m.label: m.value for m in at.metric}
     assert metric_values["Camera keyframes"] == "3"
+
+
+def test_failure_explorer_renders_grid_and_detail(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    # Navigate to the Failure Explorer page. The plan's assumed `at.navigation`
+    # page list does not exist on this installed streamlit (1.59.2) -- AppTest
+    # only exposes `switch_page(page_path)`, which resolves the target page by
+    # hashing a name derived from ``page_path``'s filename (no leading digits/
+    # emoji, underscores kept) and matching it against each `st.Page`'s
+    # `url_path` hash. main.py gives the Failure Explorer page an explicit
+    # `url_path="failures"` so that hash matches "views/failures.py"'s derived
+    # name exactly (verified empirically against this streamlit version).
+    at.switch_page("views/failures.py").run(timeout=30)
+    assert not at.exception
+    assert any("val frames" in str(m.value) for m in at.caption)   # val-only caption present
+
+    # Review fix #2 regression: the distance slider's default (full-extent) value
+    # must be a true no-op. filter_frames only keeps a frame if >= 1 of its GT
+    # rows falls inside a concrete distance_range, so "v1" (zero GT rows, an
+    # all-FP hallucination frame) can never be "in range" under ANY concrete
+    # range -- if the page ever passes the slider's default value straight
+    # through instead of treating full-extent as None, v1 silently vanishes from
+    # even the completely unfiltered grid. Pin: default state shows every val
+    # frame (2 here), not just the ones with GT boxes.
+    default_caption = next(str(m.value) for m in at.caption if "val frames" in str(m.value))
+    matched, total = (int(n) for n in default_caption.split(" val frames")[0].split(" / "))
+    assert matched == total == 2
+
+    # Review fix #1 regression: the exemplar badge direction. "v0" is staged so
+    # baseline misses GT box a2 (pedestrian) that graph_rate_night catches --
+    # fixes_fn_vs_baseline_graph_rate_night=True means "baseline (A) missed it,
+    # graph_rate_night (B) fixed it" (infer.py's fixes_fn_vs_<A>_<B> convention).
+    # Selecting baseline (the misser) must show NO badge; selecting
+    # graph_rate_night (the fixer) must show the badge, crediting the right
+    # model on each side.
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert not any("Exemplar" in str(s.value) for s in at.success)   # baseline: misser, no badge
+    # Final-review fix #3: the frequency caption is shown regardless of whether
+    # THIS model+frame combo currently has a badge -- it's global context ("fix-
+    # pairs are common"), not per-badge decoration. Fixture: only "v0" has any
+    # fixes_fn_vs_ column True, out of 2 val frames -- "1 of 2".
+    assert any(
+        "Fix-pairs are common across the curated set (1 of 2 val frames" in str(c.value)
+        for c in at.caption
+    )
+
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert any(
+        "Exemplar: `graph_rate_night` catches a box `baseline` misses" in str(s.value)
+        for s in at.success
+    )
+    assert any(
+        "Fix-pairs are common across the curated set (1 of 2 val frames" in str(c.value)
+        for c in at.caption
+    )
+
+    # Final-review fix #2: the empty state. graph_rate_night (now selected) has
+    # zero FN across both fixture frames (v0's GT is fully matched_graph_rate_
+    # night, v1 has no GT rows at all) -- "Has FN" must show 0 results AND the
+    # st.info nudge, not just a "0 / 2" caption with an otherwise-blank page.
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+    zero_caption = next(str(m.value) for m in at.caption if "val frames" in str(m.value))
+    assert zero_caption.startswith("0 / 2")
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
+
+    # Beyond the plan's floor: also drive the detail view (grid buttons write
+    # st.session_state["failure_token"], which a plain AppTest.run() never
+    # clicks) -- this is the only path that exercises draw_overlay, the per-box
+    # table, and the multi-bucket metadata panel, and it is where a real bug
+    # was caught during self-review (curation_buckets round-trips through
+    # parquet as a numpy array, and `array or []` raises ValueError for any
+    # frame in more than one bucket -- see the fixture's two-bucket comment).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+
+
+def test_overview_hero_renders_overlay(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception   # hero overlay path must not raise even with tiny fixture boxes
+    # Final-review fix: the old caption text was generic enough to read
+    # identically whether the overlay path or the plain-image fallback rendered,
+    # so this assertion previously passed on vibes. This fixture's hero token
+    # ("v0") has real GT+pred boxes staged for it (built_demo_data), so
+    # _hero_overlay must take the live-overlay branch, not the fallback -- pin a
+    # substring unique to the corrected caption so a regression to the fallback
+    # (or a wrong caption) fails loudly instead of silently matching either path.
+    hero_captions = [caption for img in at.image for caption in img.captions]
+    assert any("defeats all three models" in caption for caption in hero_captions)

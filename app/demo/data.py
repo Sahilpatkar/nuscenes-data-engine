@@ -42,5 +42,28 @@ def load_weaksup() -> pd.DataFrame:
     return pd.read_parquet(DEMO_DATA / "weak_supervision_results.parquet")
 
 
+@st.cache_data
+def load_frame_manifest() -> pd.DataFrame:
+    return pd.read_parquet(DEMO_DATA / "frame_manifest.parquet")
+
+
+@st.cache_data
+def load_gt_boxes() -> pd.DataFrame:
+    return pd.read_parquet(DEMO_DATA / "gt_boxes.parquet")
+
+
+@st.cache_data
+def load_predictions() -> pd.DataFrame:
+    return pd.read_parquet(DEMO_DATA / "predictions.parquet")
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
+
+
+def crop_path(token: str) -> Path:
+    return DEMO_DATA / "sample_frames" / "crops" / f"{token}.jpg"
+
+
+def thumb_path(token: str) -> Path:
+    return DEMO_DATA / "sample_frames" / "thumbs" / f"{token}.jpg"

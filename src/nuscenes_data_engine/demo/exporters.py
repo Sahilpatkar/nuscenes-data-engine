@@ -41,7 +41,13 @@ def _require(path: Path) -> Path:
     return path
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` as sorted, indented JSON, creating parent dirs as needed.
+
+    Public since Phase 3: ``build.py`` reuses it to patch ``hero_token`` into
+    overview_metrics.json after curation/hero resolution, which runs after this
+    module's own export_overview call has already written the file once.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
@@ -72,6 +78,12 @@ def export_overview(
     speed vs GT-derived ego speed, flagship = the documented SQL re-run over the
     local tables. The Cypher twin stays *sourced* (docs/GRAPH.md) until Phase 6
     computes it against a live graph — the JSON labels it as such.
+
+    Phase 3's hero_token is deliberately NOT a parameter here: the hero token is
+    only resolved after curation is included, which runs after this export
+    (Overview must stay renderable even with curation absent) -- ``run_build``
+    patches ``hero_token`` into the written JSON afterward via ``write_json``
+    instead.
     """
     for name in PROCESSED_INPUTS:
         _require(processed_dir / name)
@@ -163,7 +175,7 @@ def export_overview(
             },
         },
     }
-    _write_json(out_dir / "overview_metrics.json", metrics)
+    write_json(out_dir / "overview_metrics.json", metrics)
     return metrics
 
 
@@ -222,21 +234,6 @@ def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "weak_supervision_results.parquet", index=False)
     return df
-
-
-def export_hero(*, mlruns_dir: Path, run_id: str, mosaic: str, out_dir: Path) -> Path:
-    """Copy the configured validation mosaic as the interim Overview hero image.
-
-    Replaced by a real curated overlay in Phase 3; until then the hero is still a
-    genuine model output (an ultralytics val-batch prediction mosaic), not a mock.
-    """
-    src = mlruns_dir / "artifacts" / run_id / "artifacts" / "ultralytics_run" / mosaic
-    if not src.is_file():
-        raise ValueError(f"hero mosaic not found: {src}")
-    dest = out_dir / "sample_frames" / "hero.jpg"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(src.read_bytes())
-    return dest
 
 
 def export_thumbs(

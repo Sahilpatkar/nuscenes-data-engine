@@ -10,15 +10,6 @@ def _stub(title: str, purpose: str, phase: int) -> None:
     st.info(f"{purpose}  \n\n_Ships in Phase {phase} of the demo build._")
 
 
-def failures() -> None:
-    _stub(
-        "Failure Explorer",
-        "See where and why the detector fails — GT vs prediction overlays, filterable "
-        "by condition, class, and failure type.",
-        3,
-    )
-
-
 def scenarios() -> None:
     _stub(
         "Scenario Search",
