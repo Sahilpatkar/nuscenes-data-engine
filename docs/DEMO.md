@@ -61,9 +61,9 @@ manifest always names the commit it was built from, not the one that carries it.
 | `overview_metrics.json` | scale, headline results, flagship parity, CAN r |
 | `active_learning_results.parquet` | all 13 arms: overall/night mAP50-95 + deltas |
 | `weak_supervision_results.parquet` | per-arm verifier retention + box stats |
-| `sample_frames/hero.jpg` | hand-picked exemplar crop (`hero_token` recorded in `overview_metrics.json`); picked via `configs/demo.yaml` `hero.token`, from the `fixes_fn_vs_baseline_graph_rate_night` exemplars |
+| `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car + pedestrian that graph_rate_night catches) — rendered live with overlays on Overview |
 | `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched) |
-| `gt_boxes.parquet` | GT boxes for curated frames (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `below_visibility_min` (all-False on today's data — ingestion already filters visibility < 2; parity-defensive only, do not build UI against it) |
+| `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
 | `sample_frames/thumbs/` | 250 × 256×144 LanceDB thumbnails |
@@ -113,6 +113,19 @@ night frame both yolov8n models totally missed). Without TRINITY access, `demo b
 skips the curation group and still produces the Phase-1 package
 (`validation.curation: "absent"`).
 
+## Failure Explorer (Phase 3)
+
+`app/demo/views/failures.py` — filters (lighting, rain, model, class, size bucket,
+distance-to-ego, failure type, curation bucket) over the 125 **val** frames only
+(train_pool frames carry no predictions by design; later pages use them). The
+GT/Predictions/Overlay toggle renders through the shared `draw_overlay` visual
+language: GT green, misses orange-dashed, FPs red, low-confidence yellow-dotted.
+FN here means what `failures.parquet` means: GT unmatched by the selected model,
+with low-confidence claims counting as matches. Leaving the distance slider at
+full extent applies no distance filter (narrowing it excludes zero-GT frames —
+stated in the widget's help). Exemplar badges credit the model that *catches* a
+box another model missed.
+
 ## Dataset attribution & license
 
 The demo package (`demo_data/sample_frames/`) contains imagery **derived from the
@@ -131,7 +144,7 @@ is **not** redistributed by this repository.
 |---|---|---|
 | 1 | builder core, `demo_data/` v0.1, app shell + Overview | **shipped** |
 | 2 | curated frames, TRINITY rsync, local inference, predictions | **shipped** |
-| 3 | Failure Explorer + GT/pred overlays | pending |
+| 3 | Failure Explorer + GT/pred overlays | **shipped** |
 | 4 | chat upgrades (local stack): probe fix, streaming, charts | pending |
 | 5 | scenario search + synchronized event viewer | pending |
 | 6 | interactive graph (subgraph export + agraph) | pending |
