@@ -113,6 +113,18 @@ night frame both yolov8n models totally missed). Without TRINITY access, `demo b
 skips the curation group and still produces the Phase-1 package
 (`validation.curation: "absent"`).
 
+## Dataset attribution & license
+
+The demo package (`demo_data/sample_frames/`) contains imagery **derived from the
+nuScenes dataset** (© nuTonomy / Motional): 960×540 crops, 256×144 thumbnails, and a
+validation mosaic. nuScenes is licensed **CC BY-NC-SA 4.0** (non-commercial,
+attribution, share-alike); the derived visuals here are shared for non-commercial
+research/portfolio demonstration under those same terms, and the underlying dataset
+is **not** redistributed by this repository.
+
+> Caesar et al., *"nuScenes: A multimodal dataset for autonomous driving"*,
+> CVPR 2020 — https://www.nuscenes.org
+
 ## Phase status
 
 | phase | scope | status |
