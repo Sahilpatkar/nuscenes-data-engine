@@ -52,14 +52,11 @@ regression proof.
 - The Protocol gains `complete_stream` with a default fallthrough: transports that
   do not implement it (test fakes) fall back to `complete` + one on_token call with
   the full text. `answer()` calls `complete_stream` when `on_token` is set, else
-  `complete`. IMPORTANT: intermediate turns (tool-calling turns) do NOT stream
-  token-by-token — only the final no-tool-call turn's text is user-visible, but the
-  transport cannot know in advance which turn is final; both transports therefore
-  stream every turn's text deltas and `answer()` forwards deltas to on_token ONLY
-  after... this is unknowable in advance. DECISION: forward every turn's text
-  deltas; the UI treats deltas from non-final turns as "thinking aloud" — they are
-  overwritten when the next turn starts (the SSE protocol carries a `turn` event so
-  the client can reset its buffer). Simple, honest, no lookahead needed.
+  `complete`. IMPORTANT: no one can know in advance which turn is final (the model
+  decides by not calling a tool), so both transports stream every turn's text
+  deltas. The UI treats a non-final turn's text as interim narration and resets
+  its buffer when the next turn starts — the SSE protocol carries a `turn` event
+  for exactly this. Simple, honest, no lookahead required.
 
 **Serving:** new `POST /chat/stream` (sync generator → `StreamingResponse`,
 `media_type="text/event-stream"`) emitting SSE events: `turn` (reset), `token`
