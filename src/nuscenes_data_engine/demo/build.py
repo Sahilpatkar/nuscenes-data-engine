@@ -260,26 +260,42 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # renderable even with curation absent), so overview_metrics.json's hero_token
     # is patched in here via the same _write_json helper the exporters use, rather
     # than passed to export_overview at call time.
+    #
+    # Gated on curation_status FIRST (spec-review fix): the Phase-2 TRINITY-fallback
+    # guarantee is that a build with curation absent (e.g. a fresh clone, where
+    # data/demo_curation is gitignored) still succeeds as a Phase-1-only package.
+    # A null/missing hero token is part of that same "nothing curated yet" state and
+    # must not be an error on its own — it only becomes mandatory once there is
+    # curated data to pick a crop from. A *non-null* token with curation absent is
+    # still a real error: the config references curated data that isn't there.
     hero_token = (config.get("hero") or {}).get("token")
-    if not hero_token:
-        raise ValueError(
-            "demo build: no hero token configured (hero.token in configs/demo.yaml) "
-            "— pick a hero token (see docs/DEMO.md)"
-        )
     if curation_status != "included":
-        raise ValueError(
-            f"demo build: hero token {hero_token!r} is configured but curation is "
-            f"{curation_status!r} — the hero crop comes from the curated-frames "
-            "group; run `demo curate` + `demo infer` first (see docs/DEMO.md)"
+        if hero_token:
+            raise ValueError(
+                f"demo build: hero token {hero_token!r} is configured but curation is "
+                f"{curation_status!r} — the hero crop comes from the curated-frames "
+                "group; run `demo curate` + `demo infer` first (see docs/DEMO.md)"
+            )
+        logger.warning(
+            "demo build: no curation staging and no hero token — shipping a "
+            "Phase-1-only package (no sample_frames/hero.jpg)"
         )
-    hero_crop = out_dir / "sample_frames" / "crops" / f"{hero_token}.jpg"
-    if not hero_crop.is_file():
-        raise ValueError(f"demo build: hero crop not found for token {hero_token!r}: {hero_crop}")
-    (out_dir / "sample_frames" / "hero.jpg").write_bytes(hero_crop.read_bytes())
-    overview_path = out_dir / "overview_metrics.json"
-    overview_metrics = json.loads(overview_path.read_text())
-    overview_metrics["hero_token"] = hero_token
-    exporters._write_json(overview_path, overview_metrics)
+    else:
+        if not hero_token:
+            raise ValueError(
+                "demo build: no hero token configured (hero.token in configs/demo.yaml) "
+                "— pick a hero token (see docs/DEMO.md)"
+            )
+        hero_crop = out_dir / "sample_frames" / "crops" / f"{hero_token}.jpg"
+        if not hero_crop.is_file():
+            raise ValueError(
+                f"demo build: hero crop not found for token {hero_token!r}: {hero_crop}"
+            )
+        (out_dir / "sample_frames" / "hero.jpg").write_bytes(hero_crop.read_bytes())
+        overview_path = out_dir / "overview_metrics.json"
+        overview_metrics = json.loads(overview_path.read_text())
+        overview_metrics["hero_token"] = hero_token
+        exporters._write_json(overview_path, overview_metrics)
 
     expected = config["flagship"]["expected_sql_count"]
     if metrics["flagship"]["sql"] != expected:

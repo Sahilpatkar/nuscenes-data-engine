@@ -578,26 +578,27 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
 
 
 def test_build_skips_absent_curation_with_manifest_note(build_config: Path) -> None:
-    """No `demo curate`/`demo infer` staging (build_config's default) must not be
-    hidden as if the curation group never existed -- `_include_curation` returns
-    "absent" and logs a warning rather than silently proceeding, satisfying Task 2's
-    TRINITY-unreachable fallback.
+    """No `demo curate`/`demo infer` staging (build_config's default) must not fail
+    the build -- Task 2's TRINITY-unreachable fallback means Tasks 1-4 still merge
+    on their own, and since data/demo_curation is gitignored, a fresh clone with a
+    null hero token must still produce a working Phase-1-only package (spec-review
+    fix: the null-token check must be gated on curation presence, not fire
+    unconditionally). It must, however, say so loudly in the manifest, not silently
+    proceed as if the curation group never existed.
 
-    Adapted for Task 1 (Phase 3): the full `run_build` pipeline can no longer
-    succeed with curation absent, because the hero crop now always comes from
-    curated frames (see test_build_hero_token_without_curation_fails_loudly for
-    that specific failure path). This test now exercises `_include_curation`
-    directly, which is where "absent means a warning, not a crash" is still true
-    and independently testable.
-    """
-    from nuscenes_data_engine.demo.build import _include_curation
+    Whether hero.token is even required now depends on curation:
+    test_build_hero_token_without_curation_fails_loudly covers "token configured
+    but curation absent" (still an error -- the config references curated data that
+    isn't there), and test_build_null_hero_token_fails_loudly covers "curation
+    present but no token" (still an error -- pick one)."""
+    from nuscenes_data_engine.demo.build import run_build
 
-    config = yaml.safe_load(build_config.read_text())
-    out_dir = Path(config["paths"]["out_dir"])
-    out_dir.mkdir(parents=True)
-    status = _include_curation(config, out_dir)
-    assert status == "absent"
-    assert not (out_dir / "frame_manifest.parquet").exists()
+    manifest = run_build(build_config)
+    assert manifest["validation"]["curation"] == "absent"
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert not (out / "frame_manifest.parquet").exists()
+    assert "sample_frames/hero.jpg" not in manifest["outputs"]
+    assert not (out / "sample_frames" / "hero.jpg").exists()
 
 
 def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path: Path) -> None:
