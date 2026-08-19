@@ -27,7 +27,7 @@ hero:                # Phase 3: a hand-picked exemplar crop token from the curat
                       # not an mlruns mosaic -- see the dated amendment in
                       # docs/superpowers/specs/2026-08-12-demo-phase1-design.md.
                       # `demo build` fails loudly on a null token (see docs/DEMO.md).
-  token: null         # picked in the Task-5 operational run from the
+  token: 5994f34b836043b3b5be191bceba2e3e         # picked in the Task-5 operational run from the
                       # fixes_fn_vs_baseline_graph_rate_night exemplars
 
 budgets:

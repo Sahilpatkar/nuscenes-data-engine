@@ -5,6 +5,7 @@
     "cypher_source": "docs/GRAPH.md",
     "sql": 30
   },
+  "hero_token": "5994f34b836043b3b5be191bceba2e3e",
   "results": {
     "best_night_arm": "graph_rate_night",
     "best_night_delta": 0.0101,
