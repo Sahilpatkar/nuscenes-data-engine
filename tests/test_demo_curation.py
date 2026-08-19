@@ -604,3 +604,146 @@ def test_run_infer_exemplar_flags_for_every_ordered_model_pair(tmp_path: Path) -
     assert v0["fixes_fn_vs_model_b_model_a"] == False  # noqa: E712
     assert v0["fixes_fn_vs_model_b_model_c"] == False  # noqa: E712
     assert v0["fixes_fn_vs_model_c_model_a"] == False  # noqa: E712
+
+
+def _single_frame_fixture(tmp_path: Path, *, image_size: tuple[int, int] = (1600, 900)) -> Path:
+    """One val frame (v0), one GT box, no models -- shared scaffolding for the
+    fixture-only tests below (unmapped class, image-size guard, stale columns)."""
+    from PIL import Image
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    Image.new("RGB", image_size, "gray").save(staging / "images" / "v0.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"],
+        "filename": ["images/v0.jpg"], "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    return staging
+
+
+def test_run_infer_unmapped_pred_class_raises(tmp_path: Path) -> None:
+    """A class outside CLASS_TO_INDEX (e.g. a COCO-style "person") must fail loudly,
+    naming the offending model, the bad class, and the accepted vocabulary -- not a
+    bare, uninformative KeyError."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = _single_frame_fixture(tmp_path)
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["pedestrian"],
+        "x_min": [100.0], "y_min": [100.0], "x_max": [200.0], "y_max": [300.0],
+        "visibility_token": ["4"],
+    })
+
+    import numpy as np
+
+    def bad_predict(image_path: Path) -> dict:
+        return {
+            "boxes": np.array([[100.0, 100.0, 200.0, 300.0]]),
+            "conf": np.array([0.9]),
+            "classes": ["person"],  # not one of DETECTION_CLASSES
+        }
+
+    with pytest.raises(ValueError, match=r"rogue_model.*person"):
+        run_infer(
+            staging_dir=staging, annotations=annotations,
+            models={"rogue_model": bad_predict},
+            crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+        )
+
+
+def test_run_infer_wrong_size_image_raises(tmp_path: Path) -> None:
+    """A staged image that isn't exactly IMAGE_WIDTH x IMAGE_HEIGHT would put
+    predictions/GT in the wrong pixel space -- must raise naming the token, not
+    silently resize a mis-projected frame."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = _single_frame_fixture(tmp_path, image_size=(800, 450))
+    annotations = pd.DataFrame(
+        columns=["annotation_token", "sample_data_token", "category_group",
+                 "x_min", "y_min", "x_max", "y_max", "visibility_token"]
+    )
+    with pytest.raises(ValueError, match="v0"):
+        run_infer(
+            staging_dir=staging, annotations=annotations, models={},
+            crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+        )
+
+
+def test_run_infer_drops_stale_exemplar_columns_on_rerun(tmp_path: Path) -> None:
+    """Rerunning demo infer with a different model roster must not ship a PRIOR
+    run's fixes_fn_vs_<a>_<b> columns alongside (or instead of) the current ones."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = _single_frame_fixture(tmp_path)
+    annotations = pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["pedestrian"],
+        "x_min": [100.0], "y_min": [100.0], "x_max": [200.0], "y_max": [300.0],
+        "visibility_token": ["4"],
+    })
+
+    import numpy as np
+
+    def miss(image_path: Path) -> dict:
+        return {"boxes": np.zeros((0, 4)), "conf": np.zeros(0), "classes": []}
+
+    def hit(image_path: Path) -> dict:
+        return {
+            "boxes": np.array([[100.0, 100.0, 200.0, 300.0]]),
+            "conf": np.array([0.9]),
+            "classes": ["pedestrian"],
+        }
+
+    # First run: two models -> fixes_fn_vs_old_a_old_b / fixes_fn_vs_old_b_old_a.
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"old_a": miss, "old_b": hit},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    first_manifest = pd.read_parquet(staging / "frame_manifest.parquet")
+    assert "fixes_fn_vs_old_a_old_b" in first_manifest.columns
+
+    # Second run over the same staging dir, single model -> zero pair columns.
+    run_infer(
+        staging_dir=staging, annotations=annotations,
+        models={"new_solo": hit},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    second_manifest = pd.read_parquet(staging / "frame_manifest.parquet")
+    stale = [c for c in second_manifest.columns if c.startswith("fixes_fn_vs_")]
+    assert stale == []
+
+
+def test_run_infer_empty_predictions_has_stable_dtypes(tmp_path: Path) -> None:
+    """A run with no val frames writes an empty predictions.parquet -- its schema
+    must still match a non-empty run's (explicit dtypes), not infer everything as
+    object/float64 from zero rows."""
+    from nuscenes_data_engine.demo.infer import run_infer
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "images").mkdir()
+    from PIL import Image
+
+    Image.new("RGB", (1600, 900), "gray").save(staging / "images" / "t1.jpg")
+    pd.DataFrame({
+        "sample_data_token": ["t1"], "split": ["train_pool"],
+        "filename": ["images/t1.jpg"], "curation_buckets": [["weak_accepted"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    annotations = pd.DataFrame(
+        columns=["annotation_token", "sample_data_token", "category_group",
+                 "x_min", "y_min", "x_max", "y_max", "visibility_token"]
+    )
+    run_infer(
+        staging_dir=staging, annotations=annotations, models={"baseline": lambda p: None},
+        crop_size=(960, 540), iou=0.5, conf_hit=0.4,
+    )
+    preds = pd.read_parquet(staging / "predictions.parquet")
+    assert len(preds) == 0
+    assert str(preds["x_min"].dtype) == "float64"
+    assert str(preds["conf"].dtype) == "float64"
+    assert str(preds["imgsz"].dtype) == "Int64"
+    assert str(preds["sample_data_token"].dtype) == "object"
+    assert str(preds["status"].dtype) == "object"

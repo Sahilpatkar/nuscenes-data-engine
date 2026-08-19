@@ -9,9 +9,18 @@ paths:
   out_dir: demo_data
 
 models:              # MLflow run ids (weights + artifacts live under mlruns/artifacts/<id>/)
-  baseline: e465844a6b0249a3bc08ae894e530b22
-  graph_rate_night: b7e251d4fb624097bea3d4e9e4a80c62
-  champion: 3869d068100a4af6a274c6d134feed2f   # yolov8m, the third of Task 5's three checkpoints
+                      # + the imgsz each checkpoint was trained at (must match, or the
+                      # comparison silently handicaps whichever model is under-scaled --
+                      # see each run's mlruns/artifacts/<id>/artifacts/ultralytics_run/args.yaml)
+  baseline:
+    run: e465844a6b0249a3bc08ae894e530b22
+    imgsz: 640
+  graph_rate_night:
+    run: b7e251d4fb624097bea3d4e9e4a80c62
+    imgsz: 640
+  champion:           # yolov8m, the third of Task 5's three checkpoints
+    run: 3869d068100a4af6a274c6d134feed2f
+    imgsz: 960
 
 hero:
   run: baseline      # key into models

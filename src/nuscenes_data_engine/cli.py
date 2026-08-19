@@ -1073,8 +1073,23 @@ def demo_infer(
     curation_cfg = cfg["curation"]
     sweep_cfg = load_yaml(al_config).get("sweep", {})
 
+    # Preflight: fail with a directive message *before* loading any ultralytics
+    # checkpoint (slow, and misleading if the real problem is "you never rsynced").
     staging_dir = Path(curation_cfg["staging_dir"])
-    manifest = pd.read_parquet(staging_dir / "frame_manifest.parquet")
+    manifest_path = staging_dir / "frame_manifest.parquet"
+    if not manifest_path.is_file():
+        raise ValueError(
+            f"demo infer: no curated frame manifest at {manifest_path} — "
+            "run `demo curate`, then rsync the frames — see docs/DEMO.md"
+        )
+    images_root = Path(curation_cfg["images_root"])
+    if not images_root.is_dir() or not any(images_root.iterdir()):
+        raise ValueError(
+            f"demo infer: images_root {images_root} is missing or empty — "
+            "run `demo curate`, then rsync the frames there — see docs/DEMO.md"
+        )
+
+    manifest = pd.read_parquet(manifest_path)
     curated_tokens = set(manifest["sample_data_token"])
 
     processed_dir = Path(cfg["paths"]["processed_dir"])
@@ -1085,12 +1100,13 @@ def demo_infer(
     ]
 
     mlruns_dir = Path(cfg["paths"]["mlruns_dir"])
-    models = {
-        name: make_ultralytics_predictor(
-            mlruns_dir / "artifacts" / run_id / "artifacts" / "weights" / "best.pt"
-        )
-        for name, run_id in cfg["models"].items()
-    }
+    conf = float(sweep_cfg.get("conf_low", 0.05))
+    models: dict[str, Any] = {}
+    for name, spec in cfg["models"].items():
+        imgsz = int(spec["imgsz"])
+        logger.info("demo infer: %s @ imgsz=%d", name, imgsz)
+        weights = mlruns_dir / "artifacts" / spec["run"] / "artifacts" / "weights" / "best.pt"
+        models[name] = make_ultralytics_predictor(weights, imgsz=imgsz, conf=conf)
 
     out = run_infer(
         staging_dir=staging_dir,
@@ -1099,7 +1115,7 @@ def demo_infer(
         crop_size=tuple(curation_cfg["crop_size"]),
         iou=float(sweep_cfg.get("iou", 0.5)),
         conf_hit=float(sweep_cfg.get("conf_hit", 0.4)),
-        images_root=Path(curation_cfg["images_root"]),
+        images_root=images_root,
         visibility_min=str(sweep_cfg.get("visibility_min", "2")),
     )
     logger.info("demo infer: %s", out)

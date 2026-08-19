@@ -18,6 +18,14 @@ evaluated", False would falsely claim "evaluated and missed") but are still writ
 to ``gt_boxes.parquet`` with ``below_visibility_min=True`` so the UI can render them
 ghosted without counting them as false negatives.
 
+NOTE: on today's ingested data ``below_visibility_min`` is always False — ingestion
+already applies ``projection.visibility_min: 2`` (``configs/data.yaml:19``) before
+``annotations.parquet`` is ever written, so no row with ``visibility_token < 2``
+exists to flag. The column is parity-defensive (data ingested without that floor, or
+a future ``visibility_min`` lower than ingestion's) rather than something today's
+demo package actually exercises — Phase 3's UI should not build ghost-box rendering
+against it without first confirming ghost rows occur in the data it is fed.
+
 The model call is an injected adapter (``predict_fn(image_path) -> {"boxes",
 "conf", "classes"}``), so everything here is torch-free and unit-tested.
 ``make_ultralytics_predictor`` is the one real (lazy-imported, untested) adapter —
@@ -38,6 +46,7 @@ from PIL import Image
 
 from nuscenes_data_engine.active_learning.matching import match_frame_boxes
 from nuscenes_data_engine.ingestion.categories import CLASS_TO_INDEX, DETECTION_CLASSES
+from nuscenes_data_engine.training.dataset import IMAGE_HEIGHT, IMAGE_WIDTH
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -62,7 +71,43 @@ _PREDICTION_COLUMNS = (
     "conf",
     "status",
     "matched_annotation_token",
+    "imgsz",
 )
+
+# Explicit dtypes so predictions.parquet's schema is stable regardless of row count —
+# an all-empty ``prediction_rows`` (e.g. a manifest with no val frames) would otherwise
+# infer every column as object/float64 from zero samples, which can silently differ
+# from a non-empty run's schema and break downstream readers expecting a fixed schema.
+_PREDICTION_DTYPES: dict[str, str] = {
+    "sample_data_token": "object",
+    "model": "object",
+    "category_group": "object",
+    "x_min": "float64",
+    "y_min": "float64",
+    "x_max": "float64",
+    "y_max": "float64",
+    "conf": "float64",
+    "status": "object",
+    "matched_annotation_token": "object",
+    "imgsz": "Int64",  # nullable: only make_ultralytics_predictor's results report it
+}
+
+
+def _map_pred_classes(classes_raw: list[str], *, model_name: str) -> np.ndarray[Any, Any]:
+    """Map predicted class NAMES to detector indices, mirroring sweep.py:112's GT map.
+
+    A class outside ``CLASS_TO_INDEX`` means the injected model isn't speaking this
+    project's taxonomy (e.g. a COCO-class name) — a bare ``KeyError`` would name
+    neither the offending model nor the accepted vocabulary, so it's translated into
+    a ``ValueError`` that names both.
+    """
+    try:
+        return np.array([CLASS_TO_INDEX[c] for c in classes_raw], dtype=int)
+    except KeyError as exc:
+        raise ValueError(
+            f"demo infer: model {model_name!r} predicted unmapped class {exc.args[0]!r} "
+            f"— expected one of {sorted(CLASS_TO_INDEX)}"
+        ) from exc
 
 
 def run_infer(
@@ -78,12 +123,12 @@ def run_infer(
 ) -> dict[str, Any]:
     """Run inference + box matching over the staged curation manifest.
 
-    Every manifest row's image is resolved and cropped (val and train_pool alike);
-    a missing image raises naming the token before any model is called. Only
-    ``val`` frames are matched against GT — ``train_pool`` frames have no
-    failure-ledger equivalent to agree with, so running models over them would
-    invite exactly the kind of un-auditable number the visibility correction exists
-    to avoid.
+    Every manifest row's image is resolved, size-checked, and cropped (val and
+    train_pool alike); a missing or wrong-sized image raises naming the token before
+    any model is called. Only ``val`` frames are matched against GT —
+    ``train_pool`` frames have no failure-ledger equivalent to agree with, so running
+    models over them would invite exactly the kind of un-auditable number the
+    visibility correction exists to avoid.
     """
     staging_dir = Path(staging_dir)
     images_root = Path(images_root) if images_root is not None else staging_dir
@@ -91,7 +136,7 @@ def run_infer(
     model_names = list(models)
 
     # Step 1: resolve + crop every frame (both splits) before any model runs, so a
-    # missing image always fails loudly up front rather than mid-inference.
+    # missing/wrong-sized image always fails loudly up front rather than mid-inference.
     crops_dir = staging_dir / "crops"
     crops_dir.mkdir(parents=True, exist_ok=True)
     image_paths: dict[str, Path] = {}
@@ -102,6 +147,12 @@ def run_infer(
             raise ValueError(f"demo infer: image missing for token {token!r}: {image_path}")
         image_paths[token] = image_path
         with Image.open(image_path) as img:
+            if img.size != (IMAGE_WIDTH, IMAGE_HEIGHT):
+                raise ValueError(
+                    f"demo infer: token {token!r} image is {img.size}, expected "
+                    f"{(IMAGE_WIDTH, IMAGE_HEIGHT)} — predictions/GT would be scored "
+                    "in the wrong pixel space"
+                )
             img.convert("RGB").resize(crop_size, Image.Resampling.LANCZOS).save(
                 crops_dir / f"{token}.jpg"
             )
@@ -137,7 +188,8 @@ def run_infer(
             pred_boxes = np.asarray(result["boxes"], dtype=float).reshape(-1, 4)
             pred_conf = np.asarray(result["conf"], dtype=float)
             classes_raw = list(result["classes"])
-            pred_classes = np.array([CLASS_TO_INDEX[c] for c in classes_raw], dtype=int)
+            pred_classes = _map_pred_classes(classes_raw, model_name=model_name)
+            imgsz = result.get("imgsz")
 
             matches = match_frame_boxes(
                 pred_boxes, pred_classes, pred_conf, gt_boxes, gt_classes,
@@ -162,6 +214,7 @@ def run_infer(
                     "conf": float(pred_conf[i]),
                     "status": matches.pred_status[i],
                     "matched_annotation_token": matched_token,
+                    "imgsz": imgsz,
                 })
 
         for model_a in model_names:
@@ -169,15 +222,24 @@ def run_infer(
             for model_b in model_names:
                 if model_a == model_b:
                     continue
-                fixed = bool(np.any(fn_a & gt_matched_by_model[model_b])) if len(fn_a) else False
+                fixed = bool(np.any(fn_a & gt_matched_by_model[model_b]))
                 fixes.setdefault(token, {})[(model_a, model_b)] = fixed
 
     predictions = pd.DataFrame(prediction_rows, columns=list(_PREDICTION_COLUMNS))
+    predictions = predictions.astype(_PREDICTION_DTYPES)
     predictions.to_parquet(staging_dir / "predictions.parquet")
 
     gt_out_columns = [*_GT_COLUMNS, "below_visibility_min", *(f"matched_{m}" for m in model_names)]
     gt_all[gt_out_columns].to_parquet(staging_dir / "gt_boxes.parquet")
 
+    # Drop any exemplar columns from a PRIOR run's model roster before adding this
+    # run's — rerunning with a different model set must not ship stale
+    # fixes_fn_vs_<a>_<b> pairs alongside the current ones. Column names are built by
+    # joining against model_names (not parsed back via string-splitting), since model
+    # names may themselves contain underscores (e.g. "graph_rate_night").
+    manifest = manifest.drop(
+        columns=[c for c in manifest.columns if c.startswith("fixes_fn_vs_")]
+    )
     pair_columns = [f"fixes_fn_vs_{a}_{b}" for a in model_names for b in model_names if a != b]
     for col in pair_columns:
         manifest[col] = pd.array([pd.NA] * len(manifest), dtype="boolean")
@@ -209,8 +271,22 @@ def make_ultralytics_predictor(
     ``uv sync --extra train --extra engine`` prerequisite in ``docs/DEMO.md``); this
     thin adapter is exercised only by the real ``demo infer`` CLI run. Mirrors
     ``active_learning/sweep.py``'s ``configure_ultralytics()`` call (before importing
-    ultralytics) and its ``conf=0.05`` proposal threshold (catch low-confidence hits
-    for the demo's low_conf status, same as the sweep does for failures.parquet).
+    ultralytics).
+
+    ``imgsz``/``conf`` are the caller's responsibility, not this adapter's: each
+    checkpoint must be predicted at (or near) the ``imgsz`` it was trained at — the
+    demo's three checkpoints do NOT all share one (see ``configs/demo.yaml``
+    ``models.<name>.imgsz``, sourced from each run's own ``args.yaml``) — and the
+    demo CLI reads ``conf`` from ``configs/active_learning.yaml``'s
+    ``sweep.conf_low`` rather than relying on this function's own default. The
+    ``imgsz=640``/``conf=0.05`` defaults here exist only as a fallback for direct,
+    non-CLI use; they are not claimed to "mirror" anything mechanically.
+
+    Raises ``ValueError`` if the checkpoint's class taxonomy doesn't match
+    ``DETECTION_CLASSES`` — a checkpoint that merely overlaps ours (e.g. a stock COCO
+    checkpoint, where class 0 is "person") would otherwise silently mislabel every
+    prediction (see ``active_learning/pseudo_label.py``'s ``boxes_to_rows`` for the
+    same class of bug on the index side; this is the checkpoint-identity side).
     """
     from nuscenes_data_engine.training.runtime import configure_ultralytics
 
@@ -218,6 +294,12 @@ def make_ultralytics_predictor(
     from ultralytics import YOLO
 
     model = YOLO(str(weights))
+    names = model.names
+    if tuple(names[i] for i in range(len(names))) != DETECTION_CLASSES:
+        raise ValueError(
+            f"{weights}: checkpoint classes {names} != {DETECTION_CLASSES} — "
+            "not fine-tuned on this taxonomy? (a COCO checkpoint would silently mislabel)"
+        )
 
     def predict(image_path: Path) -> dict[str, Any]:
         results = model.predict(
@@ -225,12 +307,13 @@ def make_ultralytics_predictor(
         )
         boxes = results[0].boxes
         if len(boxes) == 0:
-            return {"boxes": np.zeros((0, 4)), "conf": np.zeros(0), "classes": []}
+            return {"boxes": np.zeros((0, 4)), "conf": np.zeros(0), "classes": [], "imgsz": imgsz}
         pred_cls_idx = boxes.cls.cpu().numpy().astype(int)
         return {
             "boxes": boxes.xyxy.cpu().numpy(),
             "conf": boxes.conf.cpu().numpy(),
             "classes": [DETECTION_CLASSES[i] for i in pred_cls_idx],
+            "imgsz": imgsz,
         }
 
     return predict

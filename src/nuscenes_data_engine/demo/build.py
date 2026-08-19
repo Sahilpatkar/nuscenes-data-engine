@@ -86,7 +86,12 @@ def run_build(config_path: Path) -> dict[str, Any]:
     )
     al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir)
     weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir)
-    hero_run = config["models"][config["hero"]["run"]]
+    # `models:` entries are either a plain run-id string (test fixtures, and demo.yaml
+    # before the Task 3 review round) or a {run, imgsz} mapping (demo.yaml since —
+    # imgsz varies per checkpoint, see configs/demo.yaml's `models:` comment). Accept
+    # both rather than forcing every fixture/config onto one shape for a single field.
+    hero_entry = config["models"][config["hero"]["run"]]
+    hero_run = hero_entry["run"] if isinstance(hero_entry, dict) else hero_entry
     hero_mosaic = config["hero"]["mosaic"]
     exporters.export_hero(
         mlruns_dir=mlruns_dir, run_id=hero_run, mosaic=hero_mosaic, out_dir=out_dir,
