@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -598,3 +599,63 @@ def test_build_fails_when_val_token_lacks_model_predictions(build_config: Path) 
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     with pytest.raises(ValueError, match="predictions"):
         run_build(build_config)
+
+
+def test_build_raises_named_error_on_partial_curation_staging(build_config: Path) -> None:
+    """Review round 2, item 1: a staging dir with ONLY frame_manifest.parquet (i.e.
+    `demo curate` ran but `demo infer` has not yet) is an operator mid-flow, not a
+    no-curation machine -- treating it as silently "absent" would hide their
+    mistake. It must fail loudly and name `demo infer` as the next step, and it must
+    not crash with a raw FileNotFoundError out of the copy2 loop first."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    staging.mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    # predictions.parquet / gt_boxes.parquet deliberately absent -- `demo infer` has
+    # not run yet.
+    with pytest.raises(ValueError, match="demo infer"):
+        run_build(build_config)
+
+
+def test_build_tolerates_a_corrupt_lancedb_store(
+    build_config: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Review round 2, item 2: `lancedb_path.is_dir()` can be True while the store
+    itself has no usable table inside (e.g. an existing-but-empty directory) --
+    export_thumbs then raises from lancedb's own guts. Thumbnails are supplementary
+    (crops already cover every token), so this must degrade to a warning and let the
+    build finish, not crash it -- the crop-or-thumb validation still runs and would
+    still fail loudly if coverage were actually lost."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    (staging / "crops").mkdir(parents=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
+        "curation_buckets": [["night_failure"]],
+    }).to_parquet(staging / "frame_manifest.parquet")
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+    }).to_parquet(staging / "predictions.parquet")
+    pd.DataFrame({
+        "annotation_token": ["a1"], "sample_data_token": ["v0"],
+        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
+        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
+    }).to_parquet(staging / "gt_boxes.parquet")
+    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+
+    # Exists (is_dir() True) but has no valid lance table inside -- open_table raises.
+    Path(config["paths"]["lancedb_path"]).mkdir(parents=True)
+
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        manifest = run_build(build_config)
+    assert manifest["validation"]["curation"] == "included"
+    assert "thumbnail export skipped" in caplog.text

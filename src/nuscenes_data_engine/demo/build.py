@@ -55,10 +55,16 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     TRINITY-unreachable fallback, see Task 2 of the phase-2 plan) is not a build
     failure: it logs a warning and the manifest records "absent" so the published
     package is honest about what it ships, instead of silently proceeding as if
-    Phase 2 never happened. When staged, the three curation parquets and every
-    frame's crop are copied in, thumbnails are bulk-exported from LanceDB when that
-    store exists (skipped with a warning otherwise — none of this module's test
-    fixtures carry a store, so real coverage of that branch is the Task 5 operational
+    Phase 2 never happened. A PARTIAL staging dir (``frame_manifest.parquet`` present
+    but ``predictions.parquet``/``gt_boxes.parquet`` missing — ``demo curate`` ran,
+    ``demo infer`` has not) is a different case entirely: that's an operator
+    mid-flow, not a no-curation machine, so it raises a named ``ValueError`` pointing
+    at ``demo infer`` rather than silently shipping "absent" and hiding the mistake.
+    When fully staged, the three curation parquets and every frame's crop are copied
+    in, thumbnails are bulk-exported from LanceDB when that store exists (skipped
+    with a warning both when the store is simply absent and when it exists but is
+    unusable, e.g. no valid table inside — none of this module's test fixtures carry
+    a real store, so full coverage of the export itself is the Task 5 operational
     run), and two invariants are validated before the copy is trusted: every ``val``
     token has predictions from every configured model, and every curated token has
     at least a crop or a thumbnail to render.
@@ -72,6 +78,8 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
         return "absent"
     staging_dir = Path(curation_cfg["staging_dir"])
     manifest_path = staging_dir / "frame_manifest.parquet"
+    predictions_path = staging_dir / "predictions.parquet"
+    gt_path = staging_dir / "gt_boxes.parquet"
     if not manifest_path.is_file():
         logger.warning(
             "demo build: no curation staging at %s — shipping without the curated-"
@@ -79,6 +87,16 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
             staging_dir,
         )
         return "absent"
+    # A manifest with no predictions/gt_boxes means `demo curate` ran but `demo
+    # infer` has not -- an operator mid-flow, not a no-curation machine. Silently
+    # treating this as "absent" would hide their mistake; a bare FileNotFoundError
+    # out of the copy2 loop below would be equally unhelpful (names no next step).
+    if not (predictions_path.is_file() and gt_path.is_file()):
+        raise ValueError(
+            f"demo build: curation staging at {staging_dir} is partial — "
+            "frame_manifest present but predictions.parquet/gt_boxes.parquet "
+            "missing; run `demo infer` first (see docs/DEMO.md)"
+        )
 
     manifest = pd.read_parquet(manifest_path)
     tokens = list(manifest["sample_data_token"])
@@ -95,13 +113,25 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     lancedb_path = Path(config["paths"]["lancedb_path"])
     thumb_tokens: set[str] = set()
     if lancedb_path.is_dir():
-        exporters.export_thumbs(
-            lancedb_path=lancedb_path,
-            table=config["paths"]["lancedb_table"],
-            tokens=tokens,
-            out_dir=out_dir,
-        )
-        thumb_tokens = set(tokens)
+        # is_dir() only proves the path exists -- the store inside can still be
+        # empty/corrupt (no valid table), which raises from lancedb's own guts, not
+        # a clean, named error. Thumbnails are supplementary (crops already cover
+        # every token); degrade to a warning rather than crash the whole build --
+        # the crop-or-thumb validation below still runs and still fails loudly if
+        # coverage were actually lost.
+        try:
+            exporters.export_thumbs(
+                lancedb_path=lancedb_path,
+                table=config["paths"]["lancedb_table"],
+                tokens=tokens,
+                out_dir=out_dir,
+            )
+            thumb_tokens = set(tokens)
+        except Exception as exc:
+            logger.warning(
+                "demo build: thumbnail export skipped — LanceDB store unusable (%s)",
+                exc,
+            )
     else:
         logger.warning(
             "demo build: no LanceDB store at %s — curated frames ship without "

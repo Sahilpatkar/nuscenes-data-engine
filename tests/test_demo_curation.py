@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from nuscenes_data_engine.active_learning.matching import match_frame, match_frame_boxes
 
@@ -757,3 +758,58 @@ def test_run_infer_empty_predictions_has_stable_dtypes(tmp_path: Path) -> None:
     assert str(preds["imgsz"].dtype) == "Int64"
     assert str(preds["sample_data_token"].dtype) == "object"
     assert str(preds["status"].dtype) == "object"
+
+
+def test_demo_infer_cli_rejects_legacy_flat_model_shape(tmp_path: Path) -> None:
+    """Review round 2, item 3 (test gap): cli.py's ``demo infer`` guards each
+    ``models.<name>`` entry with ``isinstance(spec, dict)`` before touching
+    ``spec["imgsz"]`` -- reachable torch-free (the guard fires inside the model-spec
+    loop, strictly before ``make_ultralytics_predictor`` would ever import
+    ultralytics), but had zero coverage. Drives the guard through the real CLI
+    command (CliRunner), not just a unit call, so a regression in the preflight
+    ordering around it would also be caught.
+    """
+    from typer.testing import CliRunner
+
+    from nuscenes_data_engine.cli import app
+
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    pd.DataFrame({
+        "sample_data_token": pd.Series([], dtype="object"),
+        "channel": pd.Series([], dtype="object"),
+    }).to_parquet(processed / "annotations.parquet")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(staging / "frame_manifest.parquet")
+
+    images_root = tmp_path / "images_root"
+    images_root.mkdir()
+    (images_root / "dummy.jpg").write_bytes(b"x")  # only existence/non-emptiness checked
+
+    config = {
+        "paths": {
+            "processed_dir": str(processed),
+            "mlruns_dir": str(tmp_path / "mlruns"),
+        },
+        "curation": {
+            "staging_dir": str(staging),
+            "images_root": str(images_root),
+            "crop_size": [960, 540],
+        },
+        "models": {"baseline": "runX"},  # legacy flat shape -- must be rejected
+    }
+    config_path = tmp_path / "demo.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    al_config_path = tmp_path / "active_learning.yaml"
+    al_config_path.write_text(yaml.safe_dump({"sweep": {}}))
+
+    result = CliRunner().invoke(
+        app,
+        ["demo", "infer", "--config", str(config_path), "--al-config", str(al_config_path)],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "models.baseline" in str(result.exception)
+    assert "run, imgsz" in str(result.exception)
