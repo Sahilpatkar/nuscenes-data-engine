@@ -71,6 +71,12 @@ the `final` event's body feeds the existing `_render_chat_answer` and session-st
 `{content, body}` shape, so history replay is unchanged. Falls back to `/chat` if
 `/chat/stream` 404s (older API container).
 
+**Amendment (2026-08-19, at plan-writing):** the Streamlit token rendering uses an
+`st.empty()` placeholder with manual buffer accumulation instead of
+`st.write_stream` — `write_stream` cannot retract already-emitted text, and the
+`turn`-reset semantics require exactly that (interim narration is replaced when a
+new turn starts). Same UX intent, retractable mechanism.
+
 ## 3. Charts
 
 - New always-offered tool `make_chart` in `TOOL_SPECS`: the model calls it with
