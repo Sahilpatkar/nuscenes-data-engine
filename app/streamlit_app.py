@@ -9,7 +9,9 @@ unavailable.
 from __future__ import annotations
 
 import base64
+import json
 import os
+from collections.abc import Iterable, Iterator
 from io import BytesIO
 from pathlib import Path
 
@@ -151,6 +153,32 @@ def render_search(health: dict) -> None:
         _show_results(requests.get(f"{API_URL}/search", params={"q": query, "k": k}, timeout=120))
     else:
         st.info("Type a scene description or upload an example image.")
+
+
+def iter_stream_events(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
+    """Yield (event, data) pairs from an SSE line stream (``requests.iter_lines()``
+    shape: decoded strings, one per line, no trailing newlines).
+
+    Pure and side-effect-free — no ``json.loads`` here. Per ``/chat/stream``'s
+    contract (see ``serving/app.py``'s ``chat_stream`` docstring): every event is
+    one ``event: <kind>`` line followed by one ``data: <payload>`` line, blank-line
+    terminated. ``token``/``step``/``final`` payloads are JSON (an encoded string
+    for ``token``, objects for ``step``/``final``) and must be ``json.loads``-ed by
+    the caller; ``turn`` is the literal empty string and ``error`` is plain text —
+    both are also handed back verbatim, undecoded. Lines starting with ``:``
+    (SSE comments/keepalives) and blank lines are skipped; a stray ``data:`` line
+    with no preceding ``event:`` line is dropped rather than paired with a
+    placeholder kind.
+    """
+    kind: str | None = None
+    for line in lines:
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("event: "):
+            kind = line[len("event: ") :]
+        elif line.startswith("data: ") and kind is not None:
+            yield (kind, line[len("data: ") :])
+            kind = None
 
 
 def _render_chat_answer(body: dict) -> None:
