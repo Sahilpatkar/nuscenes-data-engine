@@ -23,9 +23,26 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
     al = tmp_path / "active_learning"
     processed.mkdir()
     al.mkdir()
-    pd.DataFrame({"sample_data_token": ["s1", "s2", "s3"]}).to_parquet(
-        processed / "samples.parquet"
-    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["s1", "s2", "s3"],
+            # Phase 5: demo/events.py::build_events reads samples.parquet too
+            # (CAM_FRONT-filtered, joined to canbus/ego_pose by sample_token) --
+            # s1/s2 double as their own sample_token here (this fixture's tiny
+            # scale never needs the real per-channel token distinction) and are
+            # CAM_FRONT so build_events sees exactly canbus/ego_pose's covered set
+            # (2 rows, both already present below); s3 is a different channel so
+            # it's invisible to build_events without needing a matching canbus/
+            # ego_pose row of its own.
+            "sample_token": ["s1", "s2", "s3"],
+            "channel": ["CAM_FRONT", "CAM_FRONT", "CAM_BACK"],
+            "scene_token": ["sceneX", "sceneX", "sceneX"],
+            "scene_name": ["scene-X", "scene-X", "scene-X"],
+            "timestamp": [1000, 1001, 1002],
+            "is_night": [False, False, False],
+            "is_rain": [False, False, False],
+        }
+    ).to_parquet(processed / "samples.parquet")
     pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
@@ -46,6 +63,10 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
             "can_vel_mps": [10.0, 5.0],
             "can_speed_kmh": [36.0, 18.0],  # /3.6 == can_vel_mps here, by construction
             "is_hard_braking": [True, False],
+            # Phase 5: demo/events.py::build_events also reads accel_long_min_mps2
+            # (the flagship preset's severity key) -- s1's magnitude is deliberately
+            # a strong-braking value, consistent with is_hard_braking=True.
+            "accel_long_min_mps2": [-7.5, -0.5],
         }
     ).to_parquet(processed / "canbus.parquet")
     pd.DataFrame(
@@ -268,6 +289,72 @@ def test_export_thumbs_malformed_token_raises_value_error(tmp_path: Path) -> Non
     assert bad_token in str(exc_info.value)
 
 
+def _fake_search_fn(
+    hits_by_query: dict[str, list[dict[str, Any]]],
+) -> Any:
+    """A ``search_fn(query, k) -> list[dict]`` stand-in: returns ``hits_by_query[query]``
+    truncated to ``k`` (mimicking a real SearchEngine.search_text's own k-limit), and
+    records every ``(query, k)`` call it received on ``.calls`` for assertions."""
+    calls: list[tuple[str, int]] = []
+
+    def _fn(query: str, k: int) -> list[dict[str, Any]]:
+        calls.append((query, k))
+        return hits_by_query.get(query, [])[:k]
+
+    _fn.calls = calls  # type: ignore[attr-defined]
+    return _fn
+
+
+def test_export_semsearch_writes_ranked_rows_and_oversamples(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_semsearch
+
+    hits = {
+        "foggy road": [
+            {"sample_data_token": "f1", "channel": "CAM_FRONT", "score": 0.9},
+            {"sample_data_token": "b1", "channel": "CAM_BACK", "score": 0.85},
+            {"sample_data_token": "f2", "channel": "CAM_FRONT", "score": 0.8},
+            {"sample_data_token": "f3", "channel": "CAM_FRONT", "score": 0.7},
+        ],
+    }
+    search_fn = _fake_search_fn(hits)
+    out = tmp_path / "staging"
+    df = export_semsearch(search_fn=search_fn, queries=["foggy road"], k=2, staging_dir=out)
+
+    on_disk = pd.read_parquet(out / "semantic_search_results.parquet")
+    pd.testing.assert_frame_equal(df, on_disk)
+    assert list(df.columns) == ["query", "rank", "sample_data_token", "score"]
+    # CAM_FRONT filter applied, non-CAM_FRONT b1 dropped, rank order preserved
+    # (nearest-first), truncated to k=2 -- f3 never makes it in.
+    assert list(df["sample_data_token"]) == ["f1", "f2"]
+    assert list(df["rank"]) == [1, 2]
+    assert list(df["score"]) == [0.9, 0.8]
+    assert (df["query"] == "foggy road").all()
+    # oversample x8: search_fn called with k=2*8=16, not the raw k=2
+    assert search_fn.calls == [("foggy road", 16)]  # type: ignore[attr-defined]
+
+
+def test_export_semsearch_multiple_queries_in_order(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_semsearch
+
+    hits = {
+        "q1": [{"sample_data_token": "a1", "channel": "CAM_FRONT", "score": 0.5}],
+        "q2": [{"sample_data_token": "b1", "channel": "CAM_FRONT", "score": 0.6}],
+    }
+    df = export_semsearch(
+        search_fn=_fake_search_fn(hits), queries=["q1", "q2"], k=5, staging_dir=tmp_path
+    )
+    assert list(df["query"]) == ["q1", "q2"]
+    assert list(df["sample_data_token"]) == ["a1", "b1"]
+    assert list(df["rank"]) == [1, 1]  # rank resets per query
+
+
+def test_export_semsearch_empty_queries_raises(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_semsearch
+
+    with pytest.raises(ValueError, match="empty"):
+        export_semsearch(search_fn=_fake_search_fn({}), queries=[], k=8, staging_dir=tmp_path)
+
+
 def _write_demo_config(
     tmp_path: Path, tiny_inputs: dict[str, Path], *, models: dict[str, Any]
 ) -> Path:
@@ -300,6 +387,14 @@ def _write_demo_config(
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30,
                      "cypher_source": "docs/GRAPH.md"},
+        # Phase 5: demo/events.py::build_events' preset thresholds -- mirrors
+        # configs/demo.yaml's `presets:` section (see _include_events).
+        "presets": {
+            "cap_per_preset": 30,
+            "near_dist_m": 10.0,
+            "high_speed_mps": 10.0,
+            "model_for_results": "baseline",
+        },
         # Task 4: absent by default -- no `demo curate`/`demo infer` run has staged
         # anything under this dir in most fixtures here, so run_build must skip the
         # curation group loudly rather than erroring. The curation-specific tests
@@ -393,7 +488,7 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
-    assert manifest["package_version"] == "0.3"
+    assert manifest["package_version"] == "0.4"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:
@@ -734,8 +829,13 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
                           "y_min", "x_max", "y_max", "conf", "status",
                           "matched_annotation_token"]).to_parquet(
         staging / "predictions.parquet")
+    # matched_baseline: zero rows, but the column itself must still exist -- this
+    # staging is fully "included" (unlike the two sibling tests above, which fail
+    # inside _include_curation before ever reaching it), so build_events'
+    # _model_preset_tags reads it too (presets.model_for_results in build_config
+    # is "baseline") and needs the column present even with nothing in it.
     pd.DataFrame(columns=["annotation_token", "sample_data_token", "category_group",
-                          "x_min", "y_min", "x_max", "y_max"]).to_parquet(
+                          "x_min", "y_min", "x_max", "y_max", "matched_baseline"]).to_parquet(
         staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     config["hero"] = {"token": "v0"}
@@ -743,6 +843,7 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
 
     manifest = run_build(build_config)
     assert manifest["validation"]["curation"] == "included"
+    assert manifest["validation"]["events"] == "included"
 
 
 def test_build_raises_named_error_on_partial_curation_staging(build_config: Path) -> None:
@@ -949,3 +1050,178 @@ def test_build_gt_boxes_transform_leaves_staging_untouched(build_config: Path) -
     assert (staging / "gt_boxes.parquet").read_bytes() == before
     hashed_names = {Path(key).name for key in manifest["inputs"]}
     assert {"frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"} <= hashed_names
+
+
+# --- Phase 5: scenario events + recorded semsearch (Task 2) ---------------------
+
+
+def test_build_includes_scenario_events_without_curation(build_config: Path) -> None:
+    """Events are computed LIVE from processed_dir regardless of curation staging --
+    build_config's default fixture has no curation staged at all, proving
+    _include_events's "staging_dir from curation config when the three staging
+    parquets exist, else None" branch resolves to None here (the two model-result
+    presets are silently skipped via build_events' own warning, not a build
+    failure) and events still ship. tiny_inputs' extended processed fixture (Task 2
+    review round: samples.parquet/canbus.parquet now carry the columns build_events
+    needs) yields exactly one flagship event (s1: hard braking + a pedestrian at
+    5m), the same single row the pre-existing flagship SQL count already covers."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert (out / "scenario_events.parquet").is_file()
+    events = pd.read_parquet(out / "scenario_events.parquet")
+    assert len(events) == 1
+    assert events.iloc[0]["sample_data_token"] == "s1"
+    assert manifest["validation"]["events"] == "included"
+    assert manifest["validation"]["flagship_events"] == 1
+    assert manifest["validation"]["n_events"] == 1
+    assert "scenario_events.parquet" in manifest["outputs"]
+
+
+def test_include_events_flagship_mismatch_raises(build_config: Path, tmp_path: Path) -> None:
+    """_include_events threads config["flagship"]["expected_sql_count"] straight to
+    build_events' own flagship_expected assertion -- a config claiming 2 flagship
+    events when the processed data actually has 1 must fail loudly, from
+    build_events' independent (pandas, not DuckDB) computation, not just the
+    pre-existing SQL-level check in run_build (test_build_fails_on_wrong_flagship_
+    count already covers that one)."""
+    from nuscenes_data_engine.demo.build import _include_events
+
+    config = yaml.safe_load(build_config.read_text())
+    config["flagship"]["expected_sql_count"] = 2  # actual pre-cap count is 1
+    out = tmp_path / "events_out"
+    out.mkdir()
+    with pytest.raises(ValueError, match="flagship"):
+        _include_events(config, out)
+
+
+def test_build_exports_thumbs_for_events_and_filmstrip_neighbors(
+    build_config: Path,
+) -> None:
+    """Thumbs are exported for the event token AND its filmstrip neighbors, not just
+    the event itself. s1/s2 are build_config's only two CAM_FRONT keyframes (same
+    scene, s1 timestamp=1000, s2 timestamp=1001) -- s1 is the sole flagship event,
+    so its filmstrip t_plus1 neighbor is s2 (t_minus1/t_minus2/t_plus2 are all NA,
+    scene-edge). Both tokens' thumbnails must land, reusing the tmp-LanceDB-store
+    pattern from test_export_thumbs_writes_one_jpeg_per_token."""
+    lancedb = pytest.importorskip("lancedb")
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    db = lancedb.connect(config["paths"]["lancedb_path"])
+    db.create_table(
+        config["paths"]["lancedb_table"],
+        data=[
+            {"sample_data_token": "s1", "thumbnail": b"\xff\xd8\xff\xe0one"},
+            {"sample_data_token": "s2", "thumbnail": b"\xff\xd8\xff\xe0two"},
+        ],
+    )
+
+    manifest = run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "sample_frames" / "thumbs" / "s1.jpg").is_file()
+    assert (out / "sample_frames" / "thumbs" / "s2.jpg").is_file()
+    assert manifest["validation"]["events"] == "included"
+
+
+def test_build_events_thumbs_skip_warn_when_store_absent(
+    build_config: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No LanceDB store at all (build_config's default) must degrade to a warning,
+    same as _include_curation's own thumbnail handling -- not fail the build."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        manifest = run_build(build_config)
+    assert manifest["validation"]["events"] == "included"
+    assert "event frames ship without thumbnails" in caplog.text
+
+
+def test_include_events_dedups_thumbs_already_exported(
+    build_config: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A token that already has a thumb on disk (e.g. exported by the curation step
+    that runs earlier in run_build) must NOT be re-requested from the LanceDB store.
+    Proven by pre-seeding out_dir with a thumb for s1 (the flagship event's own
+    token) and populating the store with ONLY s2 (s1's t_plus1 filmstrip neighbor):
+    if dedup didn't exclude s1 from the request, export_thumbs would raise "tokens
+    missing from the LanceDB store" for s1 (genuinely absent from THIS store),
+    which the broad except in build.py would swallow into a warning -- so the
+    absence of that warning is the proof dedup worked, and s2's thumb still lands
+    from the real request. s1's pre-seeded thumb is asserted untouched."""
+    lancedb = pytest.importorskip("lancedb")
+    from nuscenes_data_engine.demo.build import _include_events
+
+    config = yaml.safe_load(build_config.read_text())
+    db = lancedb.connect(config["paths"]["lancedb_path"])
+    db.create_table(
+        config["paths"]["lancedb_table"],
+        data=[{"sample_data_token": "s2", "thumbnail": b"\xff\xd8\xff\xe0two"}],
+    )
+    out = tmp_path / "out"
+    thumbs_dir = out / "sample_frames" / "thumbs"
+    thumbs_dir.mkdir(parents=True)
+    (thumbs_dir / "s1.jpg").write_bytes(b"\xff\xd8\xff\xe0already-there")
+
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        result = _include_events(config, out)
+
+    assert result["events"] == "included"
+    assert "event thumbnail export skipped" not in caplog.text
+    assert (thumbs_dir / "s2.jpg").is_file()
+    assert (thumbs_dir / "s1.jpg").read_bytes() == b"\xff\xd8\xff\xe0already-there"
+
+
+def test_build_notes_absent_semsearch(build_config: Path) -> None:
+    """No `demo semsearch` staging (build_config's default) must not fail the build
+    -- mirrors _include_curation's own absent-staging fallback."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["semsearch"] == "absent"
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert not (out / "semantic_search_results.parquet").exists()
+    assert "semantic_search_results.parquet" not in manifest["outputs"]
+
+
+def test_build_includes_semsearch_when_staged(build_config: Path) -> None:
+    """A staged semantic_search_results.parquet (from `demo semsearch`) is copied
+    into the package, hashed as an input, and its tokens get thumbnails."""
+    lancedb = pytest.importorskip("lancedb")
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    staging.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "query": ["foggy road", "foggy road"],
+            "rank": [1, 2],
+            "sample_data_token": ["semq1", "semq2"],
+            "score": [0.9, 0.8],
+        }
+    ).to_parquet(staging / "semantic_search_results.parquet")
+    db = lancedb.connect(config["paths"]["lancedb_path"])
+    db.create_table(
+        config["paths"]["lancedb_table"],
+        data=[
+            {"sample_data_token": "semq1", "thumbnail": b"\xff\xd8\xff\xe0one"},
+            {"sample_data_token": "semq2", "thumbnail": b"\xff\xd8\xff\xe0two"},
+        ],
+    )
+
+    manifest = run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "semantic_search_results.parquet").is_file()
+    on_disk = pd.read_parquet(out / "semantic_search_results.parquet")
+    assert list(on_disk["sample_data_token"]) == ["semq1", "semq2"]
+    assert manifest["validation"]["semsearch"] == "included"
+    assert "semantic_search_results.parquet" in manifest["outputs"]
+    assert any(
+        Path(key).name == "semantic_search_results.parquet" for key in manifest["inputs"]
+    )
+    assert (out / "sample_frames" / "thumbs" / "semq1.jpg").is_file()
+    assert (out / "sample_frames" / "thumbs" / "semq2.jpg").is_file()

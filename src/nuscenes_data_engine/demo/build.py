@@ -15,6 +15,7 @@ import pandas as pd
 
 from nuscenes_data_engine.config import load_yaml
 from nuscenes_data_engine.demo import exporters
+from nuscenes_data_engine.demo.events import build_events
 from nuscenes_data_engine.demo.exporters import write_json
 
 logger = logging.getLogger("nuscenes_data_engine")
@@ -30,10 +31,14 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # Bumped by hand alongside docs/DEMO.md's package-layout table whenever a rebuild
 # changes the package's shape (new/removed columns or files), not on every build --
 # most rebuilds (a results.json update, a re-picked hero token) keep this the same.
-# Currently 0.3: gt_boxes gained distance_to_ego_m/size_bucket, hero.jpg became a
-# real exemplar crop (see the dated amendment in
-# docs/superpowers/specs/2026-08-12-demo-phase1-design.md).
-_PACKAGE_VERSION = "0.3"
+# 0.4 (Phase 5): scenario_events.parquet (six presets + filmstrip neighbors) and
+# semantic_search_results.parquet (recorded semsearch) join the package, plus their
+# filmstrip/gallery thumbnails.
+_PACKAGE_VERSION = "0.4"
+
+# Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
+# edges, so every token collection over these columns must drop the NA entries.
+_FILMSTRIP_NEIGHBOR_COLUMNS = ("t_minus2", "t_minus1", "t_plus1", "t_plus2")
 
 
 def _sha256(path: Path) -> str:
@@ -235,6 +240,126 @@ def _include_curation(config: dict[str, Any], out_dir: Path) -> str:
     return "included"
 
 
+def _export_thumbs_deduped(
+    *, config: dict[str, Any], out_dir: Path, tokens: set[str], context: str
+) -> None:
+    """Export thumbs for ``tokens`` not already on disk (e.g. from a prior step).
+
+    Mirrors ``_include_curation``'s degrade-to-warning treatment of a missing/
+    unusable LanceDB store: thumbnails here are supplementary to the parquet data
+    that already shipped, so a store problem must not fail the whole build.
+    ``context`` names the caller in the warning (e.g. "event", "semsearch") so a
+    skipped export is traceable to which group it affected.
+    """
+    thumb_dir = out_dir / "sample_frames" / "thumbs"
+    existing = {p.stem for p in thumb_dir.glob("*.jpg")} if thumb_dir.is_dir() else set()
+    to_export = sorted(tokens - existing)
+    if not to_export:
+        return
+    lancedb_path = Path(config["paths"]["lancedb_path"])
+    if not lancedb_path.is_dir():
+        logger.warning(
+            "demo build: no LanceDB store at %s — %s frames ship without thumbnails",
+            lancedb_path, context,
+        )
+        return
+    try:
+        exporters.export_thumbs(
+            lancedb_path=lancedb_path,
+            table=config["paths"]["lancedb_table"],
+            tokens=to_export,
+            out_dir=out_dir,
+        )
+    except Exception as exc:
+        # Broad on purpose, same rationale as _include_curation's own thumbnail
+        # export: store corruption, a missing table, or a genuinely absent token
+        # must all degrade to a warning, not crash a build that already has the
+        # data these thumbnails merely illustrate.
+        logger.warning("demo build: %s thumbnail export skipped (%s)", context, exc)
+
+
+def _include_events(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
+    """Compute ``scenario_events.parquet`` live and export its thumbnails.
+
+    Unlike curation, events are always attempted — they are derived entirely from
+    the (always-required) processed tables, never from curation staging alone —
+    but the two model-result presets (``fn_pedestrians_night``, ``low_conf_
+    braking``) still need the curated-val staging parquets, so ``staging_dir`` is
+    resolved the same way ``_include_curation`` checks readiness: only when all
+    three staged files exist, else ``None`` (``build_events`` itself warns and
+    skips those two presets in that case — see events.py::_load_staging).
+
+    ``flagship_expected`` threads ``config["flagship"]["expected_sql_count"]``
+    straight to ``build_events``, which raises if its own pre-cap
+    ``hard_braking_near_pedestrians`` count disagrees — the same number the SQL
+    check earlier in ``run_build`` already asserts, from an independent
+    (pandas, not DuckDB) computation over the same tables.
+    """
+    curation_cfg = config.get("curation")
+    staging_dir = None
+    if curation_cfg:
+        candidate = Path(curation_cfg["staging_dir"])
+        if all(
+            (candidate / name).is_file()
+            for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet")
+        ):
+            staging_dir = candidate
+
+    events = build_events(
+        processed_dir=Path(config["paths"]["processed_dir"]),
+        staging_dir=staging_dir,
+        presets_cfg=config["presets"],
+        flagship_expected=config["flagship"]["expected_sql_count"],
+    )
+    events.to_parquet(out_dir / "scenario_events.parquet", index=False)
+
+    tokens: set[str] = set(events["sample_data_token"])
+    for col in _FILMSTRIP_NEIGHBOR_COLUMNS:
+        tokens |= set(events[col].dropna())
+    _export_thumbs_deduped(config=config, out_dir=out_dir, tokens=tokens, context="event")
+
+    flagship_n = int(
+        events["preset_tags"]
+        .apply(lambda tags: "hard_braking_near_pedestrians" in tags)
+        .sum()
+    )
+    return {"events": "included", "flagship_events": flagship_n, "n_events": len(events)}
+
+
+def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
+    """Copy the staged recorded-semsearch group into the package, or note its absence.
+
+    Mirrors ``_include_curation``'s absent/present handling: no ``curation:``
+    config section, or no staged ``semantic_search_results.parquet`` (``demo
+    semsearch`` hasn't run yet), logs a warning and the manifest records "absent" —
+    a package built without it is still honest and still usable, same rationale as
+    curation's own TRINITY-unreachable fallback.
+    """
+    curation_cfg = config.get("curation")
+    if not curation_cfg:
+        logger.warning(
+            "demo build: no `curation:` config section — shipping without the "
+            "recorded semantic search (see docs/DEMO.md)"
+        )
+        return "absent"
+    staging_dir = Path(curation_cfg["staging_dir"])
+    semsearch_path = staging_dir / "semantic_search_results.parquet"
+    if not semsearch_path.is_file():
+        logger.warning(
+            "demo build: no semsearch staging at %s — shipping without the "
+            "recorded semantic search (run `demo semsearch` first, see docs/DEMO.md)",
+            semsearch_path,
+        )
+        return "absent"
+
+    shutil.copy2(semsearch_path, out_dir / "semantic_search_results.parquet")
+    tokens = set(pd.read_parquet(semsearch_path, columns=["sample_data_token"])[
+        "sample_data_token"
+    ])
+    _export_thumbs_deduped(config=config, out_dir=out_dir, tokens=tokens, context="semsearch")
+    return "included"
+
+
 def run_build(config_path: Path) -> dict[str, Any]:
     """Run every registered exporter, then write demo_data/manifest.json.
 
@@ -328,6 +453,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
     headline = metrics["results"]["weak_retention"]["headline"]
     if headline is None:
         raise ValueError("weak-retention headline (random pair) missing from results.json")
+
+    # Phase 5: events + semsearch run after curation (their thumbs may dedup
+    # against curation's already-exported ones) and before the size-budget check /
+    # outputs hash sweep below, so their files count toward both.
+    events_result = _include_events(config, out_dir)
+    semsearch_status = _include_semsearch(config, out_dir)
+
     package_bytes = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
     package_mb = package_bytes / 1e6
     if package_mb > config["budgets"]["max_package_mb"]:
@@ -367,6 +499,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
         for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
             path = staging_dir / name
             inputs[str(path)] = _sha256(path)
+    # Events need no staging input of their own — build_events reads only the
+    # already-hashed processed tables (+ the same three curation-staging parquets
+    # hashed just above, when present). Semsearch's own staged parquet is a
+    # distinct input the build actually read, hashed only when included.
+    if semsearch_status == "included":
+        semsearch_path = Path(config["curation"]["staging_dir"]) / "semantic_search_results.parquet"
+        inputs[str(semsearch_path)] = _sha256(semsearch_path)
 
     manifest = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -380,6 +519,10 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "n_arms": len(al_df),
             "n_weak_arms": len(weak_df),
             "curation": curation_status,
+            "events": events_result["events"],
+            "flagship_events": events_result["flagship_events"],
+            "n_events": events_result["n_events"],
+            "semsearch": semsearch_status,
         },
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

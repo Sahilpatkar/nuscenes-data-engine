@@ -10,13 +10,22 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pandas as pd
 
+from nuscenes_data_engine.demo.curate import front_camera_hits
+
 logger = logging.getLogger("nuscenes_data_engine")
+
+# Over-request factor for semantic search: the LanceDB frame store spans all six
+# camera channels, but every semsearch result must be CAM_FRONT (mirrors demo
+# curate's semantic bucket, cli.py's `semantic_oversample`) -- 8x leaves enough
+# headroom for `front_camera_hits` to still fill `k` after filtering.
+_SEMSEARCH_OVERSAMPLE = 8
 
 # Verbatim from docs/GRAPH.md — the flagship SQL/Cypher parity query.
 FLAGSHIP_SQL = """
@@ -233,6 +242,52 @@ def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "weak_supervision_results.parquet", index=False)
+    return df
+
+
+def export_semsearch(
+    *,
+    search_fn: Callable[[str, int], list[dict[str, Any]]],
+    queries: list[str],
+    k: int,
+    staging_dir: Path,
+) -> pd.DataFrame:
+    """Run the recorded semantic-search queries, write ``semantic_search_results.parquet``.
+
+    ``search_fn(query, k)`` is an injected callable (production: a lazily-built
+    ``SearchEngine.search_text``, so this module itself never imports torch/lancedb)
+    returning an ORDERED (nearest-first) list of result dicts with at least
+    ``sample_data_token``, ``channel``, ``score``. Each query is over-requested by
+    ``_SEMSEARCH_OVERSAMPLE`` (8x) and filtered to CAM_FRONT via
+    ``curate.py::front_camera_hits`` — the same helper (and the same reason: the
+    LanceDB store spans all six camera channels) ``demo curate``'s semantic bucket
+    reuses, so the filtering logic lives in exactly one place.
+
+    Writes ``(query, rank, sample_data_token, score)`` rows in rank order (rank
+    restarts at 1 per query) to ``staging_dir/semantic_search_results.parquet``,
+    creating ``staging_dir`` if needed, and returns the same DataFrame.
+    """
+    if not queries:
+        raise ValueError("export_semsearch: empty queries")
+
+    rows: list[dict[str, Any]] = []
+    for query in queries:
+        raw = search_fn(query, k * _SEMSEARCH_OVERSAMPLE)
+        front = front_camera_hits(raw, k)
+        for rank, hit in enumerate(front, start=1):
+            rows.append(
+                {
+                    "query": query,
+                    "rank": rank,
+                    "sample_data_token": hit["sample_data_token"],
+                    "score": hit["score"],
+                }
+            )
+
+    df = pd.DataFrame(rows, columns=["query", "rank", "sample_data_token", "score"])
+    staging_dir = Path(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(staging_dir / "semantic_search_results.parquet", index=False)
     return df
 
 

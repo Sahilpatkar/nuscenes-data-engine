@@ -930,13 +930,57 @@ def test_demo_infer_cli_rejects_legacy_flat_model_shape(tmp_path: Path) -> None:
     assert "run, imgsz" in str(result.exception)
 
 
+def test_demo_semsearch_missing_torch_lancedb_raises_directive_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike `demo curate`'s semantic bucket (optional -- the whole curate run must
+    still succeed without torch/lancedb), `demo semsearch`'s entire purpose IS the
+    semantic search: their absence must be a hard failure naming the exact fix, not
+    a silent skip or a bare ImportError traceback.
+
+    torch/transformers ARE installed in this dev environment (Infra Mac, train+
+    engine extras synced), so their absence is simulated via the documented
+    sys.modules-poisoning trick (setting a module's sys.modules entry to None forces
+    ImportError on the next import of it) rather than actually uninstalling
+    anything -- this still drives the real CLI command and the real try/except in
+    cli.py::demo_semsearch, only the import itself is faked.
+    """
+    import sys
+
+    from typer.testing import CliRunner
+
+    from nuscenes_data_engine.cli import app
+
+    config = {
+        "paths": {"lancedb_path": str(tmp_path / "lancedb"), "lancedb_table": "frames"},
+        "curation": {"staging_dir": str(tmp_path / "staging")},
+        "semsearch": {"queries": ["foggy road with heavy lens glare"], "k": 8},
+    }
+    config_path = tmp_path / "demo.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+
+    monkeypatch.setitem(sys.modules, "nuscenes_data_engine.data_engine.search", None)
+
+    result = CliRunner().invoke(app, ["demo", "semsearch", "--config", str(config_path)])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "uv sync --extra train --extra engine" in str(result.exception)
+
+
 def test_front_camera_hits_drops_non_cam_front_and_preserves_rank_order() -> None:
     """Task-5 live-run fix: real SigLIP search returned a CAM_BACK token
     (85f49850a882409ea01b2e8f3d006d05) that reached run_curate's channel guard and
     blew up the whole curate run -- filtering has to happen at the semantic source,
     before curation ever sees a non-CAM_FRONT token. Rank order (nearest-first) must
-    survive filtering -- it only drops entries, never re-sorts."""
-    from nuscenes_data_engine.demo.curate import _front_camera_hits
+    survive filtering -- it only drops entries, never re-sorts.
+
+    Phase 5: this helper is now public (``front_camera_hits``, no leading
+    underscore) and returns the filtered/truncated RAW result dicts rather than
+    ``(token, bucket_labels)`` tuples -- ``demo/exporters.py::export_semsearch``
+    reuses it too and needs the ``score`` field the tuple shape used to discard;
+    ``demo curate``'s own caller (cli.py) now builds its ``["semantic"]`` bucket-
+    label tuples itself from these dicts."""
+    from nuscenes_data_engine.demo.curate import front_camera_hits
 
     results = [
         {"sample_data_token": "f1", "channel": "CAM_FRONT"},
@@ -945,35 +989,38 @@ def test_front_camera_hits_drops_non_cam_front_and_preserves_rank_order() -> Non
         {"sample_data_token": "l1", "channel": "CAM_FRONT_LEFT"},
         {"sample_data_token": "f3", "channel": "CAM_FRONT"},
     ]
-    hits = _front_camera_hits(results, quota=2)
-    assert hits == [("f1", ["semantic"]), ("f2", ["semantic"])]
+    hits = front_camera_hits(results, quota=2)
+    assert hits == [
+        {"sample_data_token": "f1", "channel": "CAM_FRONT"},
+        {"sample_data_token": "f2", "channel": "CAM_FRONT"},
+    ]
 
 
 def test_front_camera_hits_returns_all_matches_when_under_quota() -> None:
-    from nuscenes_data_engine.demo.curate import _front_camera_hits
+    from nuscenes_data_engine.demo.curate import front_camera_hits
 
     results = [
         {"sample_data_token": "b1", "channel": "CAM_BACK"},
         {"sample_data_token": "f1", "channel": "CAM_FRONT"},
     ]
-    hits = _front_camera_hits(results, quota=5)
-    assert hits == [("f1", ["semantic"])]
+    hits = front_camera_hits(results, quota=5)
+    assert hits == [{"sample_data_token": "f1", "channel": "CAM_FRONT"}]
 
 
 def test_front_camera_hits_all_non_cam_front_yields_empty() -> None:
-    from nuscenes_data_engine.demo.curate import _front_camera_hits
+    from nuscenes_data_engine.demo.curate import front_camera_hits
 
     results = [
         {"sample_data_token": "b1", "channel": "CAM_BACK"},
         {"sample_data_token": "l1", "channel": "CAM_FRONT_LEFT"},
     ]
-    assert _front_camera_hits(results, quota=5) == []
+    assert front_camera_hits(results, quota=5) == []
 
 
 def test_front_camera_hits_empty_results_and_zero_quota() -> None:
-    from nuscenes_data_engine.demo.curate import _front_camera_hits
+    from nuscenes_data_engine.demo.curate import front_camera_hits
 
-    assert _front_camera_hits([], quota=5) == []
-    assert _front_camera_hits(
+    assert front_camera_hits([], quota=5) == []
+    assert front_camera_hits(
         [{"sample_data_token": "f1", "channel": "CAM_FRONT"}], quota=0
     ) == []

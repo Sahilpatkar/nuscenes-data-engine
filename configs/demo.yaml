@@ -52,6 +52,17 @@ presets:                          # Phase 5: demo/events.py's six scenario prese
                                     # model-result presets (fn_pedestrians_night,
                                     # low_conf_braking) key off
 
+semsearch:                        # Phase 5: `demo semsearch` (torch required) -- recorded
+                                   # SigLIP queries -> semantic_search_results.parquet,
+                                   # copied into the package by `demo build`'s
+                                   # _include_semsearch (see demo/exporters.py::export_semsearch)
+  queries:
+    - foggy road with heavy lens glare
+    - crowded nighttime pedestrian crossing
+    - pedestrian crossing at a red light at night
+    - construction zone with traffic cones
+  k: 8
+
 curation:
   staging_dir: data/demo_curation
   images_root: data/raw/demo_frames   # rsync destination (demo infer resolves images here)

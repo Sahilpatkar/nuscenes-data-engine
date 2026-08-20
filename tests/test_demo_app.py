@@ -67,9 +67,26 @@ def built_demo_data(tmp_path: Path) -> Path:
     al = tmp_path / "active_learning"
     processed.mkdir()
     al.mkdir()
-    pd.DataFrame({"sample_data_token": ["s1", "s2", "s3"]}).to_parquet(
-        processed / "samples.parquet"
-    )
+    pd.DataFrame(
+        {
+            "sample_data_token": ["s1", "s2", "s3"],
+            # Phase 5: demo/events.py::build_events reads samples.parquet too
+            # (CAM_FRONT-filtered, joined to canbus/ego_pose by sample_token) --
+            # s1/s2 double as their own sample_token here (this fixture's tiny
+            # scale never needs the real per-channel token distinction) and are
+            # CAM_FRONT so build_events sees exactly canbus/ego_pose's covered set
+            # (2 rows, both already present below); s3 is a different channel so
+            # it's invisible to build_events without needing a matching canbus/
+            # ego_pose row of its own.
+            "sample_token": ["s1", "s2", "s3"],
+            "channel": ["CAM_FRONT", "CAM_FRONT", "CAM_BACK"],
+            "scene_token": ["sceneX", "sceneX", "sceneX"],
+            "scene_name": ["scene-X", "scene-X", "scene-X"],
+            "timestamp": [1000, 1001, 1002],
+            "is_night": [False, False, False],
+            "is_rain": [False, False, False],
+        }
+    ).to_parquet(processed / "samples.parquet")
     pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
@@ -89,6 +106,10 @@ def built_demo_data(tmp_path: Path) -> Path:
             "can_vel_mps": [10.0, 5.0],
             "can_speed_kmh": [36.0, 18.0],
             "is_hard_braking": [True, False],
+            # Phase 5: demo/events.py::build_events also reads accel_long_min_mps2
+            # (the flagship preset's severity key) -- s1's magnitude is deliberately
+            # a strong-braking value, consistent with is_hard_braking=True.
+            "accel_long_min_mps2": [-7.5, -0.5],
         }
     ).to_parquet(processed / "canbus.parquet")
     pd.DataFrame({"sample_token": ["s1", "s2"], "speed_mps": [10.1, 4.9]}).to_parquet(
@@ -225,6 +246,12 @@ def built_demo_data(tmp_path: Path) -> Path:
         "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
         "flagship": {"expected_sql_count": 1, "cypher_count": 30, "cypher_source": "docs/GRAPH.md"},
+        "presets": {
+            "cap_per_preset": 30,
+            "near_dist_m": 10.0,
+            "high_speed_mps": 10.0,
+            "model_for_results": "baseline",
+        },
         "curation": {"staging_dir": str(staging)},
     }
     config_path = tmp_path / "demo.yaml"
