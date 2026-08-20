@@ -182,7 +182,7 @@ def iter_stream_events(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
 
 
 def _render_chat_answer(body: dict) -> None:
-    """One assistant message: the answer, the agent's working, example frames."""
+    """One assistant message: the answer, the agent's working, charts, example frames."""
     st.markdown(body["answer"])
     if body.get("steps"):
         with st.expander(f"Agent steps ({len(body['steps'])})"):
@@ -193,6 +193,11 @@ def _render_chat_answer(body: dict) -> None:
                     st.code(step["input"]["sql"], language="sql")
                 elif detail:
                     st.caption(str(detail))
+    for chart in body.get("charts") or []:
+        st.caption(chart["title"])
+        frame_df = pd.DataFrame(chart["rows"], columns=chart["columns"])
+        frame_df = frame_df.set_index(chart["columns"][0])
+        (st.line_chart if chart["kind"] == "line" else st.bar_chart)(frame_df)
     if body.get("frames"):
         columns = st.columns(min(len(body["frames"]), 4))
         for i, frame in enumerate(body["frames"]):
@@ -228,20 +233,62 @@ def render_chat(health: dict) -> None:
     history = [
         {"role": m["role"], "content": m["content"]} for m in st.session_state["chat_messages"]
     ]
-    with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
-        try:
-            resp = requests.post(
-                f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600
-            )
-        except requests.RequestException as exc:
-            st.error(f"Chat request failed: {exc}")
-            return
-        if resp.status_code != 200:
-            detail = resp.json().get("detail", resp.text) if resp.text else resp.text
-            st.error(f"API returned {resp.status_code}: {detail}")
-            return
-        body = resp.json()
-        _render_chat_answer(body)
+
+    # Try the streaming endpoint first; a 404 (older API container) or a connection
+    # error falls back to the blocking /chat call below, unchanged.
+    stream_resp = None
+    try:
+        stream_resp = requests.post(
+            f"{API_URL}/chat/stream",
+            json={"message": question, "history": history},
+            stream=True,
+            timeout=600,
+        )
+    except requests.RequestException:
+        stream_resp = None
+
+    if stream_resp is not None and stream_resp.status_code == 200:
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            buffer = ""
+            body: dict | None = None
+            for event, data in iter_stream_events(stream_resp.iter_lines(decode_unicode=True)):
+                if event == "turn":
+                    buffer = ""
+                elif event == "token":
+                    buffer += json.loads(data)
+                    placeholder.markdown(buffer)
+                elif event == "step":
+                    step = json.loads(data)
+                    placeholder.markdown(f"{buffer}\n\n· running `{step.get('tool', '?')}`…")
+                elif event == "final":
+                    body = json.loads(data)
+                    placeholder.empty()
+                    _render_chat_answer(body)
+                elif event == "error":
+                    placeholder.empty()
+                    st.error(data)
+                    return
+            if body is None:
+                st.error("Chat stream ended without a final answer.")
+                return
+    else:
+        if stream_resp is not None:
+            stream_resp.close()
+        with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
+            try:
+                resp = requests.post(
+                    f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600
+                )
+            except requests.RequestException as exc:
+                st.error(f"Chat request failed: {exc}")
+                return
+            if resp.status_code != 200:
+                detail = resp.json().get("detail", resp.text) if resp.text else resp.text
+                st.error(f"API returned {resp.status_code}: {detail}")
+                return
+            body = resp.json()
+            _render_chat_answer(body)
 
     st.session_state["chat_messages"] += [
         {"role": "user", "content": question},

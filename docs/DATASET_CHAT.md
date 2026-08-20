@@ -14,11 +14,12 @@ agent: singapore-hollandvillage has the most night scenes (66) ...
 ## Architecture
 
 ```
-Streamlit "💬 Ask the dataset" ── POST /chat ──> FastAPI (serving/app.py)
+Streamlit "💬 Ask the dataset" ── POST /chat, /chat/stream (SSE) ──> FastAPI (serving/app.py)
                                                   └─ chat.agent.answer()
                                                        ├─ tool: run_sql        → DuckDB views over data/processed/*.parquet (+ VLM labels)
                                                        ├─ tool: search_frames  → SearchEngine.search_text (SigLIP + LanceDB)
                                                        ├─ tool: show_frames    → thumbnails by sample_data_token
+                                                       ├─ tool: make_chart     → bar/line chart from data already retrieved (ChatResult.charts)
                                                        └─ ChatTransport ── local (Ollama/vLLM, OpenAI-compatible) │ anthropic (Claude API)
 ```
 
@@ -75,9 +76,114 @@ failing the question.
 ## Query log
 
 Every interaction appends one JSON line to `data/chat/log.jsonl` (question, every
-executed SQL/tool call with a result summary, the answer, model, latency) — the
-spec's "log every agent query for inspection". The Streamlit tab also shows each
-answer's steps in an expander.
+executed SQL/tool call with a result summary, the answer, model, latency, `n_charts`)
+— the spec's "log every agent query for inspection". The Streamlit tab also shows
+each answer's steps in an expander.
+
+## Streaming
+
+`POST /chat/stream` runs the same `chat.agent.answer()` as `POST /chat` — same
+tools, same guards, same JSONL log record — but streams the model's text as it is
+generated instead of blocking for the whole answer. `/chat` itself is frozen
+(unchanged wire shape and behavior) so the CLI (`chat`, `chat-eval`) and the answer-
+correctness eval keep working exactly as before; only the Streamlit tab uses the new
+endpoint.
+
+**Why a second endpoint instead of changing `/chat`:** streaming needs a background
+thread (`agent.answer()` is a blocking call that invokes `on_turn`/`on_token`/
+`on_step` callbacks; a sync generator can't `yield` from inside someone else's
+callback) feeding a `queue.SimpleQueue` that the response generator drains — a
+different implementation shape from `/chat`'s straight call-and-return, not just a
+flag. Resource setup (catalog/search engine/transport/graph) happens *before* the
+generator is defined, so a missing catalog or an unreachable model still comes back
+as a normal `503` JSON error, never a `200` stream that fails partway through.
+
+**Event contract** (`event: <kind>` then `data: <payload>`, blank-line terminated —
+see `serving/app.py`'s `chat_stream` docstring for the authoritative version):
+
+| event | payload | meaning |
+|---|---|---|
+| `turn` | literal empty string (not JSON) | a new agent turn started — the UI resets its interim-narration buffer |
+| `token` | a JSON-encoded string (`json.dumps(delta)`) | one text delta of the *current* turn |
+| `step` | a JSON object | one tool call finished (same shape as one entry of `ChatResult.steps`) |
+| `final` | a JSON object | the complete response — identical shape to `/chat`'s body (`answer`, `model`, `steps`, `frames`, `charts`), assembled by the same helper so the two can't drift |
+| `error` | plain text (not JSON) | the run failed after streaming had already started (`200` was already sent, so this is the only way to signal failure) |
+
+`token` is JSON-encoded specifically because a raw delta routinely contains an
+embedded newline (markdown answers are full of them), and SSE frames one event per
+blank-line-terminated block — an unescaped `\n` inside a bare `data:` line would
+split into a second, un-prefixed line that a line-based parser silently drops.
+`error`'s payload is either the underlying `TransportError`'s message (already a
+curated, no-secrets string, e.g. "connection refused — is `ollama serve` running?")
+or a generic `"internal error — see server logs"` for anything else, mirroring
+`/chat`'s own split so an unexpected internal exception's text can never reach the
+client; the full traceback is always logged server-side first.
+
+**No turn is known to be final in advance** — the model decides by not calling a
+tool — so every turn's text streams to `token`, including turns that turn out to be
+intermediate narration ("Let me check the data…") before a tool call. The client
+treats a turn's tokens as provisional and resets on the next `turn` event; only the
+`final` event's `answer` is durable.
+
+**Streamlit client** (`app/streamlit_app.py`): `requests.post(..., stream=True)`
+against `/chat/stream`; the pure `iter_stream_events(lines)` generator pairs up
+`event:`/`data:` lines from `requests.iter_lines()` (tests:
+`tests/test_streamlit_chat_stream.py` — canned lines, blank/comment-line skipping,
+token payloads returned verbatim for the caller to `json.loads`). Token rendering
+uses an `st.empty()` placeholder with manual buffer accumulation rather than
+`st.write_stream`: `write_stream` cannot retract text it has already emitted, and
+the `turn`-reset semantics above need exactly that, so the buffer is accumulated and
+redrawn by hand (`placeholder.markdown(buffer)`) on every `token`, reset to `""` on
+every `turn`. A `step` event appends a transient "· running `<tool>`…" line to the
+placeholder without touching the buffer, so the next token redraws over it cleanly.
+The `final` event clears the placeholder and renders through the same
+`_render_chat_answer` the message-history replay path uses (charts included — see
+below), then appends `{role, content, body}` to session state exactly as the
+pre-streaming code did, so replaying history after a page rerun is unaffected.
+
+**Fallback:** a `404` from `/chat/stream` (an older API container without the new
+route) or a connection error while making that first request falls back to the
+original blocking `POST /chat` call, unchanged — so an older serving image, or a
+one-off connection hiccup, degrades to the pre-streaming UX instead of breaking the
+tab.
+
+## Charts
+
+A fourth tool, `make_chart`, lets the agent turn data it retrieved into a bar or
+line chart: `{"kind": "bar"|"line", "title": str, "columns": [x, y1, ...], "rows":
+[[...]]}`. The system prompt tells the model to call it after `run_sql`, never with
+invented numbers. Guards (`_make_chart` in `chat/agent.py`) reject a malformed call
+as a model-visible `{"error": ...}` dict — same error-as-data pattern as the other
+tools, so the model can read the message and retry instead of the chart silently
+disappearing:
+
+- `kind` must be `"bar"` or `"line"`.
+- `columns` must be a list of at least 2 strings (one x-axis, at least one y-series).
+- `rows` must be a non-empty list of lists, each exactly `len(columns)` cells.
+- every y-value (every cell after the first in a row) must be numeric, not a bool.
+- total cells (`rows × columns`) are capped at 2000 — over the cap is rejected
+  outright (asking the model to aggregate further), never silently truncated.
+
+A chart that passes is appended to `ChatResult.charts` (and counted in the JSONL
+log's `n_charts` field); both `/chat` and `/chat/stream`'s `final` event carry it
+through `ChatResponse.charts` (`ChatChart`: `kind`, `title`, `columns`, `rows`).
+Streamlit renders each chart between the agent-steps expander and the example
+frames: `st.caption(title)` then `st.bar_chart`/`st.line_chart` over
+`pd.DataFrame(rows, columns=columns).set_index(columns[0])` (the first column
+becomes the x-axis).
+
+**"From retrieved data" is a prompt policy, not an enforced guarantee.** The guards
+above validate a chart's *shape* — kind, column count, row length, cell count — not
+its *provenance*: nothing cross-checks a chart's rows against the tool outputs that
+preceded it in the same turn. A model can still invent chart numbers exactly as it
+could invent any other unfounded number in prose; the system-prompt instruction is
+the only thing asking it not to. **Known limitation, future work:** the
+answer-correctness eval's `grounded` check (below) does not look at
+`ChatResult.charts` at all — the chat eval suite is chart-agnostic by construction
+(the grader ignores unknown `ChatResult` fields), so a hallucinated chart currently
+carries zero eval signal. Extending eval-time grounding to charts — checking a
+chart's rows against the same re-executed-SQL machinery `grounded` already uses for
+numbers cited in prose — is deferred, not implemented in this phase.
 
 ## Tables the agent can query
 
