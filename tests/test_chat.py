@@ -132,6 +132,43 @@ def test_run_sql_row_cap_and_errors(con: Any) -> None:
     assert "error" in unparsable
 
 
+def test_run_sql_cursor_still_sees_views_and_the_guard(con: Any) -> None:
+    """Regression pin for the per-call-cursor fix (concurrency race): ``con.cursor()``
+    is an independent connection to the same in-memory database, so it must still see
+    the parent connection's registered views and still enforce the SQL guard."""
+    out = catalog.run_sql(con, "SELECT count(*) FROM samples")
+    assert out["rows"] == [[3]]
+    assert "error" in catalog.run_sql(con, "SELECT * FROM read_parquet('/etc/passwd')")
+
+
+def test_run_sql_concurrent_calls_do_not_cross_contaminate(con: Any) -> None:
+    """Regression test for the per-call-cursor fix: DuckDB's ``execute()`` mutates
+    the connection's own live-result state, so two threads sharing one ``con`` and
+    calling ``execute``/``fetchmany`` concurrently could interleave and each get back
+    the OTHER thread's rows (proven: 105 cross-contaminated rows in a two-thread
+    probe against the pre-fix implementation). Each thread runs 50 queries whose
+    result is a function of (thread id, iteration) so any contamination is
+    immediately visible as a value mismatch."""
+    import threading
+
+    mismatches: list[str] = []
+
+    def worker(thread_id: int) -> None:
+        for i in range(50):
+            n = thread_id * 1000 + i  # unique per (thread, iteration)
+            out = catalog.run_sql(con, f"SELECT {n} AS n")
+            if out.get("rows") != [[n]]:
+                mismatches.append(f"thread {thread_id} call {i}: expected [[{n}]], got {out!r}")
+
+    threads = [threading.Thread(target=worker, args=(thread_id,)) for thread_id in (0, 1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert mismatches == []
+
+
 def test_schema_prompt_matches_available_tables(con: Any) -> None:
     prompt = catalog.schema_prompt(catalog.catalog_tables(con))
     assert "samples —" in prompt and "labels —" in prompt
@@ -456,6 +493,23 @@ def test_agent_history_precedes_question(con: Any) -> None:
     assert roles == ["system", "user", "assistant", "user"]
 
 
+def test_show_frames_tool_survives_a_broken_store(con: Any) -> None:
+    """frames_by_tokens raising becomes a model-visible tool error, not a crash."""
+    from nuscenes_data_engine.data_engine.chat import agent
+
+    class _BrokenStore:
+        def frames_by_tokens(self, tokens: list[str]) -> list[dict[str, Any]]:
+            raise RuntimeError("store exploded")
+
+    result = agent.ChatResult(answer="", model="stub")
+    output = agent._run_tool(
+        "show_frames", {"tokens": ["t1"]}, con=con, search_engine=_BrokenStore(),
+        result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in output and "store exploded" in output["error"]
+    assert result.frames == []
+
+
 # ---------------------------------------------------------------------------
 # POST /chat — endpoint wiring (degraded detection model; fakes on app.state)
 # ---------------------------------------------------------------------------
@@ -554,3 +608,106 @@ def test_chat_endpoint_no_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         response = client.post("/chat", json={"message": "q"})
     assert response.status_code == 503
     assert "no Parquet tables" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# chat-eval CLI — probe seam (Task 1). Only a probe.search_text() failure may
+# keep the engine (token-based frame attachment still works without torch);
+# a construction failure still disables the engine outright. Exercised through
+# the real `chat-eval` Typer command, following the `--regrade` test's pattern
+# of stubbing `make_transport`/`run_eval` so no LLM or real data is needed.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCliTransport:
+    model = "fake"
+
+
+class _ProbeConstructionFails:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise FileNotFoundError("no lancedb store")
+
+
+class _ProbeSearchTextFails:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def search_text(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise RuntimeError("No module named 'torch'")
+
+
+class _ProbeAllOk:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def search_text(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+
+def _run_chat_eval_capturing_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, probe_cls: type
+) -> Any:
+    """Invoke the real `chat-eval` command with the transport/run_eval/SearchEngine
+    seams stubbed; returns whatever `search_engine` reached `run_eval`."""
+    from typer.testing import CliRunner
+
+    import nuscenes_data_engine.data_engine.search as search_module
+    from nuscenes_data_engine.cli import app
+    from nuscenes_data_engine.data_engine.chat import evaluate, transports
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_eval(
+        cases: Any, *, con: Any, transport: Any, search_engine: Any,
+        out_dir: Any, provider: Any, limit: Any = None,
+    ) -> dict[str, Any]:
+        captured["search_engine"] = search_engine
+        return {"n_cases": 0}
+
+    monkeypatch.setattr(evaluate, "run_eval", fake_run_eval)
+    monkeypatch.setattr(transports, "make_transport", lambda settings, **kw: _FakeCliTransport())
+    monkeypatch.setattr(search_module, "SearchEngine", probe_cls)
+    # The Typer callback reconfigures root logging with `force=True` on every
+    # invocation, which would tear down caplog's handler; skip it here so the
+    # probe's warning (or lack of one) is observable.
+    monkeypatch.setattr("nuscenes_data_engine.cli._configure_logging", lambda verbose: None)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+    config_path = tmp_path / "chat_eval.yaml"
+    config_path.write_text('cases:\n  - id: a\n    question: "How many samples?"\n')
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "chat-eval", "--config", str(config_path),
+        "--processed-dir", str(tmp_path / "processed"),
+    ])
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    return captured["search_engine"]
+
+
+def test_chat_eval_probe_construction_failure_disables_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="nuscenes_data_engine")
+    engine = _run_chat_eval_capturing_engine(monkeypatch, tmp_path, _ProbeConstructionFails)
+    assert engine is None
+    assert "vector search unavailable" in caplog.text.lower()
+
+
+def test_chat_eval_probe_search_failure_keeps_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="nuscenes_data_engine")
+    engine = _run_chat_eval_capturing_engine(monkeypatch, tmp_path, _ProbeSearchTextFails)
+    assert isinstance(engine, _ProbeSearchTextFails)
+    assert "semantic search unavailable" in caplog.text.lower()
+    assert "token-based frame attachment still works" in caplog.text.lower()
+
+
+def test_chat_eval_probe_all_ok_keeps_engine_and_warns_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="nuscenes_data_engine")
+    engine = _run_chat_eval_capturing_engine(monkeypatch, tmp_path, _ProbeAllOk)
+    assert isinstance(engine, _ProbeAllOk)
+    assert caplog.text == ""

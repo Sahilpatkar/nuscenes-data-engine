@@ -84,30 +84,44 @@ def catalog_tables(con: Any) -> list[str]:
 
 
 def run_sql(con: Any, sql: str, max_rows: int = MAX_ROWS) -> dict[str, Any]:
-    """Execute one guarded SELECT; return columns/rows (capped) or an error dict."""
+    """Execute one guarded SELECT; return columns/rows (capped) or an error dict.
+
+    Runs on a per-call cursor (``con.cursor()``), never on ``con`` itself: DuckDB's
+    ``execute()`` mutates the connection's OWN live-result state, so two threads
+    sharing one catalog ``con`` and calling ``execute``/``fetchmany`` concurrently
+    can interleave and each fetch the other's rows. A cursor is an independent
+    connection to the same in-memory database — it still sees every view the
+    parent connection registered and still goes through the guard above — so
+    per-call cursors make concurrent ``run_sql`` calls on one shared ``con`` safe
+    without a lock.
+    """
     import duckdb
 
+    cur = con.cursor()
     try:
-        statements = con.extract_statements(sql)
-    except duckdb.Error as exc:
-        return {"error": f"SQL parse error: {exc}"}
-    if len(statements) != 1:
-        return {"error": "Exactly one SQL statement per call."}
-    if statements[0].type != duckdb.StatementType.SELECT:
-        return {"error": "Only SELECT statements are allowed (read-only catalog)."}
-    denied = _DENIED_KEYWORDS.search(sql) or _fileish_literal(sql)
-    if denied:
-        return {
-            "error": f"Disallowed token {denied.group(0)!r}: only the registered views "
-            "may be queried (no files, settings, or extensions)."
-        }
+        try:
+            statements = cur.extract_statements(sql)
+        except duckdb.Error as exc:
+            return {"error": f"SQL parse error: {exc}"}
+        if len(statements) != 1:
+            return {"error": "Exactly one SQL statement per call."}
+        if statements[0].type != duckdb.StatementType.SELECT:
+            return {"error": "Only SELECT statements are allowed (read-only catalog)."}
+        denied = _DENIED_KEYWORDS.search(sql) or _fileish_literal(sql)
+        if denied:
+            return {
+                "error": f"Disallowed token {denied.group(0)!r}: only the registered views "
+                "may be queried (no files, settings, or extensions)."
+            }
 
-    try:
-        result = con.execute(sql)
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchmany(max_rows + 1)
-    except duckdb.Error as exc:
-        return {"error": f"SQL error: {exc}"}
+        try:
+            result = cur.execute(sql)
+            columns = [desc[0] for desc in result.description]
+            rows = result.fetchmany(max_rows + 1)
+        except duckdb.Error as exc:
+            return {"error": f"SQL error: {exc}"}
+    finally:
+        cur.close()
 
     truncated = len(rows) > max_rows
     clipped = [

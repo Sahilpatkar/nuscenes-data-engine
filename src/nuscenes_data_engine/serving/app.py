@@ -8,6 +8,7 @@ Endpoints:
     POST /search/image              semantic search by example image.
     GET  /search/similar/{token}    frames similar to a stored frame.
     POST /chat                      dataset-chat agent (text-to-SQL + vector search).
+    POST /chat/stream               same agent, streamed as Server-Sent Events.
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import queue
+import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,12 +28,14 @@ from typing import Any
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import StreamingResponse
 
 from nuscenes_data_engine import __version__
 from nuscenes_data_engine.config import get_settings
 from nuscenes_data_engine.monitoring.features import image_brightness
 from nuscenes_data_engine.serving.model import load_production_model
 from nuscenes_data_engine.serving.schemas import (
+    ChatChart,
     ChatRequest,
     ChatResponse,
     ChatStep,
@@ -272,6 +277,27 @@ def _get_graph_driver(request: Request) -> Any:
     return state.graph or None
 
 
+def _assemble_chat_response(result: Any) -> ChatResponse:
+    """Build the ``ChatResponse``-shaped body from an agent ``ChatResult``.
+
+    Shared by ``/chat`` and the ``final`` SSE event on ``/chat/stream`` so the two
+    response shapes cannot drift apart.
+    """
+    return ChatResponse(
+        answer=result.answer,
+        model=result.model,
+        steps=[ChatStep(**step) for step in result.steps],
+        frames=[
+            SearchResult(
+                thumbnail_b64=base64.b64encode(frame["thumbnail"]).decode(),
+                **{k: v for k, v in frame.items() if k not in ("thumbnail", "filename")},
+            )
+            for frame in result.frames
+        ],
+        charts=[ChatChart(**chart) for chart in result.charts],
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: Request, body: ChatRequest) -> ChatResponse:
     """Answer a dataset question via the tool-calling agent (SQL + vector + graph)."""
@@ -310,18 +336,120 @@ def chat(request: Request, body: ChatRequest) -> ChatResponse:
         len(result.frames),
         (time.perf_counter() - start) * 1000,
     )
-    return ChatResponse(
-        answer=result.answer,
-        model=result.model,
-        steps=[ChatStep(**step) for step in result.steps],
-        frames=[
-            SearchResult(
-                thumbnail_b64=base64.b64encode(frame["thumbnail"]).decode(),
-                **{k: v for k, v in frame.items() if k not in ("thumbnail", "filename")},
-            )
-            for frame in result.frames
-        ],
-    )
+    return _assemble_chat_response(result)
+
+
+@app.post("/chat/stream")
+def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
+    """Same agent as ``/chat``, streamed as Server-Sent Events.
+
+    Resources are resolved through the same getters as ``/chat`` BEFORE the
+    generator is defined, so a missing catalog/transport still raises an
+    ``HTTPException`` that maps to a real status code (503) instead of a 200
+    response that then fails mid-stream.
+
+    Why a background thread: ``agent.answer`` is a synchronous, blocking call that
+    invokes ``on_turn``/``on_token``/``on_step`` as plain Python callbacks — there is
+    no way for a synchronous generator to ``yield`` from *inside* someone else's
+    callback. The standard fix is to run ``agent.answer`` in a ``threading.Thread``
+    and have the callbacks push ``(kind, payload)`` tuples onto a thread-safe
+    ``queue.SimpleQueue``; the generator (run by Starlette in a threadpool, since
+    it is a sync generator) drains that queue and yields one SSE frame per item.
+    A ``None`` sentinel marks end-of-stream.
+
+    A client disconnect mid-stream does not stop the worker: the generator simply
+    stops being iterated, but the background thread is a plain daemon thread, not
+    something the disconnect can cancel — it keeps running ``agent.answer`` to
+    completion (bounded by ``MAX_TURNS``/the tool loop, so it always finishes) and
+    keeps calling ``events.put(...)`` into a queue nobody is draining anymore. This
+    is a bounded, self-clearing condition, not a leak: the worker's total puts are
+    capped by the same loop bounds as any other run, and the abandoned queue (plus
+    its unread items) becomes eligible for garbage collection once the worker
+    thread exits — there is no unbounded growth or thread pile-up across repeated
+    disconnects.
+
+    If ``agent.answer`` itself raises, the thread has no other way to report the
+    failure: the HTTP response — and its 200 status — was already sent with the
+    first byte of the stream, so a 500 status is no longer possible. The failure
+    is instead surfaced as a terminal ``error`` SSE event. The full traceback is
+    always logged server-side first (``logger.exception``); what reaches the
+    client mirrors ``/chat``'s own split — a ``TransportError``'s message is
+    safe to show (it is already a curated, no-secrets string like "is `ollama
+    serve` running?"), anything else becomes a generic message so an unexpected
+    internal exception can never leak its text to the client.
+
+    Payload encoding: every ``data:`` payload is a JSON value except ``turn``'s
+    (the literal empty string — there is nothing to decode), so clients can
+    ``json.loads`` all the others uniformly — ``step``/``final`` are JSON objects,
+    and ``token``/``error`` are each a JSON-encoded string (``json.dumps(delta)``,
+    ``json.dumps(message)``). The string encoding matters beyond consistency: a raw
+    token delta routinely contains embedded newlines (markdown answers are full of
+    them), and so, less obviously, can an error message — ``httpx.HTTPStatusError``
+    renders as two lines by construction (a "Client error ... for url ..." sentence,
+    a newline, then a "For more information check: ..." sentence), and
+    ``TransportError`` wraps that text verbatim. SSE framing is
+    one event per blank-line-terminated block of `field: value` lines — an
+    un-escaped ``\n`` inside a bare ``data: <delta>`` line would split into a
+    second, un-prefixed line that a line-based SSE parser (browsers'
+    ``EventSource`` included) silently drops instead of treating as part of the
+    payload, truncating the message the client shows. JSON-encoding escapes it onto
+    one line.
+    """
+    from nuscenes_data_engine.data_engine.chat import agent
+    from nuscenes_data_engine.data_engine.chat.transports import TransportError, make_transport
+
+    settings = request.app.state.settings
+    con = _get_chat_catalog(request)
+    try:
+        engine = _get_search_engine(request)
+    except HTTPException:
+        engine = None  # SQL-only chat still works without the LanceDB store
+    try:
+        transport = make_transport(settings)
+    except (TransportError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"Chat unavailable: {exc}") from exc
+    graph_driver = _get_graph_driver(request)
+    history = [turn.model_dump() for turn in body.history]
+
+    def event_stream() -> Iterator[str]:
+        events: queue.SimpleQueue[tuple[str, str] | None] = queue.SimpleQueue()
+
+        def worker() -> None:
+            try:
+                result = agent.answer(
+                    body.message,
+                    transport=transport,
+                    con=con,
+                    search_engine=engine,
+                    history=history,
+                    log_path=Path(settings.chat_log_path),
+                    graph_driver=graph_driver,
+                    graph_database=settings.neo4j_database,
+                    on_turn=lambda: events.put(("turn", "")),
+                    on_token=lambda delta: events.put(("token", json.dumps(delta))),
+                    on_step=lambda step: events.put(("step", json.dumps(step, default=str))),
+                )
+                final = _assemble_chat_response(result)
+                events.put(("final", final.model_dump_json()))
+            except Exception as exc:  # see docstring: headers are already sent
+                logger.exception("chat_stream worker failed")
+                message = (
+                    str(exc)
+                    if isinstance(exc, TransportError)
+                    else "internal error — see server logs"
+                )
+                events.put(("error", json.dumps(message)))
+            finally:
+                events.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        while (item := events.get()) is not None:
+            kind, payload = item
+            yield f"event: {kind}\ndata: {payload}\n\n"
+        thread.join()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/predict/annotated")

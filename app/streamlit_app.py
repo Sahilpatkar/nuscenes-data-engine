@@ -9,7 +9,9 @@ unavailable.
 from __future__ import annotations
 
 import base64
+import json
 import os
+from collections.abc import Iterable, Iterator
 from io import BytesIO
 from pathlib import Path
 
@@ -153,8 +155,34 @@ def render_search(health: dict) -> None:
         st.info("Type a scene description or upload an example image.")
 
 
+def iter_stream_events(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
+    """Yield (event, data) pairs from an SSE line stream (``requests.iter_lines()``
+    shape: decoded strings, one per line, no trailing newlines).
+
+    Pure and side-effect-free — no ``json.loads`` here. Per ``/chat/stream``'s
+    contract (see ``serving/app.py``'s ``chat_stream`` docstring): every event is
+    one ``event: <kind>`` line followed by one ``data: <payload>`` line, blank-line
+    terminated. Every payload is JSON except ``turn``'s (the literal empty string —
+    there is nothing to decode); ``token``/``error`` are each a JSON-encoded string
+    and ``step``/``final`` are JSON objects — all four must be ``json.loads``-ed by
+    the caller, and are handed back here verbatim, undecoded. Lines starting with
+    ``:`` (SSE comments/keepalives) and blank lines are skipped; a stray ``data:``
+    line with no preceding ``event:`` line is dropped rather than paired with a
+    placeholder kind.
+    """
+    kind: str | None = None
+    for line in lines:
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("event: "):
+            kind = line[len("event: ") :]
+        elif line.startswith("data: ") and kind is not None:
+            yield (kind, line[len("data: ") :])
+            kind = None
+
+
 def _render_chat_answer(body: dict) -> None:
-    """One assistant message: the answer, the agent's working, example frames."""
+    """One assistant message: the answer, the agent's working, charts, example frames."""
     st.markdown(body["answer"])
     if body.get("steps"):
         with st.expander(f"Agent steps ({len(body['steps'])})"):
@@ -165,6 +193,11 @@ def _render_chat_answer(body: dict) -> None:
                     st.code(step["input"]["sql"], language="sql")
                 elif detail:
                     st.caption(str(detail))
+    for chart in body.get("charts") or []:
+        st.caption(chart["title"])
+        frame_df = pd.DataFrame(chart["rows"], columns=chart["columns"])
+        frame_df = frame_df.set_index(chart["columns"][0])
+        (st.line_chart if chart["kind"] == "line" else st.bar_chart)(frame_df)
     if body.get("frames"):
         columns = st.columns(min(len(body["frames"]), 4))
         for i, frame in enumerate(body["frames"]):
@@ -200,20 +233,65 @@ def render_chat(health: dict) -> None:
     history = [
         {"role": m["role"], "content": m["content"]} for m in st.session_state["chat_messages"]
     ]
-    with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
-        try:
-            resp = requests.post(
-                f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600
-            )
-        except requests.RequestException as exc:
-            st.error(f"Chat request failed: {exc}")
-            return
-        if resp.status_code != 200:
-            detail = resp.json().get("detail", resp.text) if resp.text else resp.text
-            st.error(f"API returned {resp.status_code}: {detail}")
-            return
-        body = resp.json()
-        _render_chat_answer(body)
+
+    # Try the streaming endpoint first; ANY non-200 response (404 for an older API
+    # container without the route, or any other status) or a request exception
+    # (connection error, timeout, ...) falls back to the blocking /chat call below,
+    # unchanged.
+    stream_resp = None
+    try:
+        stream_resp = requests.post(
+            f"{API_URL}/chat/stream",
+            json={"message": question, "history": history},
+            stream=True,
+            timeout=600,
+        )
+    except requests.RequestException:
+        stream_resp = None
+
+    if stream_resp is not None and stream_resp.status_code == 200:
+        with stream_resp, st.chat_message("assistant"):
+            placeholder = st.empty()
+            buffer = ""
+            body: dict | None = None
+            for event, data in iter_stream_events(stream_resp.iter_lines(decode_unicode=True)):
+                if event == "turn":
+                    buffer = ""
+                elif event == "token":
+                    buffer += json.loads(data)
+                    placeholder.markdown(buffer)
+                elif event == "step":
+                    step = json.loads(data)
+                    placeholder.markdown(f"{buffer}\n\n· running `{step.get('tool', '?')}`…")
+                elif event == "final":
+                    body = json.loads(data)
+                    placeholder.empty()
+                    _render_chat_answer(body)
+                elif event == "error":
+                    placeholder.empty()
+                    st.error(json.loads(data))
+                    return
+            if body is None:
+                st.error("Chat stream ended without a final answer.")
+                return
+    else:
+        if stream_resp is not None:
+            stream_resp.close()
+        with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
+            st.caption("streaming unavailable — answered via /chat")
+            try:
+                resp = requests.post(
+                    f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600
+                )
+            except requests.RequestException as exc:
+                st.error(f"Chat request failed: {exc}")
+                return
+            if resp.status_code != 200:
+                detail = resp.json().get("detail", resp.text) if resp.text else resp.text
+                st.error(f"API returned {resp.status_code}: {detail}")
+                return
+            body = resp.json()
+            _render_chat_answer(body)
 
     st.session_state["chat_messages"] += [
         {"role": "user", "content": question},

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -88,8 +90,18 @@ class ChatStep(BaseModel):
     output: str = Field(description="Compact human-readable outcome summary.")
 
 
+class ChatChart(BaseModel):
+    """One chart the agent rendered from data it retrieved (via ``make_chart``)."""
+
+    kind: str = Field(description="'bar' or 'line'.")
+    title: str
+    columns: list[str]
+    rows: list[list[Any]]
+
+
 class ChatResponse(BaseModel):
-    """Response body for the ``/chat`` endpoint."""
+    """Response body for the ``/chat`` endpoint (and the ``final`` SSE event on
+    ``/chat/stream`` — the two are assembled by the same helper so they cannot drift)."""
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -98,4 +110,7 @@ class ChatResponse(BaseModel):
     steps: list[ChatStep] = Field(default_factory=list)
     frames: list[SearchResult] = Field(
         default_factory=list, description="Example frames the agent attached."
+    )
+    charts: list[ChatChart] = Field(
+        default_factory=list, description="Charts the agent rendered from retrieved data."
     )

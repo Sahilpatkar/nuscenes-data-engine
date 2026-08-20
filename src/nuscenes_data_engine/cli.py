@@ -477,6 +477,7 @@ def chat_eval(
         return
 
     transport = make_transport(settings, provider=provider, model=model)
+    engine: Any | None = None
     try:
         from nuscenes_data_engine.data_engine.search import SearchEngine
 
@@ -484,16 +485,24 @@ def chat_eval(
             Path(settings.search_lancedb_path), settings.search_table,
             settings.search_model_name, device=settings.search_device,
         )
+    except (ImportError, FileNotFoundError) as exc:
+        logger.warning("Vector search unavailable (%s) — SQL-only eval.", exc)
+    else:
+        engine = probe
         # Construction alone never touches the encoder (search_similar works without
         # it), so a missing torch previously surfaced only mid-eval, per case, inside
         # search_frames's own try/except, as a silent "search failed: ..." tool error
         # — every retrieval case degraded to SQL fallback with no warning that search
         # itself was unavailable. Probe it here so that degradation is up front instead.
-        probe.search_text("probe", k=1)
-        engine: Any | None = probe
-    except Exception as exc:
-        logger.warning("Vector search unavailable (%s) — SQL-only eval.", exc)
-        engine = None
+        # Only search_text is exercised — frames_by_tokens (show_frames) never touches
+        # the encoder, so a probe failure alone must not disable token-based attachment.
+        try:
+            probe.search_text("probe", k=1)
+        except Exception as exc:
+            logger.warning(
+                "Semantic search unavailable (%s) — token-based frame attachment "
+                "still works.", exc,
+            )
 
     # Resolved the same way make_transport resolves the model, not the raw CLI flag:
     # a flagless run under CHAT_PROVIDER=anthropic must not write results_default.jsonl

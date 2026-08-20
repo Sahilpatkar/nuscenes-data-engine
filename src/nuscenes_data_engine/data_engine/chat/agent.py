@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from nuscenes_data_engine.data_engine.chat import catalog
+from nuscenes_data_engine.data_engine.chat.transports import stream_with_fallback
 from nuscenes_data_engine.data_engine.graph import guard as graph_guard
 
 logger = logging.getLogger("nuscenes_data_engine")
@@ -35,6 +37,8 @@ dataset using your tools; never invent numbers.
 - When a question has concrete example frames (interesting rows with a
   sample_data_token, or search hits), call show_frames with up to 6 tokens so the
   user sees them; mention in the answer that examples are attached.
+- Use make_chart to visualize data you retrieved (call after run_sql; never with
+  invented numbers); charts render automatically — never embed image markdown.
 - Answer concisely with the actual numbers; note assumptions or data limitations.
 
 {schema}
@@ -85,7 +89,34 @@ TOOL_SPECS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_chart",
+            "description": "Render a chart from data you retrieved — call after "
+            "run_sql, never with invented numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["bar", "line"]},
+                    "title": {"type": "string"},
+                    "columns": {"type": "array", "items": {"type": "string"}},
+                    "rows": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {}},
+                        "description": "Row-major data; each row has one value per column.",
+                    },
+                },
+                "required": ["kind", "title", "columns", "rows"],
+            },
+        },
+    },
 ]
+
+# Guard: total chart cells (rows * columns) beyond this are rejected as model-visible
+# errors rather than silently truncated — keeps chart payloads small and forces the
+# model to aggregate instead of dumping raw rows.
+MAX_CHART_CELLS = 2000
 
 # Offered only when a graph driver is available (composed per call in ``answer``).
 GRAPH_TOOL_SPEC: dict[str, Any] = {
@@ -115,6 +146,18 @@ class ChatResult:
     model: str
     steps: list[dict[str, Any]] = field(default_factory=list)
     frames: list[dict[str, Any]] = field(default_factory=list)
+    charts: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _safe_callback(callback: Callable[..., None], *args: Any, label: str) -> None:
+    """Invoke a caller-supplied callback without letting it abort the turn or skip the
+    JSONL log — mirrors ``_log``'s own OSError containment: a side-channel failure
+    (here, UI-side callback code we don't control) must never cost the answer or the
+    every-interaction-logged promise in this module's docstring."""
+    try:
+        callback(*args)
+    except Exception as exc:
+        logger.warning("%s callback failed: %s", label, exc, exc_info=True)
 
 
 def _frame_meta(frame: dict[str, Any]) -> dict[str, Any]:
@@ -138,6 +181,9 @@ def answer(
     log_path: Path | None = None,
     graph_driver: Any | None = None,
     graph_database: str = "neo4j",
+    on_turn: Callable[[], None] | None = None,
+    on_token: Callable[[str], None] | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> ChatResult:
     """Run the tool loop for one question and return the answer + working."""
     started = time.time()
@@ -155,7 +201,13 @@ def answer(
     result = ChatResult(answer="", model=transport.model)
     seen_calls: set[str] = set()
     for _ in range(max_turns):
-        reply = transport.complete(messages, tools)
+        if on_turn:
+            _safe_callback(on_turn, label="on_turn")
+        reply = (
+            stream_with_fallback(transport, messages, tools, on_token=on_token)
+            if on_token
+            else transport.complete(messages, tools)
+        )
         tool_calls = reply.get("tool_calls") or []
         messages.append(
             {"role": "assistant", "content": reply.get("content"), "tool_calls": tool_calls}
@@ -188,7 +240,10 @@ def answer(
                         name, args, con, search_engine, result,
                         graph_driver=graph_driver, graph_database=graph_database,
                     )
-            result.steps.append({"tool": name, "input": args, "output": _summarize(output)})
+            step = {"tool": name, "input": args, "output": _summarize(output)}
+            result.steps.append(step)
+            if on_step:
+                _safe_callback(on_step, step, label="on_step")
             messages.append(
                 {
                     "role": "tool",
@@ -242,10 +297,77 @@ def _run_tool(
             _collect(result, frames)
             return {"results": [_frame_meta(frame) for frame in frames]}
         tokens = [str(token) for token in args.get("sample_data_tokens") or []][:MAX_FRAMES]
-        frames = search_engine.frames_by_tokens(tokens)
+        try:
+            frames = search_engine.frames_by_tokens(tokens)
+        except Exception as exc:  # store failures -> model-visible error, not a crash
+            return {"error": f"frame lookup failed: {exc}"}
         _collect(result, frames)
         return {"attached": [_frame_meta(frame) for frame in frames]}
+    if name == "make_chart":
+        return _make_chart(args, result)
     return {"error": f"Unknown tool: {name}"}
+
+
+def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
+    """Validate + collect one chart request; guards are model-visible so the model
+    can correct its own call rather than the answer silently losing the chart — and so
+    the Streamlit renderer (``pd.DataFrame(rows, columns=columns).set_index(columns[0])``)
+    never IndexErrors, silently collapses duplicate columns, or chokes on a
+    non-scalar x value or a non-numeric y value.
+
+    Deliberately reads ``columns``/``rows`` without an ``or []`` fallback: coercing a
+    falsy-but-present value (e.g. a stray ``0`` or ``null``) to ``[]`` would silently
+    hide a malformed call instead of surfacing it through the type check below.
+    """
+    kind = str(args.get("kind", ""))
+    if kind not in ("bar", "line"):
+        return {"error": f"Unknown chart kind {kind!r}: expected 'bar' or 'line'."}
+    title = str(args.get("title", ""))
+    columns = args.get("columns")
+    rows = args.get("rows")
+    if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
+        return {"error": "columns must be a list of strings."}
+    if len(columns) < 2:
+        return {
+            "error": f"columns needs at least 2 entries (one x-axis, one y-series); "
+            f"got {len(columns)}."
+        }
+    if len(set(columns)) != len(columns):
+        return {
+            "error": f"columns must be unique — duplicate names make "
+            f"set_index ambiguous and can silently empty the chart: {columns!r}."
+        }
+    if not isinstance(rows, list):
+        return {"error": "rows must be a list of rows."}
+    if len(rows) < 1:
+        return {"error": "rows must not be empty."}
+    if any(not isinstance(row, list) or len(row) != len(columns) for row in rows):
+        return {"error": f"Every row must have exactly {len(columns)} cells (one per column)."}
+    for row in rows:
+        x_value = row[0]
+        if isinstance(x_value, bool) or not isinstance(x_value, str | int | float):
+            return {
+                "error": f"Chart x-values (first cell of each row) must be a string, "
+                f"int, or float; got {x_value!r} in row {row!r}."
+            }
+        for value in row[1:]:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                return {
+                    "error": f"Chart y-values must be numeric; got {value!r} in row {row!r}."
+                }
+    total_cells = len(rows) * len(columns)
+    if total_cells > MAX_CHART_CELLS:
+        return {
+            "error": f"Chart has {total_cells} cells, over the {MAX_CHART_CELLS} limit — "
+            "aggregate the data further before charting."
+        }
+    result.charts.append({"kind": kind, "title": title, "columns": columns, "rows": rows})
+    return {
+        "charted": True,
+        "title": title,
+        "note": "Displayed to the user automatically — do not embed an image or link "
+        "in your answer.",
+    }
 
 
 def _collect(result: ChatResult, frames: list[dict[str, Any]]) -> None:
@@ -268,6 +390,8 @@ def _summarize(output: dict[str, Any]) -> str:
         return f"{len(output['results'])} frames found"
     if "attached" in output:
         return f"{len(output['attached'])} frames attached"
+    if "charted" in output:
+        return f"charted: {output['title']}"
     return "ok"
 
 
@@ -283,6 +407,7 @@ def _log(log_path: Path | None, question: str, result: ChatResult, latency: floa
             "model": result.model,
             "steps": result.steps,
             "n_frames": len(result.frames),
+            "n_charts": len(result.charts),
             "answer": result.answer,
             "latency_s": round(latency, 2),
         }
