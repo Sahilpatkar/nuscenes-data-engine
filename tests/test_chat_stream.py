@@ -268,7 +268,12 @@ def test_make_chart_appends_to_result(con: Any) -> None:
         "make_chart", _chart_args(), con=con, search_engine=None,
         result=result, graph_driver=None, graph_database="neo4j",
     )
-    assert output == {"charted": True, "title": "Night scenes per location"}
+    assert output == {
+        "charted": True,
+        "title": "Night scenes per location",
+        "note": "Displayed to the user automatically — do not embed an image or link "
+        "in your answer.",
+    }
     assert len(result.charts) == 1
     assert result.charts[0]["kind"] == "bar"
 
@@ -499,13 +504,32 @@ def test_make_chart_shape_guards_reject_bad_data(con: Any) -> None:
     )
     assert "error" in none_cell and "None" in none_cell["error"]
 
+    duplicate_columns = agent._run_tool(
+        "make_chart",
+        _chart_args(columns=["location", "location"], rows=[["boston", 1]]),
+        con=con, search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in duplicate_columns and "unique" in duplicate_columns["error"]
+
+    non_scalar_x = agent._run_tool(
+        "make_chart",
+        _chart_args(rows=[[["nested"], 1], ["singapore", 5]]),
+        con=con, search_engine=None, result=result, graph_driver=None, graph_database="neo4j",
+    )
+    assert "error" in non_scalar_x and "x-values" in non_scalar_x["error"]
+
     assert result.charts == []  # none of the bad calls appended
 
     valid = agent._run_tool(
         "make_chart", _chart_args(), con=con, search_engine=None,
         result=result, graph_driver=None, graph_database="neo4j",
     )
-    assert valid == {"charted": True, "title": "Night scenes per location"}
+    assert valid == {
+        "charted": True,
+        "title": "Night scenes per location",
+        "note": "Displayed to the user automatically — do not embed an image or link "
+        "in your answer.",
+    }
     assert len(result.charts) == 1
 
 

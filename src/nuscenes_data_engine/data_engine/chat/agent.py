@@ -38,7 +38,7 @@ dataset using your tools; never invent numbers.
   sample_data_token, or search hits), call show_frames with up to 6 tokens so the
   user sees them; mention in the answer that examples are attached.
 - Use make_chart to visualize data you retrieved (call after run_sql; never with
-  invented numbers).
+  invented numbers); charts render automatically — never embed image markdown.
 - Answer concisely with the actual numbers; note assumptions or data limitations.
 
 {schema}
@@ -312,7 +312,8 @@ def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
     """Validate + collect one chart request; guards are model-visible so the model
     can correct its own call rather than the answer silently losing the chart — and so
     the Streamlit renderer (``pd.DataFrame(rows, columns=columns).set_index(columns[0])``)
-    never IndexErrors or chokes on a non-numeric y value.
+    never IndexErrors, silently collapses duplicate columns, or chokes on a
+    non-scalar x value or a non-numeric y value.
 
     Deliberately reads ``columns``/``rows`` without an ``or []`` fallback: coercing a
     falsy-but-present value (e.g. a stray ``0`` or ``null``) to ``[]`` would silently
@@ -331,6 +332,11 @@ def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
             "error": f"columns needs at least 2 entries (one x-axis, one y-series); "
             f"got {len(columns)}."
         }
+    if len(set(columns)) != len(columns):
+        return {
+            "error": f"columns must be unique — duplicate names make "
+            f"set_index ambiguous and can silently empty the chart: {columns!r}."
+        }
     if not isinstance(rows, list):
         return {"error": "rows must be a list of rows."}
     if len(rows) < 1:
@@ -338,6 +344,12 @@ def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
     if any(not isinstance(row, list) or len(row) != len(columns) for row in rows):
         return {"error": f"Every row must have exactly {len(columns)} cells (one per column)."}
     for row in rows:
+        x_value = row[0]
+        if isinstance(x_value, bool) or not isinstance(x_value, str | int | float):
+            return {
+                "error": f"Chart x-values (first cell of each row) must be a string, "
+                f"int, or float; got {x_value!r} in row {row!r}."
+            }
         for value in row[1:]:
             if isinstance(value, bool) or not isinstance(value, int | float):
                 return {
@@ -350,7 +362,12 @@ def _make_chart(args: dict[str, Any], result: ChatResult) -> dict[str, Any]:
             "aggregate the data further before charting."
         }
     result.charts.append({"kind": kind, "title": title, "columns": columns, "rows": rows})
-    return {"charted": True, "title": title}
+    return {
+        "charted": True,
+        "title": title,
+        "note": "Displayed to the user automatically — do not embed an image or link "
+        "in your answer.",
+    }
 
 
 def _collect(result: ChatResult, frames: list[dict[str, Any]]) -> None:

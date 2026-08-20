@@ -357,6 +357,17 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     it is a sync generator) drains that queue and yields one SSE frame per item.
     A ``None`` sentinel marks end-of-stream.
 
+    A client disconnect mid-stream does not stop the worker: the generator simply
+    stops being iterated, but the background thread is a plain daemon thread, not
+    something the disconnect can cancel — it keeps running ``agent.answer`` to
+    completion (bounded by ``MAX_TURNS``/the tool loop, so it always finishes) and
+    keeps calling ``events.put(...)`` into a queue nobody is draining anymore. This
+    is a bounded, self-clearing condition, not a leak: the worker's total puts are
+    capped by the same loop bounds as any other run, and the abandoned queue (plus
+    its unread items) becomes eligible for garbage collection once the worker
+    thread exits — there is no unbounded growth or thread pile-up across repeated
+    disconnects.
+
     If ``agent.answer`` itself raises, the thread has no other way to report the
     failure: the HTTP response — and its 200 status — was already sent with the
     first byte of the stream, so a 500 status is no longer possible. The failure
@@ -367,17 +378,22 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     serve` running?"), anything else becomes a generic message so an unexpected
     internal exception can never leak its text to the client.
 
-    Payload encoding: every ``data:`` payload is a JSON value, so clients can
-    ``json.loads`` each one uniformly — ``step``/``final`` are JSON objects,
-    and ``token`` is a JSON-encoded string (``json.dumps(delta)``). The token
-    encoding matters beyond consistency: a raw token delta routinely contains
-    embedded newlines (markdown answers are full of them), and SSE framing is
+    Payload encoding: every ``data:`` payload is a JSON value except ``turn``'s
+    (the literal empty string — there is nothing to decode), so clients can
+    ``json.loads`` all the others uniformly — ``step``/``final`` are JSON objects,
+    and ``token``/``error`` are each a JSON-encoded string (``json.dumps(delta)``,
+    ``json.dumps(message)``). The string encoding matters beyond consistency: a raw
+    token delta routinely contains embedded newlines (markdown answers are full of
+    them), and so, less obviously, can an error message — ``httpx.HTTPStatusError``
+    renders as two lines by construction (a "Client error ... for url ..." sentence,
+    a newline, then a "For more information check: ..." sentence), and
+    ``TransportError`` wraps that text verbatim. SSE framing is
     one event per blank-line-terminated block of `field: value` lines — an
     un-escaped ``\n`` inside a bare ``data: <delta>`` line would split into a
     second, un-prefixed line that a line-based SSE parser (browsers'
     ``EventSource`` included) silently drops instead of treating as part of the
-    payload. JSON-encoding escapes it onto one line. ``turn``'s payload is the
-    literal empty string, not JSON — there is nothing to decode.
+    payload, truncating the message the client shows. JSON-encoding escapes it onto
+    one line.
     """
     from nuscenes_data_engine.data_engine.chat import agent
     from nuscenes_data_engine.data_engine.chat.transports import TransportError, make_transport
@@ -422,7 +438,7 @@ def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
                     if isinstance(exc, TransportError)
                     else "internal error — see server logs"
                 )
-                events.put(("error", message))
+                events.put(("error", json.dumps(message)))
             finally:
                 events.put(None)
 

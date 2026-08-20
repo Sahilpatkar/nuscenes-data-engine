@@ -62,7 +62,7 @@ raw nuScenes  ───►  │ flatten + 3D→2D projection → Parquet        
  evaluation (3)              └─ 6d active learning: mine → retrain
  sliced mAP + gate
       ▼
- registry (MLflow) ──► serving (4): FastAPI /predict /search /chat ──► Streamlit demo
+ registry (MLflow) ──► serving (4): FastAPI /predict /search /chat /chat/stream ──► Streamlit demo
                             │
                             └─► monitoring (5): request capture → Evidently drift
 ```

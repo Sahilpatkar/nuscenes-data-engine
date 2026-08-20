@@ -162,12 +162,12 @@ def iter_stream_events(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
     Pure and side-effect-free — no ``json.loads`` here. Per ``/chat/stream``'s
     contract (see ``serving/app.py``'s ``chat_stream`` docstring): every event is
     one ``event: <kind>`` line followed by one ``data: <payload>`` line, blank-line
-    terminated. ``token``/``step``/``final`` payloads are JSON (an encoded string
-    for ``token``, objects for ``step``/``final``) and must be ``json.loads``-ed by
-    the caller; ``turn`` is the literal empty string and ``error`` is plain text —
-    both are also handed back verbatim, undecoded. Lines starting with ``:``
-    (SSE comments/keepalives) and blank lines are skipped; a stray ``data:`` line
-    with no preceding ``event:`` line is dropped rather than paired with a
+    terminated. Every payload is JSON except ``turn``'s (the literal empty string —
+    there is nothing to decode); ``token``/``error`` are each a JSON-encoded string
+    and ``step``/``final`` are JSON objects — all four must be ``json.loads``-ed by
+    the caller, and are handed back here verbatim, undecoded. Lines starting with
+    ``:`` (SSE comments/keepalives) and blank lines are skipped; a stray ``data:``
+    line with no preceding ``event:`` line is dropped rather than paired with a
     placeholder kind.
     """
     kind: str | None = None
@@ -234,8 +234,10 @@ def render_chat(health: dict) -> None:
         {"role": m["role"], "content": m["content"]} for m in st.session_state["chat_messages"]
     ]
 
-    # Try the streaming endpoint first; a 404 (older API container) or a connection
-    # error falls back to the blocking /chat call below, unchanged.
+    # Try the streaming endpoint first; ANY non-200 response (404 for an older API
+    # container without the route, or any other status) or a request exception
+    # (connection error, timeout, ...) falls back to the blocking /chat call below,
+    # unchanged.
     stream_resp = None
     try:
         stream_resp = requests.post(
@@ -248,7 +250,7 @@ def render_chat(health: dict) -> None:
         stream_resp = None
 
     if stream_resp is not None and stream_resp.status_code == 200:
-        with st.chat_message("assistant"):
+        with stream_resp, st.chat_message("assistant"):
             placeholder = st.empty()
             buffer = ""
             body: dict | None = None
@@ -267,7 +269,7 @@ def render_chat(health: dict) -> None:
                     _render_chat_answer(body)
                 elif event == "error":
                     placeholder.empty()
-                    st.error(data)
+                    st.error(json.loads(data))
                     return
             if body is None:
                 st.error("Chat stream ended without a final answer.")
@@ -276,6 +278,7 @@ def render_chat(health: dict) -> None:
         if stream_resp is not None:
             stream_resp.close()
         with st.chat_message("assistant"), st.spinner("Querying the dataset…"):
+            st.caption("streaming unavailable — answered via /chat")
             try:
                 resp = requests.post(
                     f"{API_URL}/chat", json={"message": question, "history": history}, timeout=600

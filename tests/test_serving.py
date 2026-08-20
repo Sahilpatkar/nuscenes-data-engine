@@ -350,6 +350,27 @@ class _RaisingStreamTransport:
         raise TransportError("connection refused — is `ollama serve` running?")
 
 
+class _MultilineTransportErrorTransport:
+    """A transport whose TransportError message spans two lines, the way
+    httpx.HTTPStatusError's own message does BY CONSTRUCTION ("...for url
+    '...'\\nFor more information check: ..."), which OpenAICompatTransport wraps
+    verbatim. Regression fixture for the error payload's JSON-encoding: a
+    line-based SSE parser must not truncate the message — and drop the trailing
+    "is `ollama serve` running?" hint — at the embedded newline."""
+
+    model = "fake-model"
+
+    MESSAGE = (
+        "Chat model at http://localhost:11434/v1 unavailable (Client error '404 Not "
+        "Found' for url 'http://localhost:11434/v1/chat/completions'\n"
+        "For more information check: https://developer.mozilla.org/en-US/docs/Web/"
+        "HTTP/Status/404). Is the local model server (e.g. `ollama serve`) running?"
+    )
+
+    def complete_stream(self, messages: Any, tools: Any, on_token: Any) -> dict[str, Any]:
+        raise TransportError(self.MESSAGE)
+
+
 class _CrashingStreamTransport:
     """A transport whose complete_stream fails with a non-TransportError, for the
     generic-error-message + server-side-logging test (worker exceptions that are
@@ -451,7 +472,34 @@ class TestChatStream:
         kinds = [kind for kind, _payload in events]
         assert kinds[-1] == "error"
         error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
-        assert "ollama serve" in error_payload
+        assert "ollama serve" in json.loads(error_payload)
+
+    def test_error_event_payload_is_json_encoded_for_multiline_messages(
+        self, chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The error payload is JSON-encoded (json.dumps(message)) for the same
+        newline-safety reason token payloads are: a TransportError's message can
+        itself contain an embedded newline (httpx.HTTPStatusError's message is
+        two-line by construction), and an un-escaped newline in a bare `data:` line
+        would split into a second, un-prefixed line that a line-based SSE parser
+        silently drops — truncating exactly the "is `ollama serve` running?" hint
+        at the end of this fixture's message."""
+        transport = _MultilineTransportErrorTransport()
+        _patch_transport(monkeypatch, transport)
+        with chat_client.stream(
+            "POST", "/chat/stream", json={"message": "q", "history": []}
+        ) as response:
+            assert response.status_code == 200
+            events = _parse_sse(response.iter_lines())
+        kinds = [kind for kind, _payload in events]
+        assert kinds[-1] == "error"
+        # Framing survives: exactly one error event, not split into stray lines.
+        assert kinds.count("error") == 1
+        error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
+        decoded = json.loads(error_payload)
+        assert decoded == transport.MESSAGE
+        assert "\n" in decoded
+        assert decoded.endswith("Is the local model server (e.g. `ollama serve`) running?")
 
     def test_error_event_generic_message_on_non_transport_exception(
         self,
@@ -472,7 +520,7 @@ class TestChatStream:
         kinds = [kind for kind, _payload in events]
         assert kinds[-1] == "error"
         error_payload = next(payload for kind, payload in reversed(events) if kind == "error")
-        assert error_payload == "internal error — see server logs"
+        assert json.loads(error_payload) == "internal error — see server logs"
         assert "boom: unexpected crash" not in error_payload
         assert "chat_stream worker failed" in caplog.text
         assert "boom: unexpected crash" in caplog.text  # traceback captured server-side

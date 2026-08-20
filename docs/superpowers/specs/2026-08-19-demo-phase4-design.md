@@ -77,6 +77,18 @@ the `final` event's body feeds the existing `_render_chat_answer` and session-st
 `turn`-reset semantics require exactly that (interim narration is replaced when a
 new turn starts). Same UX intent, retractable mechanism.
 
+**Amendment (2026-08-20, final review):** clarifying the "Protocol gains
+`complete_stream`" line above — the `ChatTransport` Protocol itself is deliberately
+**not** widened with a `complete_stream` method. The implementation adds a module
+function, `stream_with_fallback`, that does `getattr(transport, "complete_stream",
+None)` at the call site instead of requiring the method on every transport. This is
+what lets every existing test fake that implements only `complete` (e.g.
+`tests/test_chat.py`'s `ScriptedTransport`) keep working completely unmodified —
+itself part of this phase's frozen-shape proof, not an incidental convenience.
+`OpenAICompatTransport`/`AnthropicTransport` gain `complete_stream` as an
+implementation detail of those two concrete classes, never as a Protocol
+requirement.
+
 ## 3. Charts
 
 - New always-offered tool `make_chart` in `TOOL_SPECS`: the model calls it with

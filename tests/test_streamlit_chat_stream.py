@@ -66,13 +66,17 @@ def test_iter_stream_events_skips_blank_and_comment_lines() -> None:
     assert events == [("turn", "")]
 
 
-def test_iter_stream_events_error_payload_is_plain_text_not_json() -> None:
-    """error payloads are NOT JSON-encoded on the server side (see chat_stream's
-    docstring) — the function still yields it verbatim; the client passes it
-    straight to st.error without a json.loads."""
-    lines = ["event: error", "data: internal error — see server logs", ""]
+def test_iter_stream_events_error_payload_stays_a_verbatim_json_string() -> None:
+    """error payloads ARE JSON-encoded on the server side (json.dumps(message)) —
+    same as token, and for the same reason: a TransportError's message can itself
+    contain an embedded newline (httpx.HTTPStatusError's is two-line by
+    construction), which would otherwise split into a stray, un-prefixed line and
+    truncate the message. The function still does no decoding itself; the caller
+    (render_chat) is responsible for json.loads before passing it to st.error."""
+    lines = ["event: error", 'data: "internal error \\u2014 see server logs"', ""]
     events = list(iter_stream_events(lines))
-    assert events == [("error", "internal error — see server logs")]
+    assert events == [("error", '"internal error \\u2014 see server logs"')]
+    assert json.loads(events[0][1]) == "internal error — see server logs"
 
 
 def test_iter_stream_events_ignores_a_data_line_with_no_preceding_event() -> None:

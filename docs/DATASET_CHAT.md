@@ -107,17 +107,22 @@ see `serving/app.py`'s `chat_stream` docstring for the authoritative version):
 | `token` | a JSON-encoded string (`json.dumps(delta)`) | one text delta of the *current* turn |
 | `step` | a JSON object | one tool call finished (same shape as one entry of `ChatResult.steps`) |
 | `final` | a JSON object | the complete response — identical shape to `/chat`'s body (`answer`, `model`, `steps`, `frames`, `charts`), assembled by the same helper so the two can't drift |
-| `error` | plain text (not JSON) | the run failed after streaming had already started (`200` was already sent, so this is the only way to signal failure) |
+| `error` | a JSON-encoded string (`json.dumps(message)`) | the run failed after streaming had already started (`200` was already sent, so this is the only way to signal failure) |
 
-`token` is JSON-encoded specifically because a raw delta routinely contains an
-embedded newline (markdown answers are full of them), and SSE frames one event per
-blank-line-terminated block — an unescaped `\n` inside a bare `data:` line would
-split into a second, un-prefixed line that a line-based parser silently drops.
-`error`'s payload is either the underlying `TransportError`'s message (already a
-curated, no-secrets string, e.g. "connection refused — is `ollama serve` running?")
-or a generic `"internal error — see server logs"` for anything else, mirroring
-`/chat`'s own split so an unexpected internal exception's text can never reach the
-client; the full traceback is always logged server-side first.
+`token` and `error` are JSON-encoded (everything is, except `turn`'s literal empty
+string) because a raw payload routinely contains an embedded newline — markdown
+answers are full of them for `token`, and, less obviously, so is `error`:
+`httpx.HTTPStatusError` renders as two lines by construction ("...for url
+'...'\nFor more information check: ...") and `TransportError` wraps that text
+verbatim. SSE frames one event per blank-line-terminated block — an unescaped `\n`
+inside a bare `data:` line would split into a second, un-prefixed line that a
+line-based parser silently drops, truncating the message the client shows (and, for
+`error`, dropping exactly the "is `ollama serve` running?" hint at the end).
+`error`'s decoded message is either the underlying `TransportError`'s text (already
+a curated, no-secrets string) or a generic `"internal error — see server logs"` for
+anything else, mirroring `/chat`'s own split so an unexpected internal exception's
+text can never reach the client; the full traceback is always logged server-side
+first.
 
 **No turn is known to be final in advance** — the model decides by not calling a
 tool — so every turn's text streams to `token`, including turns that turn out to be
@@ -141,11 +146,14 @@ The `final` event clears the placeholder and renders through the same
 below), then appends `{role, content, body}` to session state exactly as the
 pre-streaming code did, so replaying history after a page rerun is unaffected.
 
-**Fallback:** a `404` from `/chat/stream` (an older API container without the new
-route) or a connection error while making that first request falls back to the
-original blocking `POST /chat` call, unchanged — so an older serving image, or a
-one-off connection hiccup, degrades to the pre-streaming UX instead of breaking the
-tab.
+**Fallback:** any non-`200` response from `/chat/stream` (a `404` from an older API
+container without the new route, a `503` from a resource getter, or anything else)
+or a request exception (connection error, timeout, ...) while making that first
+request falls back to the original blocking `POST /chat` call, unchanged — so an
+older serving image, a transient hiccup, or a genuine backend error all degrade to
+the pre-streaming UX instead of breaking the tab. The UI surfaces the degradation
+rather than silently eating it: a `st.caption("streaming unavailable — answered via
+/chat")` is shown whenever the fallback engages.
 
 ## Charts
 
@@ -159,7 +167,10 @@ disappearing:
 
 - `kind` must be `"bar"` or `"line"`.
 - `columns` must be a list of at least 2 strings (one x-axis, at least one y-series).
+- `columns` must be unique — duplicate names make `pandas.DataFrame.set_index`
+  ambiguous, which can silently empty the chart instead of raising.
 - `rows` must be a non-empty list of lists, each exactly `len(columns)` cells.
+- every row's x-value (the first cell) must be a string, int, or float, not a bool.
 - every y-value (every cell after the first in a row) must be numeric, not a bool.
 - total cells (`rows × columns`) are capped at 2000 — over the cap is rejected
   outright (asking the model to aggregate further), never silently truncated.
@@ -170,7 +181,12 @@ through `ChatResponse.charts` (`ChatChart`: `kind`, `title`, `columns`, `rows`).
 Streamlit renders each chart between the agent-steps expander and the example
 frames: `st.caption(title)` then `st.bar_chart`/`st.line_chart` over
 `pd.DataFrame(rows, columns=columns).set_index(columns[0])` (the first column
-becomes the x-axis).
+becomes the x-axis). The tool's success reply also carries a `note` telling the
+model the chart is displayed automatically and it should not embed an image or
+link in its prose answer — added after a live run showed `qwen2.5:32b` inventing a
+broken `![](charted)` markdown image once nothing told it not to; the same
+instruction is now also a `SYSTEM_PROMPT` bullet, so the guardrail doesn't depend
+on the model reading the tool's return value.
 
 **"From retrieved data" is a prompt policy, not an enforced guarantee.** The guards
 above validate a chart's *shape* — kind, column count, row length, cell count — not
