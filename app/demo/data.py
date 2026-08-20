@@ -57,6 +57,32 @@ def load_predictions() -> pd.DataFrame:
     return pd.read_parquet(DEMO_DATA / "predictions.parquet")
 
 
+@st.cache_data
+def load_events() -> pd.DataFrame:
+    return pd.read_parquet(DEMO_DATA / "scenario_events.parquet")
+
+
+# semsearch's schema (build.py's _include_semsearch / exporters.export_semsearch):
+# query, rank, sample_data_token, score.
+_EMPTY_SEMSEARCH_COLUMNS = ["query", "rank", "sample_data_token", "score"]
+
+
+@st.cache_data
+def load_semsearch() -> pd.DataFrame:
+    """The recorded semantic-search gallery, or an empty frame when absent.
+
+    `demo build` ships without `semantic_search_results.parquet` when `demo
+    semsearch` hasn't been run (manifest.json's validation.semsearch == "absent" --
+    mirrors curation's own honest-absence handling, build.py::_include_semsearch) --
+    a fresh clone or a torch-free machine must still render this page, just with an
+    empty gallery section rather than a crash.
+    """
+    path = DEMO_DATA / "semantic_search_results.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_SEMSEARCH_COLUMNS)
+    return pd.read_parquet(path)
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 

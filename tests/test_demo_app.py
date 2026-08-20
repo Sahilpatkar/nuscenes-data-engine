@@ -69,21 +69,37 @@ def built_demo_data(tmp_path: Path) -> Path:
     al.mkdir()
     pd.DataFrame(
         {
-            "sample_data_token": ["s1", "s2", "s3"],
+            "sample_data_token": ["s1", "v1", "s3"],
             # Phase 5: demo/events.py::build_events reads samples.parquet too
             # (CAM_FRONT-filtered, joined to canbus/ego_pose by sample_token) --
-            # s1/s2 double as their own sample_token here (this fixture's tiny
+            # s1/v1 double as their own sample_token here (this fixture's tiny
             # scale never needs the real per-channel token distinction) and are
             # CAM_FRONT so build_events sees exactly canbus/ego_pose's covered set
             # (2 rows, both already present below); s3 is a different channel so
             # it's invisible to build_events without needing a matching canbus/
             # ego_pose row of its own.
-            "sample_token": ["s1", "s2", "s3"],
+            #
+            # Task 3 (Scenario Search page): the second CAM_FRONT token is
+            # deliberately "v1" -- the SAME token already staged below as a
+            # curated val frame (frame_manifest split="val") -- rather than a
+            # fresh "s2", so build_events's in_curated_set actually has overlap to
+            # find: a real curated token that also has processed-table dynamics
+            # features, exactly as in the real pipeline (curated tokens ARE
+            # CAM_FRONT sample_data_tokens). This keeps the total samples.parquet
+            # row count at 3 (test_overview_page_renders_from_a_built_package's
+            # "Camera keyframes" == "3" is unaffected) while giving the Scenario
+            # Search page fixture one curated event (v1) and one non-curated event
+            # (s1, see canbus/annotations_3d below).
+            "sample_token": ["s1", "v1", "s3"],
             "channel": ["CAM_FRONT", "CAM_FRONT", "CAM_BACK"],
             "scene_token": ["sceneX", "sceneX", "sceneX"],
             "scene_name": ["scene-X", "scene-X", "scene-X"],
             "timestamp": [1000, 1001, 1002],
-            "is_night": [False, False, False],
+            # v1 is_night=True (+ its own near pedestrian, added to
+            # annotations_3d below) tags it "night_pedestrians" -- a dynamics
+            # preset distinct from s1's flagship tag, so the two Task-3 fixture
+            # events aren't both flagship rows.
+            "is_night": [False, True, False],
             "is_rain": [False, False, False],
         }
     ).to_parquet(processed / "samples.parquet")
@@ -92,19 +108,27 @@ def built_demo_data(tmp_path: Path) -> Path:
         {
             # annotation_token: required since Task 1 (Phase 3) -- gt_boxes.parquet
             # (staged below) is joined onto this table by annotation_token to add
-            # distance_to_ego_m; f1..f3 are otherwise unused by the flagship SQL.
-            "annotation_token": ["f1", "f2", "f3"],
-            "sample_token": ["s1", "s1", "s2"],
-            "category_group": ["pedestrian", "pedestrian", "car"],
-            "distance_to_ego_m": [5.0, 20.0, 3.0],
+            # distance_to_ego_m; f1..f4 are otherwise unused by the flagship SQL.
+            # f4: a pedestrian at 7m for v1 -- Task 3's "night_pedestrians" tag
+            # (is_night & min_dist_pedestrian_m < near_dist_m) needs a real near
+            # pedestrian on v1, distinct from s1's own (f1/f2).
+            "annotation_token": ["f1", "f2", "f3", "f4"],
+            "sample_token": ["s1", "s1", "v1", "v1"],
+            "category_group": ["pedestrian", "pedestrian", "car", "pedestrian"],
+            "distance_to_ego_m": [5.0, 20.0, 3.0, 7.0],
         }
     ).to_parquet(processed / "annotations_3d.parquet")
     pd.DataFrame(
         {
-            "sample_token": ["s1", "s2"],
+            "sample_token": ["s1", "v1"],
             "has_canbus": [True, True],
             "can_vel_mps": [10.0, 5.0],
             "can_speed_kmh": [36.0, 18.0],
+            # v1 is deliberately NOT hard-braking -- it must tag only
+            # night_pedestrians, not also the flagship hard_braking_near_
+            # pedestrians preset (that would make both fixture events flagship
+            # rows, defeating the "one curated, one not" / "one flagship, one
+            # not" split Task 3's page tests rely on).
             "is_hard_braking": [True, False],
             # Phase 5: demo/events.py::build_events also reads accel_long_min_mps2
             # (the flagship preset's severity key) -- s1's magnitude is deliberately
@@ -112,7 +136,7 @@ def built_demo_data(tmp_path: Path) -> Path:
             "accel_long_min_mps2": [-7.5, -0.5],
         }
     ).to_parquet(processed / "canbus.parquet")
-    pd.DataFrame({"sample_token": ["s1", "s2"], "speed_mps": [10.1, 4.9]}).to_parquet(
+    pd.DataFrame({"sample_token": ["s1", "v1"], "speed_mps": [10.1, 4.9]}).to_parquet(
         processed / "ego_pose.parquet"
     )
     (al / "results.json").write_text(
@@ -229,6 +253,20 @@ def built_demo_data(tmp_path: Path) -> Path:
     Image.new("RGB", (2, 2), color=(60, 60, 60)).save(v1_bytes, format="JPEG")
     (staging / "crops" / "v1.jpg").write_bytes(v1_bytes.getvalue())
 
+    # Task 3 (Scenario Search page): a tiny staged semantic-search result so
+    # build.py::_include_semsearch has something to copy (`demo semsearch` itself
+    # is torch-local and not exercised here -- this stages its OUTPUT directly,
+    # same idea as staging curation's parquets above instead of running `demo
+    # curate`/`demo infer`). Two rows across two distinct queries -- the page
+    # groups the gallery by query, so a single-query fixture would leave that
+    # grouping untested. Both tokens ("v1", "v0") already get thumbs (below).
+    pd.DataFrame({
+        "query": ["crowded nighttime pedestrian crossing", "foggy road with heavy lens glare"],
+        "rank": [1, 1],
+        "sample_data_token": ["v1", "v0"],
+        "score": [0.91, 0.77],
+    }).to_parquet(staging / "semantic_search_results.parquet")
+
     out = tmp_path / "demo_data"
     config = {
         "paths": {
@@ -268,6 +306,17 @@ def built_demo_data(tmp_path: Path) -> Path:
     thumb_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(80, 80, 80)).save(thumb_bytes, format="JPEG")
     (thumbs_dir / "v0.jpg").write_bytes(thumb_bytes.getvalue())
+
+    # Task 3 (Scenario Search page): thumbs for both scenario_events tokens ("s1"
+    # the non-curated flagship event, "v1" the curated night_pedestrians event --
+    # each is also the other's only filmstrip neighbor, scene sceneX's two
+    # CAM_FRONT keyframes). Same skip-then-write-directly rationale as v0.jpg
+    # above -- _include_events's own thumbnail export skips (no LanceDB store
+    # staged here), so the filmstrip/card-grid images are written by hand.
+    for token, color in (("s1", (40, 40, 40)), ("v1", (200, 200, 200))):
+        buf = io.BytesIO()
+        Image.new("RGB", (2, 2), color=color).save(buf, format="JPEG")
+        (thumbs_dir / f"{token}.jpg").write_bytes(buf.getvalue())
 
     return out
 
@@ -411,3 +460,151 @@ def test_overview_hero_renders_overlay(
     # (or a wrong caption) fails loudly instead of silently matching either path.
     hero_captions = [caption for img in at.image for caption in img.captions]
     assert any("defeats all three models" in caption for caption in hero_captions)
+
+
+# --- Scenario Search page (Task 3, Phase 5) -----------------------------------------
+#
+# built_demo_data's scenario_events.parquet ends up with exactly two events (see the
+# fixture's Task-3 comments on the samples/canbus/annotations_3d blocks above):
+#   - "s1": hard_braking_near_pedestrians (the flagship preset) -- NOT in the curated
+#     val set, and its only filmstrip neighbor is v1 at t_plus1 (scene sceneX's other
+#     CAM_FRONT keyframe).
+#   - "v1": night_pedestrians -- IS in the curated val set (frame_manifest split=val),
+#     with a real crop (copied by _include_curation) but zero GT boxes and two
+#     baseline false-positive predictions staged. Its only filmstrip neighbor is s1 at
+#     t_minus1.
+# The staged semantic_search_results.parquet carries two distinct queries, one hit
+# each ("v1", "v0").
+
+PRESETS_UNDER_TEST = (
+    "hard_braking_near_pedestrians", "night_pedestrians", "fast_cyclists",
+    "rain_vru", "fn_pedestrians_night", "low_conf_braking",
+)
+
+
+def _scenarios_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    at.switch_page("views/scenarios.py").run(timeout=30)
+    return at
+
+
+def test_scenario_preset_buttons_and_card_grid(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a) All six preset buttons render; selecting one shows the family's
+    scope caption and that preset's ranked event cards."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    for name in PRESETS_UNDER_TEST:
+        assert at.button(key=f"scenario_preset_{name}")   # all six buttons present
+
+    at.button(key="scenario_preset_night_pedestrians").click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["scenario_preset"] == "night_pedestrians"
+    # Dynamics-family scope caption -- the fixture's night_pedestrians event ("v1")
+    # comes from the dataset-wide dynamics family, not the curated-val model family.
+    assert any("Dataset-wide" in str(c.value) for c in at.caption)
+    assert at.button(key="scenario_select_v1")   # the one ranked card for this preset
+
+
+def test_scenario_event_viewer_curated_vs_not_curated(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b) Selecting an event renders the viewer: crop+overlay for the curated
+    event ("v1"), thumb + the honest "not in the curated prediction set" caption
+    for the non-curated one ("s1")."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.session_state["scenario_token"] = "v1"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.image) >= 1   # crop+draw_overlay rendered without raising
+    assert not any("not in the curated prediction set" in str(c.value) for c in at.caption)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+    assert any(
+        "not in the curated prediction set" in str(c.value) for c in at.caption
+    )
+
+
+def test_scenario_filmstrip_slider_changes_readout(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(c) The filmstrip select_slider changes the displayed speed/accel readout."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    slider = at.select_slider(key="scenario_filmstrip")
+    # s1's only non-NA filmstrip neighbor is v1 at t_plus1 (scene sceneX's other
+    # CAM_FRONT keyframe) -- t_minus1/t_minus2/t_plus2 are all NA at this scene-edge.
+    assert set(slider.options) == {"current", "t+1"}
+
+    before_captions = [str(c.value) for c in at.caption]
+    slider.set_value("t+1").run(timeout=30)
+    assert not at.exception
+    after_captions = [str(c.value) for c in at.caption]
+    assert before_captions != after_captions   # the speed/accel readout changed
+
+
+def test_scenario_flagship_badge(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) The flagship preset shows the SQL/Cypher parity badge."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.run(timeout=30)
+    assert not at.exception
+    badges = [str(s.value) for s in at.success]
+    assert any("identical count in DuckDB SQL and Neo4j Cypher" in b for b in badges)
+    assert any("Cypher sourced from GRAPH.md until Phase 6" in b for b in badges)
+    assert any(b.startswith("1 events") for b in badges)   # n from the events frame
+
+
+def test_scenario_semantic_gallery_renders(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(e) The semantic section renders under the recorded-not-live banner."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert any("Recorded semantic search" in str(c.value) for c in at.caption)
+    all_text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
+    assert any("crowded nighttime pedestrian crossing" in t for t in all_text)
+    assert any("foggy road with heavy lens glare" in t for t in all_text)
+
+
+def test_scenario_every_preset_renders_without_exception(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Four of the six presets have zero matching events in this tiny fixture
+    (fast_cyclists, rain_vru, fn_pedestrians_night, low_conf_braking) -- the
+    empty-card-grid path (and a stale `scenario_token` selected under a
+    different, non-empty preset) must render cleanly rather than raising."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    at.session_state["scenario_token"] = "s1"   # stale selection from another preset
+
+    for name in PRESETS_UNDER_TEST:
+        at.button(key=f"scenario_preset_{name}").click().run(timeout=30)
+        assert not at.exception, f"preset {name!r} raised: {at.exception}"
+        assert at.session_state["scenario_preset"] == name

@@ -203,3 +203,24 @@ def sort_frames(
     )
     out = out.sort_values("failure_count", ascending=False, kind="stable")
     return out.drop(columns="failure_count").reset_index(drop=True)
+
+
+def rank_events(events: pd.DataFrame, preset: str) -> pd.DataFrame:
+    """Scenario Search's card grid: ``events`` rows tagged with ``preset``, sorted by
+    that preset's own severity rank (ascending — rank 1 is most severe/first).
+
+    ``demo/events.py::build_events`` writes one ``preset_rank_<name>`` column per
+    known preset (Int64, NA for a row not tagged with that preset, even if it's
+    tagged with a DIFFERENT preset) — filtering on that column being non-null is
+    exactly "tagged with this preset", so no separate membership check against
+    ``preset_tags`` is needed. An unknown preset name (no matching column at all)
+    raises rather than silently returning nothing, mirroring ``sort_frames``'s
+    ``unknown key`` guard.
+    """
+    rank_col = f"preset_rank_{preset}"
+    if rank_col not in events.columns:
+        raise ValueError(
+            f"rank_events: unknown preset {preset!r} — no {rank_col!r} column in events"
+        )
+    tagged = events.loc[events[rank_col].notna()]
+    return tagged.sort_values(rank_col, kind="stable").reset_index(drop=True)

@@ -10,15 +10,6 @@ def _stub(title: str, purpose: str, phase: int) -> None:
     st.info(f"{purpose}  \n\n_Ships in Phase {phase} of the demo build._")
 
 
-def scenarios() -> None:
-    _stub(
-        "Scenario Search",
-        "Graph + CAN-bus driving-scenario queries ('hard braking near pedestrians') "
-        "with a synchronized event viewer.",
-        5,
-    )
-
-
 def active_learning() -> None:
     _stub(
         "Active Learning",

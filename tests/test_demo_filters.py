@@ -11,7 +11,13 @@ import pytest
 APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
-from filters import failure_counts, failure_flags, filter_frames, sort_frames  # noqa: E402
+from filters import (  # noqa: E402
+    failure_counts,
+    failure_flags,
+    filter_frames,
+    rank_events,
+    sort_frames,
+)
 
 
 def _manifest() -> pd.DataFrame:
@@ -247,3 +253,44 @@ def test_sort_frames_invalid_key_raises() -> None:
     frames = filter_frames(manifest=_sort_manifest(), gt=_sort_gt(), preds=_sort_preds(), model="baseline")
     with pytest.raises(ValueError, match="unknown key"):
         sort_frames(frames, key="bogus", **_sort_kwargs())
+
+
+# --- rank_events: Scenario Search's pure filter/sort helper (Phase 5) --------------
+
+
+def _events() -> pd.DataFrame:
+    """Three events: two tagged `preset_a` (ranks 2, 1 -- deliberately NOT in row
+    order, so a bug that just returns rows as-is instead of sorting by rank would
+    still be caught), one untagged for `preset_a` (NA rank) but tagged `preset_b`.
+    """
+    return pd.DataFrame(
+        {
+            "sample_data_token": ["e0", "e1", "e2"],
+            "preset_rank_preset_a": pd.array([2, pd.NA, 1], dtype="Int64"),
+            "preset_rank_preset_b": pd.array([pd.NA, 1, pd.NA], dtype="Int64"),
+        }
+    )
+
+
+def test_rank_events_tag_filter() -> None:
+    """Only rows with a non-null preset_rank_<preset> come back -- e1 is untagged
+    for preset_a (NA rank) and must be excluded even though it's tagged preset_b."""
+    out = rank_events(_events(), "preset_a")
+    assert set(out["sample_data_token"]) == {"e0", "e2"}
+    assert "e1" not in set(out["sample_data_token"])
+
+
+def test_rank_events_rank_order() -> None:
+    """Sorted by the preset's own rank column ascending (1 = most severe first),
+    not by input row order -- e2 (rank 1) must come before e0 (rank 2), even
+    though e0 appears first in the input frame."""
+    out = rank_events(_events(), "preset_a")
+    assert list(out["sample_data_token"]) == ["e2", "e0"]
+
+    out_b = rank_events(_events(), "preset_b")
+    assert list(out_b["sample_data_token"]) == ["e1"]
+
+
+def test_rank_events_unknown_preset_raises() -> None:
+    with pytest.raises(ValueError, match="unknown preset"):
+        rank_events(_events(), "not_a_real_preset")
