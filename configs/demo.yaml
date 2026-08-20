@@ -43,6 +43,15 @@ flagship:
   cypher_count: 30                 # sourced, not computed, until Phase 6
   cypher_source: docs/GRAPH.md
 
+presets:                          # Phase 5: demo/events.py's six scenario presets
+                                   # (docs/superpowers/specs/2026-08-20-demo-phase5-design.md §1)
+  cap_per_preset: 30
+  near_dist_m: 10.0                # matches exporters.py::FLAGSHIP_SQL's hardcoded "< 10"
+  high_speed_mps: 10.0
+  model_for_results: baseline      # which model's matched_<model>/predictions the two
+                                    # model-result presets (fn_pedestrians_night,
+                                    # low_conf_braking) key off
+
 curation:
   staging_dir: data/demo_curation
   images_root: data/raw/demo_frames   # rsync destination (demo infer resolves images here)
