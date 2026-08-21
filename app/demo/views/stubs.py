@@ -10,15 +10,6 @@ def _stub(title: str, purpose: str, phase: int) -> None:
     st.info(f"{purpose}  \n\n_Ships in Phase {phase} of the demo build._")
 
 
-def active_learning() -> None:
-    _stub(
-        "Active Learning",
-        "How the system chooses training data — 13 arms, and why graph_rate_night "
-        "won the night.",
-        7,
-    )
-
-
 def weak_supervision() -> None:
     _stub(
         "Weak Supervision",

@@ -129,6 +129,78 @@ def load_subgraphs(preset: str) -> dict[str, Any] | None:
     return data
 
 
+# --- Phase 7: the Active Learning tables ------------------------------------------
+#
+# al_communities.parquet and al_exemplars.json are written by every `demo build`
+# from package_version 0.6 on; al_selection_explain.parquet /
+# al_explain_validation.json only when `demo al-explain` (Neo4j + GDS + LanceDB)
+# staged them, which a fresh clone never has (manifest.json's validation.al_explain
+# == "absent"). All four load through load_semsearch's graceful-absence pattern --
+# an older/stale committed package must render the page, just with the sections
+# that have no data saying so, rather than a bare FileNotFoundError.
+
+_EMPTY_COMMUNITY_COLUMNS = [
+    "community", "size", "night_members", "mass",
+    "quota_graph_rate", "quota_graph_rate_night", "is_backfill",
+]
+
+_EMPTY_EXPLAIN_COLUMNS = [
+    "sample_data_token", "arm", "is_night", "scene_name", "community",
+    "community_size", "community_night_members", "community_mass",
+    "community_mass_rank", "community_quota", "degree", "degree_rank_in_community",
+    "pick_pass", "n_failures_routed", "mass_routed",
+]
+
+
+@st.cache_data
+def load_al_communities() -> pd.DataFrame:
+    """The 97 Louvain communities with each arm's quota, or an empty frame."""
+    path = DEMO_DATA / "al_communities.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_COMMUNITY_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_al_exemplars() -> dict[str, Any]:
+    """`al_exemplars.json`'s {arm, baseline, tokens}, or empty defaults."""
+    path = DEMO_DATA / "al_exemplars.json"
+    if not path.is_file():
+        return {"arm": None, "baseline": None, "tokens": []}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+def _al_explain_path() -> Path:
+    return DEMO_DATA / "al_selection_explain.parquet"
+
+
+def al_explain_available() -> bool:
+    """Whether `demo al-explain`'s per-frame selection facts shipped in this
+    package -- checked BEFORE the "why was this frame selected?" panel claims
+    anything, so an absent group draws the honest note instead (spec §3d)."""
+    return _al_explain_path().is_file()
+
+
+@st.cache_data
+def load_al_explain() -> pd.DataFrame:
+    path = _al_explain_path()
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_EXPLAIN_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_al_explain_validation() -> dict[str, Any]:
+    """The re-derivation's own validation record (night floor, pass sizes, GDS
+    version), or an empty dict when the group is absent."""
+    path = DEMO_DATA / "al_explain_validation.json"
+    if not path.is_file():
+        return {}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 

@@ -481,3 +481,220 @@ def parity_caption(
         return f"{counts} ✗ mismatch recorded{shown}"
     symbol = " ✓" if parity is True else ""
     return f"{counts}{symbol}{shown}"
+
+
+# --- Phase 7 (Task 4): Active Learning page helpers ------------------------------
+#
+# All pure, like everything else in this module: the Active Learning page's three
+# derived claims -- which boxes the arm actually fixed, what the night floor did to
+# the all-night community's quota, and why one frame was selected -- are computed
+# here and unit-tested without a Streamlit runtime.
+
+# Only these two statuses can be attached to a GT box: `demo infer` writes
+# matched_annotation_token on a prediction that matched a GT box (tp, or low_conf
+# when it is below the confidence floor); an "fp" carries no annotation token.
+_CLAIM_STATUSES = ("tp", "low_conf")
+
+_FIXED_BOX_COLUMNS = [
+    "annotation_token",
+    "category_group",
+    "distance_to_ego_m",
+    "baseline_claim",
+    "arm_claim",
+]
+
+# configs/demo.yaml's `models:` -- "champion" is the yolov8m @960 checkpoint, a
+# MODEL-SIZE champion from the Phase-3 comparison, NOT an active-learning arm and
+# not the best AL result (that is `graph`, +0.0344 overall). Labelling it plainly
+# wherever it appears keeps the two kinds of "winner" apart on screen.
+_MODEL_LABELS = {"champion": "champion (yolov8m @960)"}
+
+
+def model_label(model: str) -> str:
+    """The on-screen label for a model name (see ``_MODEL_LABELS``)."""
+    return _MODEL_LABELS.get(model, model)
+
+
+def _claims(preds: pd.DataFrame, model: str) -> dict[str, tuple[str, float]]:
+    """``{annotation_token: (status, conf)}`` for one model's GT-matched predictions,
+    keeping the highest-confidence claim when several rows match the same box."""
+    rows = preds.loc[
+        (preds["model"] == model)
+        & preds["matched_annotation_token"].notna()
+        & preds["status"].isin(_CLAIM_STATUSES)
+    ]
+    best: dict[str, tuple[str, float]] = {}
+    for row in rows.itertuples(index=False):
+        token = str(row.matched_annotation_token)
+        conf = float(row.conf)
+        if token not in best or conf > best[token][1]:
+            best[token] = (str(row.status), conf)
+    return best
+
+
+def fixed_boxes(
+    gt: pd.DataFrame, preds: pd.DataFrame, *, baseline: str, arm: str
+) -> pd.DataFrame:
+    """The GT boxes ``arm`` upgraded over ``baseline`` on ONE frame, nearest first.
+
+    ``gt``/``preds`` are that frame's rows (the caller slices by
+    ``sample_data_token``); ``gt`` needs annotation_token, category_group,
+    distance_to_ego_m and below_visibility_min, ``preds`` needs model, status, conf
+    and matched_annotation_token.
+
+    A row is an upgrade when the arm DETECTS the box (``status == "tp"``) and the
+    baseline either never claimed it (``baseline_claim == "none"``) or only claimed
+    it below the confidence floor (``"low-conf 0.22"``). Both models detecting it,
+    the arm being unsure itself, and boxes below the visibility floor are excluded:
+    those are not a before/after. This is the same rule ``demo build`` validates the
+    hand-approved exemplar tokens with (exporters.py::_upgraded_gt_boxes) -- the app
+    can't import that module, so the two are deliberate twins.
+    """
+    visible = (
+        gt.loc[~gt["below_visibility_min"].fillna(False)]
+        if "below_visibility_min" in gt.columns
+        else gt
+    )
+    arm_claims = _claims(preds, arm)
+    baseline_claims = _claims(preds, baseline)
+
+    records = []
+    for row in visible.itertuples(index=False):
+        annotation = str(row.annotation_token)
+        arm_claim = arm_claims.get(annotation)
+        if arm_claim is None or arm_claim[0] != "tp":
+            continue
+        baseline_claim = baseline_claims.get(annotation)
+        if baseline_claim is not None and baseline_claim[0] == "tp":
+            continue
+        records.append(
+            {
+                "annotation_token": annotation,
+                "category_group": row.category_group,
+                "distance_to_ego_m": row.distance_to_ego_m,
+                "baseline_claim": (
+                    "none" if baseline_claim is None else f"low-conf {baseline_claim[1]:.2f}"
+                ),
+                "arm_claim": f"{arm_claim[1]:.2f}",
+            }
+        )
+    frame = pd.DataFrame.from_records(records, columns=_FIXED_BOX_COLUMNS)
+    # na_position="last": a box whose annotation didn't join onto annotations_3d has
+    # no distance, and belongs after the ones that can be placed in the scene.
+    return frame.sort_values("distance_to_ego_m", na_position="last").reset_index(drop=True)
+
+
+def community_jump(
+    communities: pd.DataFrame, *, before: str, after: str
+) -> dict[str, Any] | None:
+    """What the night floor did to the largest ALL-NIGHT community's quota.
+
+    ``communities`` is ``al_communities.parquet``; ``before``/``after`` name its two
+    quota columns (``quota_graph_rate`` / ``quota_graph_rate_night`` in the shipped
+    package). Returns ``{community, size, quota_before, quota_after, ratio}`` for the
+    largest community whose members are ALL night frames -- the one the page's
+    caption points at, because it is where the night floor's effect is unambiguous
+    (in the real package: #10301, 916 frames, 83 -> 323, 3.9x) -- or ``None`` when no
+    such community exists, in which case the page simply doesn't make the claim.
+
+    The ``community == -1`` backfill sentinel is excluded: it is a bucket for frames
+    the night backfill drew from outside every community, not a community.
+    """
+    if communities.empty:
+        return None
+    real = communities.loc[communities["community"] >= 0]
+    all_night = real.loc[real["night_members"] == real["size"]]
+    if all_night.empty:
+        return None
+    row = all_night.sort_values(["size", "community"], ascending=[False, True]).iloc[0]
+    quota_before = int(row[before])
+    quota_after = int(row[after])
+    return {
+        "community": int(row["community"]),
+        "size": int(row["size"]),
+        "quota_before": quota_before,
+        "quota_after": quota_after,
+        # A community that got nothing under the first arm has no ratio to report
+        # (the page says the two quotas instead of an infinite multiple).
+        "ratio": (quota_after / quota_before) if quota_before else None,
+    }
+
+
+_PICK_PASS_LABELS = {"main": "main pass", "backfill": "seeded backfill"}
+
+
+def _ordinal(number: int) -> str:
+    """1 -> "1st", 2 -> "2nd", 11 -> "11th", 21 -> "21st"."""
+    if 10 <= number % 100 <= 20:
+        return f"{number}th"
+    return f"{number}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(number % 10, 'th') }".replace(" ", "")
+
+
+def _optional_int(value: Any) -> int | None:
+    """An Int64/NA column's value as a plain int, or None when it is missing."""
+    if value is None or pd.isna(value):
+        return None
+    return int(value)
+
+
+def selection_factors(
+    row: Mapping[str, Any], *, n_communities: int, night_floor: int | None = None
+) -> list[tuple[str, str, bool | None]]:
+    """One selected frame's ``al_selection_explain.parquet`` row as an ordered
+    ``(label, value, flag)`` panel, in the order the mechanism actually runs.
+
+    ``flag`` is a bool only where a check/cross reads as a fact (night or not);
+    None everywhere else, since a quota or a rank is not a pass/fail.
+
+    The ORDER encodes the honest causal story (Task 3's finding): a frame is
+    selected because its COMMUNITY carries failure mass, which buys the community a
+    quota, and the frame ranks high enough within it by similarity degree.
+    ``n_failures_routed``/``mass_routed`` come LAST and are context, not the reason
+    -- 1249 of the 1500 real selected frames have no routed mass at all, so
+    presenting it as "high failure rate ✓" would be a fabricated explanation for
+    five out of six frames.
+    """
+    community = int(row["community"])
+    mass_rank = _optional_int(row.get("community_mass_rank"))
+    degree_rank = _optional_int(row.get("degree_rank_in_community"))
+    n_routed = int(row.get("n_failures_routed") or 0)
+    pick_pass = str(row["pick_pass"])
+    if pick_pass == "night":
+        pass_label = (
+            "night pass" if night_floor is None else f"night pass (night floor {night_floor})"
+        )
+    else:
+        pass_label = _PICK_PASS_LABELS.get(pick_pass, pick_pass)
+
+    return [
+        ("Night frame", "yes" if bool(row["is_night"]) else "no", bool(row["is_night"])),
+        (
+            "Community",
+            f"#{community} · {int(row['community_size'])} frames · "
+            f"{int(row['community_night_members'])} at night",
+            None,
+        ),
+        (
+            "Community failure mass",
+            f"{float(row['community_mass']):.2f} "
+            f"(rank {mass_rank if mass_rank is not None else 'n/a'} of {n_communities})",
+            None,
+        ),
+        ("Community quota", f"{int(row['community_quota'])} frames", None),
+        ("Picked in", pass_label, None),
+        (
+            "Similarity-degree rank",
+            "n/a"
+            if degree_rank is None
+            else f"{_ordinal(degree_rank)} of {int(row['community_size'])}",
+            None,
+        ),
+        (
+            "Routed failures",
+            "none — not itself a routing target"
+            if n_routed == 0
+            else f"{n_routed} failure{'' if n_routed == 1 else 's'}, "
+            f"mass {float(row['mass_routed']):.1f}",
+            None,
+        ),
+    ]

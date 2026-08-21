@@ -59,11 +59,17 @@ def test_demo_requirements_stay_minimal() -> None:
         if line.strip() and not line.startswith("#")
     ]
     lines = [line.split("==")[0].split(">=")[0].strip() for line in raw_lines]
-    assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
+    # altair (Phase 7) is streamlit's OWN hard dependency -- declaring it adds no
+    # wheel to the deployment, it just pins the version the charts are written
+    # against (app/demo/render.py::bar_chart imports it at module level).
+    assert set(lines) <= {
+        "streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph", "altair"
+    }
     # The subset check above would still pass if streamlit-agraph were dropped
     # entirely -- the interactive graph panel (Phase 6) needs it present, not just
-    # not-disallowed.
+    # not-disallowed. Same for altair and the Phase-7 charts.
     assert any(line.startswith("streamlit-agraph") for line in raw_lines)
+    assert any(line.startswith("altair") for line in raw_lines)
 
 
 def _stage_subgraphs_with_event(staging_dir: Path) -> None:
@@ -211,6 +217,58 @@ def _stage_subgraphs_with_event(staging_dir: Path) -> None:
         (out / f"{preset}.json").write_text(json.dumps(payload, sort_keys=True, indent=2))
 
 
+def _stage_al_explain(staging_dir: Path) -> None:
+    """Stage the optional `demo al-explain` group (spec §1) under ``staging_dir``.
+
+    Phase 7 (Task 4): the Active Learning page's "why was this frame selected?"
+    panel reads ``al_selection_explain.parquet`` (per-frame community/pick-pass/
+    degree facts) and the night floor out of ``al_explain_validation.json``. The
+    real command needs Neo4j + GDS + LanceDB, so this stages its OUTPUT directly --
+    the same idiom `_stage_subgraphs_with_event` uses for `demo subgraphs`, and what
+    tests/test_demo_export.py's own al_explain build test does.
+
+    One row per token in this fixture's ``graph_rate_night.parquet`` (the arm's
+    selected set), so every gallery card has a row -- exactly the real package's
+    relationship (1500 selected frames, 1500 explain rows). The two train_pool
+    tokens carry the two branches the panel has to render: "wA" was taken by the
+    NIGHT pass with no failure mass routed to it (the ordinary case -- 1249 of the
+    1500 real selected frames have none), "wR" by the main pass with mass actually
+    routed to it.
+    """
+    out = staging_dir / "al_explain"
+    out.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0", "v1", "wA", "wR"],
+        "arm": ["graph_rate_night"] * 4,
+        "is_night": [True, False, True, False],
+        "scene_name": ["scene-v0", "scene-v1", "scene-wA", "scene-wR"],
+        "community": [0, 1, 0, 1],
+        "community_size": [10, 8, 10, 8],
+        "community_night_members": [2, 1, 2, 1],
+        "community_mass": [5.0, 3.0, 5.0, 3.0],
+        "community_mass_rank": pd.array([1, 2, 1, 2], dtype="Int64"),
+        "community_quota": [1, 2, 1, 2],
+        "degree": [4.0, 2.0, 3.0, 1.0],
+        "degree_rank_in_community": pd.array([1, 1, 2, 2], dtype="Int64"),
+        "pick_pass": ["night", "main", "night", "main"],
+        "n_failures_routed": [0, 0, 0, 2],
+        "mass_routed": [0.0, 0.0, 0.0, 4.25],
+    }).to_parquet(out / "al_selection_explain.parquet", index=False)
+    (out / "al_explain_validation.json").write_text(json.dumps({
+        "arm": "graph_rate_night",
+        "selected_match": True,
+        "communities_match": True,
+        "n_selected": 4,
+        "n_communities": 2,
+        "mass_total": 8.0,
+        "gds_version": "2.13.11",
+        "config": {
+            "channel": "CAM_FRONT", "n_mine": 3, "night_floor": 1,
+            "route_k": 10, "seed": 64, "top_k": 1000,
+        },
+    }))
+
+
 @pytest.fixture()
 def built_demo_data(tmp_path: Path) -> Path:
     """A real (tiny) demo_data/ package, built through the actual exporters/build path.
@@ -330,6 +388,17 @@ def built_demo_data(tmp_path: Path) -> Path:
                     "n_train_images": 115,
                     "overall": {"mAP50-95": 0.21},
                     "night": {"mAP50-95": 0.11},
+                },
+                # Phase 7 (Task 4): configs' al.arm -- the arm the Active Learning
+                # page tells the story of, so the fixture package must actually
+                # carry a row for it (delta_night +0.0300, delta_overall +0.0300
+                # against baseline, and the best night gain of the four arms, as
+                # graph_rate_night is in the real results.json). night.per_class
+                # gives the expander table a real night_ped_map5095 to show.
+                "graph_rate_night": {
+                    "n_train_images": 120,
+                    "overall": {"mAP50-95": 0.23},
+                    "night": {"mAP50-95": 0.13, "per_class": {"pedestrian": 0.09}},
                 },
                 "weak_random": {
                     "n_train_images": 110,
@@ -582,6 +651,7 @@ def built_demo_data(tmp_path: Path) -> Path:
     # (Task 2) passes. Only the flagship's count is constrained this way; the
     # other five presets' sql_count/cypher_count are free (see that helper).
     _stage_subgraphs_with_event(staging)
+    _stage_al_explain(staging)
 
     run_build(config_path)
 
@@ -608,6 +678,28 @@ def built_demo_data(tmp_path: Path) -> Path:
         (thumbs_dir / f"{token}.jpg").write_bytes(buf.getvalue())
 
     return out
+
+
+@pytest.fixture()
+def built_demo_data_without_explain(built_demo_data: Path) -> Path:
+    """The same package with the optional al_explain group removed -- the ordinary
+    state of a fresh clone (no Neo4j, so `demo al-explain` never ran).
+
+    Deletes the two files from an otherwise-normal built package rather than
+    rebuilding one without the staging: the page's own absent branch keys off
+    ``data.al_explain_available()``, i.e. the file's presence, and the builder's
+    absent/included recording is already pinned on the builder side
+    (tests/test_demo_export.py::test_build_records_al_explain_group_absent_then_
+    included). Same idiom as test_scenario_graph_panel_absent_when_subgraphs_not_
+    staged.
+    """
+    for name in ("al_selection_explain.parquet", "al_explain_validation.json"):
+        (built_demo_data / name).unlink()
+    manifest_path = built_demo_data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"]["al_explain"] = "absent"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
 
 
 def test_overview_page_renders_from_a_built_package(
@@ -1202,3 +1294,103 @@ def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
     assert not at.exception
     assert len(at.image) >= 1   # the thumb-fallback overlay still rendered
     assert not any("no image available" in str(c.value) for c in at.caption)
+
+
+# --- Phase 7 (Task 4): the Active Learning page --------------------------------
+
+
+def _active_learning_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="active_learning" in main.py, same rationale as the Failure Explorer's
+    # and Scenario Search's explicit url_paths (see those pages' comments).
+    at.switch_page("views/active_learning.py").run(timeout=30)
+    return at
+
+
+def test_active_learning_page_renders_story_chart_and_exemplar_table(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a/b/e) The page's spine: the six story beats, the arm chart, and the
+    before/after exemplar controls + per-box table -- every number read from the
+    package (the fixture's graph_rate_night arm is +0.0300 night against baseline).
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # (a) story arrows: render.story_arrows writes "**<title>**  \n<body>" markdown
+    markdowns = [str(m.value) for m in at.markdown]
+    assert any("Result" in text for text in markdowns)
+    assert any("Problem" in text for text in markdowns)
+
+    # the derived night delta, from active_learning_results.parquet (0.13 - 0.10)
+    numbers = [str(m.value) for m in at.metric] + [str(c.value) for c in at.caption] + markdowns
+    assert any("+0.0300" in text for text in numbers)
+
+    # (b) the arm chart itself (st.altair_chart -> a "vega_lite_chart" element;
+    # AppTest has no typed accessor for charts, so it is fetched by element type)
+    assert len(at.get("vega_lite_chart")) >= 1
+
+    # (e) exemplar controls: the selectbox over al_exemplars.json's tokens and the
+    # model radio, whose options are the package's own model labels.
+    assert at.selectbox(key="al_exemplar")
+    assert at.radio(key="al_model").options == ["baseline", "graph_rate_night"]
+
+    # (e) the per-box table: v0's GT box a2 is caught by graph_rate_night (tp 0.8)
+    # and never claimed by baseline -- exactly one upgraded row.
+    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
+    assert len(tables) == 1
+    assert len(tables[0]) >= 1
+    assert list(tables[0]["baseline_claim"]) == ["none"]
+
+
+def test_active_learning_page_explain_absent_note(
+    built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) Without `demo al-explain` the gallery still works, and the page says
+    exactly what is missing instead of inventing a per-frame reason."""
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data_without_explain, monkeypatch)
+    assert not at.exception
+
+    notes = [str(i.value) for i in at.info]
+    assert any(
+        "per-frame community and routed mass are not included in this package "
+        "(demo al-explain)" in note
+        for note in notes
+    )
+    # the gallery is still there (a "View" button per AL-selected frame)
+    assert at.button(key="al_frame_select_wA")
+
+
+def test_active_learning_page_why_selected_panel_with_explain(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) With the group staged, picking a selected frame shows the derived factor
+    panel -- community/quota/pass/degree rank -- and says plainly that a train-pool
+    frame carries no predictions. Routed failure mass is CONTEXT, never the reason:
+    "wA" has none, and the panel says so rather than claiming a high failure rate.
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    panel = [str(m.value) for m in at.markdown]
+    assert any("Community quota" in text for text in panel)
+    assert any("#0 · 10 frames · 2 at night" in text for text in panel)
+    assert any("night pass (night floor 1)" in text for text in panel)
+    assert any("none — not itself a routing target" in text for text in panel)
+    assert not any(
+        "per-frame community and routed mass are not included" in str(i.value) for i in at.info
+    )
+    assert any(
+        "train-pool frame — no predictions" in str(c.value) for c in at.caption
+    )

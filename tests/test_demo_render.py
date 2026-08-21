@@ -201,3 +201,84 @@ def test_draw_overlay_label_clamped_at_frame_edge() -> None:
     # pure background.
     region = [(x, y) for x in range(2, 14) for y in range(4, 10)]
     assert any(out.getpixel(p) != (10, 10, 10) for p in region)
+
+
+# --- Phase 7 (Task 4): the shared altair bar chart -------------------------------
+
+
+def _arms() -> pd.DataFrame:
+    return pd.DataFrame({
+        "arm": ["baseline", "graph_rate_night", "weak_random", "graph"],
+        "delta_night": [0.0, 0.0101, -0.0262, 0.004],
+        "family": ["baseline", "graph_rate_night", "weak", "graph"],
+        "round_order": [0, 8, 9, 3],
+    })
+
+
+def _colors(chart: object) -> dict[str, str]:
+    """{category: color} read out of the compiled spec's own data rows (altair puts
+    the frame in a named dataset and points the layer at it by name)."""
+    spec = chart.to_dict()
+    layer = spec["layer"][0] if "layer" in spec else spec
+    data = layer.get("data", spec.get("data", {}))
+    rows = data["values"] if "values" in data else spec["datasets"][data["name"]]
+    field = layer["encoding"]["color"]["field"]
+    x_field = layer["encoding"]["x"]["field"]
+    return {row[x_field]: row[field] for row in rows}
+
+
+def test_bar_chart_colors_highlight_accent_weak_grey_rest_default() -> None:
+    """The arm chart's visual claim: the arm being explained is the accent colour,
+    the weak-supervision arms are greyed (they are pseudo-label runs, not
+    night-targeting arms), everything else is the ordinary bar colour."""
+    from render import bar_chart
+
+    chart = bar_chart(
+        _arms(), x="arm", y="delta_night", highlight="graph_rate_night",
+        sort=["baseline", "graph", "graph_rate_night", "weak_random"],
+    )
+    colors = _colors(chart)
+
+    assert colors["graph_rate_night"] == "#FF851B"
+    assert colors["weak_random"] == "#BBBBBB"
+    assert colors["baseline"] == colors["graph"] == "#4A90D9"
+
+
+def test_bar_chart_sort_order_and_zero_line() -> None:
+    """The bars follow the explicit ``sort`` order (round_order, not alphabetical),
+    and a zero rule is layered under a chart with negative values so a regression
+    reads as one."""
+    from render import bar_chart
+
+    ordered = ["baseline", "graph", "graph_rate_night", "weak_random"]
+    chart = bar_chart(_arms(), x="arm", y="delta_night", sort=ordered, title="Night")
+    spec = chart.to_dict()
+
+    assert "layer" in spec                                   # bars + zero rule
+    assert spec["layer"][0]["encoding"]["x"]["sort"] == ordered
+    assert spec["title"] == "Night"
+
+    plain = bar_chart(_arms(), x="arm", y="delta_night", zero_line=False)
+    assert "layer" not in plain.to_dict()
+
+
+def test_bar_chart_color_field_keeps_its_own_legend() -> None:
+    """With ``color_field`` (Task 5's stacked loss decomposition) the colour encodes
+    that field as a normal categorical scale instead of the highlight logic."""
+    from render import bar_chart
+
+    stacked = pd.DataFrame({
+        "base_arm": ["random", "random", "graph_rate_night", "graph_rate_night"],
+        "value": [0.0062, 0.0169, 0.0100, 0.0107],
+        "component": ["retained", "dropped-frame cost"] * 2,
+    })
+
+    chart = bar_chart(stacked, x="base_arm", y="value", color_field="component")
+    encoding = chart.to_dict()["layer"][0]["encoding"]
+
+    assert encoding["color"]["field"] == "component"
+    assert encoding["color"]["type"] == "nominal"
+    # altair's own categorical scale + legend, not the highlight path's literal
+    # pass-through colours (which set scale/legend to None explicitly).
+    assert encoding["color"].get("scale", "default") != None    # noqa: E711
+    assert encoding["color"].get("legend", "default") != None   # noqa: E711

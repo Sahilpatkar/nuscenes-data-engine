@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -213,3 +215,100 @@ def draw_overlay(
             _draw_label(draw, xyxy, label, style)
 
     return out
+
+
+# --- Shared altair bar chart (Phase 7) -------------------------------------------
+#
+# altair is streamlit's OWN hard dependency (st.altair_chart is the API these pages
+# call), so importing it at module level adds no wheel to the deployment -- it is
+# declared in app/demo/requirements.txt purely to pin the version the specs below
+# are written against. The Active Learning and Weak Supervision pages both draw
+# their bars through this one helper so the two read as one visual language.
+
+# The accent used for "the thing being explained" -- the same #FF851B the Scenario
+# page's on-path graph nodes use.
+_ACCENT = "#FF851B"
+# Weak-supervision arms: pseudo-label training runs, not night-targeting AL arms.
+# Greyed so they read as a different KIND of row rather than a competing result --
+# the same #BBBBBB the graph panel fades its context nodes with.
+_MUTED = "#BBBBBB"
+_DEFAULT_BAR = "#4A90D9"
+_ZERO_RULE = "#888888"
+_COLOR_COLUMN = "_bar_color"
+
+
+def _bar_colors(frame: pd.DataFrame, *, x: str, highlight: str | None) -> pd.Series:
+    """One literal colour per row: accent for ``highlight``, grey for the weak
+    family, the default bar colour otherwise."""
+    family = (
+        frame["family"] if "family" in frame.columns else pd.Series("", index=frame.index)
+    )
+    colors = pd.Series(_DEFAULT_BAR, index=frame.index)
+    colors = colors.mask(family.eq("weak"), _MUTED)
+    if highlight is not None:
+        colors = colors.mask(frame[x].eq(highlight), _ACCENT)
+    return colors
+
+
+def bar_chart(
+    frame: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    highlight: str | None = None,
+    color_field: str | None = None,
+    title: str = "",
+    sort: list[str] | None = None,
+    zero_line: bool = True,
+) -> alt.Chart | alt.LayerChart:
+    """A bar chart of ``y`` over the categorical ``x``, ready for
+    ``st.altair_chart(chart, width="stretch")``.
+
+    (``width="stretch"``, not the ``use_container_width=True`` the design doc
+    wrote: that keyword is deprecated with a removal date already in the past, and
+    warns on every render of streamlit 1.59 -- the demo deploys against whatever
+    Streamlit Cloud installs, so the page calls the current API and
+    app/demo/requirements.txt declares the floor that has it.)
+
+    ``sort`` pins the x-axis category order (the arm chart passes ``round_order``'s
+    order, so the arms read as the experiment ran them rather than alphabetically).
+    ``highlight`` names the one ``x`` category drawn in the accent colour; rows whose
+    ``family`` is "weak" are greyed; everything else takes the default bar colour.
+    ``color_field`` overrides all of that with an ordinary categorical colour scale
+    on that field (a stacked/grouped chart, e.g. the weak-sup loss decomposition),
+    keeping its legend.
+
+    ``zero_line`` layers a rule at y = 0 -- delta charts carry negative values, and
+    without the rule a regression reads as just a shorter bar. That layering is why
+    the return type is a union: an ``alt.LayerChart`` is not an ``alt.Chart``, and
+    ``st.altair_chart`` takes either.
+    """
+    data = frame.copy()
+    encode: dict[str, Any] = {
+        "x": alt.X(f"{x}:N", sort=sort, title=None),
+        "y": alt.Y(f"{y}:Q", title=y.replace("_", " ")),
+        "tooltip": [c for c in (x, y, color_field, "family") if c and c in data.columns],
+    }
+    if color_field is not None:
+        encode["color"] = alt.Color(f"{color_field}:N", title=color_field.replace("_", " "))
+    else:
+        data[_COLOR_COLUMN] = _bar_colors(data, x=x, highlight=highlight)
+        # scale=None: the column already holds literal colours, so altair must pass
+        # them through instead of building a categorical scale over them.
+        encode["color"] = alt.Color(f"{_COLOR_COLUMN}:N", scale=None, legend=None)
+
+    bars = alt.Chart(data).mark_bar().encode(**encode)
+    chart: alt.Chart | alt.LayerChart = bars
+    if zero_line:
+        rule = (
+            alt.Chart(pd.DataFrame({"zero": [0.0]}))
+            .mark_rule(color=_ZERO_RULE)
+            .encode(y="zero:Q")
+        )
+        # alt.layer is typed as returning LayerChart | FacetChart (it facets when
+        # given a facet spec, which this never does); the cast keeps this helper's
+        # own, narrower return type honest.
+        chart = cast("alt.LayerChart", alt.layer(bars, rule))
+    if title:
+        chart = chart.properties(title=title)
+    return chart
