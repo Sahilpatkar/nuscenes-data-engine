@@ -342,25 +342,78 @@ def export_al_communities(
     return merged
 
 
+def _upgraded_gt_boxes(
+    gt_boxes: pd.DataFrame, predictions: pd.DataFrame, token: str, *, arm: str, baseline: str
+) -> list[str]:
+    """The visible GT boxes of ``token`` that ``arm`` detects confidently (``tp``)
+    while ``baseline``'s matched prediction is absent or only ``low_conf``.
+
+    This is the exemplar rule (see :func:`export_al_exemplars`) AND, box for box,
+    what the Active Learning page's before/after table shows
+    (``app/demo/filters.py::fixed_boxes``) -- the app can't import this module (it
+    ships without ``src/``), so the two implementations are deliberate twins: what
+    the build validates is exactly what the page will draw.
+    """
+    for column in ("annotation_token", "sample_data_token", "below_visibility_min"):
+        if column not in gt_boxes.columns:
+            raise ValueError(
+                f"export_al_exemplars: gt_boxes is missing {column!r} — it must be "
+                "the curated gt_boxes.parquet written by `demo infer`"
+            )
+    visible = gt_boxes.loc[
+        (gt_boxes["sample_data_token"] == token) & (~gt_boxes["below_visibility_min"].fillna(False))
+    ]
+    frame_preds = predictions.loc[predictions["sample_data_token"] == token]
+    arm_tp = set(
+        frame_preds.loc[
+            (frame_preds["model"] == arm) & (frame_preds["status"] == "tp"),
+            "matched_annotation_token",
+        ].dropna()
+    )
+    baseline_tp = set(
+        frame_preds.loc[
+            (frame_preds["model"] == baseline) & (frame_preds["status"] == "tp"),
+            "matched_annotation_token",
+        ].dropna()
+    )
+    return [
+        str(annotation)
+        for annotation in visible["annotation_token"]
+        if annotation in arm_tp and annotation not in baseline_tp
+    ]
+
+
 def export_al_exemplars(
     *,
     config: dict[str, Any],
     manifest: pd.DataFrame,
     predictions: pd.DataFrame,
+    gt_boxes: pd.DataFrame,
     out_dir: Path,
     curation_present: bool,
 ) -> list[str]:
     """Validate ``configs/demo.yaml``'s hand-approved ``al.exemplar_tokens`` against
     the curated frame manifest and write ``al_exemplars.json``.
 
-    Every token must be a ``split == "val"`` row of ``manifest`` with
-    ``fixes_fn_vs_<baseline>_<arm> == True`` (the arm caught a box the baseline
-    missed) and must have ``predictions`` rows for EVERY model in
-    ``config["models"]`` (else the before/after page can't render one of its
-    panels). A null/empty token list is only valid when ``curation_present`` is
-    False (the same "nothing curated yet" rule ``run_build`` applies to
-    ``hero.token``) -- an empty list while curation IS included is a build error,
-    since the exemplars would then just silently never render.
+    Every token must be a ``split == "val"`` row of ``manifest``, must have
+    ``predictions`` rows for EVERY model in ``config["models"]`` (else the
+    before/after page can't render one of its panels), and must carry at least one
+    VISIBLE GT box (``below_visibility_min`` False) that the arm detects at
+    ``status == "tp"`` while the baseline's matched prediction is absent or only
+    ``low_conf`` (:func:`_upgraded_gt_boxes`).
+
+    That last clause is the 2026-08-21 amendment (spec §2). The rule used to be
+    ``fixes_fn_vs_<baseline>_<arm> == True``, but ``matched_<model>`` counts a
+    LOW-CONFIDENCE claim as a match, so the flag also fires when the arm's only
+    "fix" is a 80 m car it claims at conf 0.07-0.35 -- inspecting the real frames
+    showed several such tokens, and they are not a demo-worthy before/after. The
+    flag is now neither checked nor needed here: the per-box upgrade is the claim
+    the page makes, so it is the claim the build validates.
+
+    A null/empty token list is only valid when ``curation_present`` is False (the
+    same "nothing curated yet" rule ``run_build`` applies to ``hero.token``) -- an
+    empty list while curation IS included is a build error, since the exemplars
+    would then just silently never render.
     """
     al_cfg = config.get("al") or {}
     arm = al_cfg.get("arm")
@@ -384,7 +437,6 @@ def export_al_exemplars(
             "docs/DEMO.md)"
         )
 
-    flag_col = f"fixes_fn_vs_{baseline}_{arm}"
     val_manifest = manifest.loc[manifest["split"] == "val"].set_index("sample_data_token")
     model_names = sorted(config["models"])
     pred_tokens_by_model = {
@@ -397,17 +449,22 @@ def export_al_exemplars(
                 f"export_al_exemplars: token {token!r} is not a val row of "
                 "frame_manifest.parquet"
             )
-        flag = val_manifest.loc[token].get(flag_col) if flag_col in val_manifest.columns else None
-        if not (pd.notna(flag) and bool(flag)):
-            raise ValueError(
-                f"export_al_exemplars: token {token!r} does not have {flag_col} == True"
-            )
         for model in model_names:
             if token not in pred_tokens_by_model[model]:
                 raise ValueError(
                     f"export_al_exemplars: token {token!r} has no predictions for "
                     f"model {model!r}"
                 )
+        upgraded = _upgraded_gt_boxes(
+            gt_boxes, predictions, token, arm=str(arm), baseline=str(baseline)
+        )
+        if not upgraded:
+            raise ValueError(
+                f"export_al_exemplars: token {token!r} has no visible GT box that "
+                f"{arm!r} detects (status 'tp') while {baseline!r} misses it or only "
+                "claims it at low confidence — that upgrade is the whole point of a "
+                "before/after exemplar (see docs/DEMO.md)"
+            )
 
     write_json(out_dir / "al_exemplars.json", {"arm": arm, "baseline": baseline, "tokens": tokens})
     return tokens

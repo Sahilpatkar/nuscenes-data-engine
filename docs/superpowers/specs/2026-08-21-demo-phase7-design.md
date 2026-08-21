@@ -153,6 +153,15 @@ a null/empty list is allowed only when curation is absent (same rule as
 generated from `gt_boxes` + `predictions` (no hand-written captions — the Phase-3
 hero-caption lesson).
 
+*Amendment (2026-08-21, exemplar inspection): validation requires at least one
+visible GT box where the arm's prediction is `tp` and the baseline's is absent or
+`low_conf` — the `fixes_fn_vs` flag alone admitted distant cars the arm only claims
+at low confidence. The flag is no longer checked (`matched_<model>` counts a
+low-confidence claim as a match, so it fires on low-conf-to-low-conf pairs);
+`export_al_exemplars` takes `gt_boxes` and applies the same per-box rule the page's
+`filters.fixed_boxes` table draws. `configs/demo.yaml`'s `al.exemplar_tokens` was
+re-picked accordingly (six frames).*
+
 ## 3. Active Learning page — `app/demo/views/active_learning.py`
 
 Registered in `main.py` with `url_path="active_learning"`; `stubs.py` keeps only

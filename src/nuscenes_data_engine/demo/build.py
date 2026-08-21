@@ -689,15 +689,16 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # community chart works even on a fresh clone with curation absent (spec §2).
     # export_al_exemplars always runs too (it enforces its OWN absent/included rule
     # -- an empty token list only when curation_present is False, same as
-    # hero.token below), reading the manifest/predictions this step just produced
-    # when curation is included, or empty frames otherwise (never touched when the
-    # configured token list is empty, which absent curation requires).
+    # hero.token below), reading the manifest/predictions/gt_boxes this step just
+    # produced when curation is included, or empty frames otherwise (never touched
+    # when the configured token list is empty, which absent curation requires).
     al_cfg = config["al"]
     al_config_path = Path(paths["active_learning_config"])
     n_mine = load_yaml(al_config_path)["mining"]["n_mine"]
 
     manifest_df = pd.DataFrame()
     predictions_df = pd.DataFrame()
+    gt_boxes_df = pd.DataFrame()
     if curation_status == "included":
         manifest_path = out_dir / "frame_manifest.parquet"
         manifest_df = _add_al_selection_columns(
@@ -708,13 +709,18 @@ def run_build(config_path: Path) -> dict[str, Any]:
         )
         manifest_df.to_parquet(manifest_path, index=False)
         predictions_df = pd.read_parquet(out_dir / "predictions.parquet")
+        # The PUBLISHED gt_boxes (enriched by _include_curation) -- the exemplar
+        # rule is a per-box claim about what the page will draw, so it is validated
+        # against the same rows the page reads.
+        gt_boxes_df = pd.read_parquet(out_dir / "gt_boxes.parquet")
 
     communities_df = exporters.export_al_communities(
         al_dir=al_dir, out_dir=out_dir, arms=tuple(al_cfg["community_arms"]), n_mine=n_mine,
     )
 
     exemplar_tokens = exporters.export_al_exemplars(
-        config=config, manifest=manifest_df, predictions=predictions_df, out_dir=out_dir,
+        config=config, manifest=manifest_df, predictions=predictions_df,
+        gt_boxes=gt_boxes_df, out_dir=out_dir,
         curation_present=(curation_status == "included"),
     )
 

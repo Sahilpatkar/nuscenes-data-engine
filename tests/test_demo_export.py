@@ -457,11 +457,17 @@ def test_al_communities_quota_sum_mismatch_raises(
         )
 
 
-def _write_al_exemplar_inputs(
-    tmp_path: Path,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    """A minimal config + manifest + predictions trio for export_al_exemplars: one
-    val token ("good") that satisfies every validation clause."""
+def _write_al_exemplar_inputs() -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """A minimal config + manifest + predictions + gt_boxes quad for
+    export_al_exemplars: one val token ("good") that satisfies every validation
+    clause, including the 2026-08-21 amendment (a visible GT box the arm claims at
+    ``tp`` while the baseline only claims it at ``low_conf``).
+
+    ``fixes_fn_vs_baseline_graph_rate_night`` is deliberately still present and
+    True in the manifest -- the real curated manifest carries it, and it is what
+    the validation USED to key off; the tests below prove the box-level rule, not
+    the flag, is what decides now.
+    """
     config = {
         "al": {"arm": "graph_rate_night", "baseline": "baseline", "exemplar_tokens": ["good"]},
         "models": {"baseline": {}, "graph_rate_night": {}},
@@ -473,21 +479,28 @@ def _write_al_exemplar_inputs(
     predictions = pd.DataFrame({
         "sample_data_token": ["good", "good"],
         "model": ["baseline", "graph_rate_night"],
+        "status": ["low_conf", "tp"],
+        "conf": [0.22, 0.61],
+        "matched_annotation_token": ["g1", "g1"],
     })
-    return config, manifest, predictions
+    gt_boxes = pd.DataFrame({
+        "annotation_token": ["g1"], "sample_data_token": ["good"],
+        "category_group": ["pedestrian"], "below_visibility_min": [False],
+    })
+    return config, manifest, predictions, gt_boxes
 
 
 def test_al_exemplars_validation(tmp_path: Path) -> None:
     from nuscenes_data_engine.demo.exporters import export_al_exemplars
 
-    config, manifest, predictions = _write_al_exemplar_inputs(tmp_path)
+    config, manifest, predictions, gt_boxes = _write_al_exemplar_inputs()
     out = tmp_path / "demo_data"
 
     # happy path first, to prove the fixture itself is valid before each failure
     # variant below mutates one thing at a time.
     tokens = export_al_exemplars(
-        config=config, manifest=manifest, predictions=predictions, out_dir=out,
-        curation_present=True,
+        config=config, manifest=manifest, predictions=predictions, gt_boxes=gt_boxes,
+        out_dir=out, curation_present=True,
     )
     assert tokens == ["good"]
     on_disk = json.loads((out / "al_exemplars.json").read_text())
@@ -497,32 +510,23 @@ def test_al_exemplars_validation(tmp_path: Path) -> None:
     bad_config = {**config, "al": {**config["al"], "exemplar_tokens": ["ghost"]}}
     with pytest.raises(ValueError, match="ghost"):
         export_al_exemplars(
-            config=bad_config, manifest=manifest, predictions=predictions, out_dir=out,
-            curation_present=True,
-        )
-
-    # fixes_fn flag False
-    flag_false_manifest = manifest.copy()
-    flag_false_manifest["fixes_fn_vs_baseline_graph_rate_night"] = [False]
-    with pytest.raises(ValueError, match="fixes_fn"):
-        export_al_exemplars(
-            config=config, manifest=flag_false_manifest, predictions=predictions, out_dir=out,
-            curation_present=True,
+            config=bad_config, manifest=manifest, predictions=predictions, gt_boxes=gt_boxes,
+            out_dir=out, curation_present=True,
         )
 
     # missing predictions for one configured model
     partial_predictions = predictions.loc[predictions["model"] == "baseline"]
     with pytest.raises(ValueError, match="graph_rate_night"):
         export_al_exemplars(
-            config=config, manifest=manifest, predictions=partial_predictions, out_dir=out,
-            curation_present=True,
+            config=config, manifest=manifest, predictions=partial_predictions,
+            gt_boxes=gt_boxes, out_dir=out, curation_present=True,
         )
 
     # empty list + curation absent -> ok, writes an empty tokens list
     empty_config = {**config, "al": {**config["al"], "exemplar_tokens": []}}
     tokens = export_al_exemplars(
-        config=empty_config, manifest=manifest, predictions=predictions, out_dir=out,
-        curation_present=False,
+        config=empty_config, manifest=manifest, predictions=predictions, gt_boxes=gt_boxes,
+        out_dir=out, curation_present=False,
     )
     assert tokens == []
     on_disk = json.loads((out / "al_exemplars.json").read_text())
@@ -531,9 +535,64 @@ def test_al_exemplars_validation(tmp_path: Path) -> None:
     # empty list + curation present -> error
     with pytest.raises(ValueError, match="empty"):
         export_al_exemplars(
-            config=empty_config, manifest=manifest, predictions=predictions, out_dir=out,
-            curation_present=True,
+            config=empty_config, manifest=manifest, predictions=predictions, gt_boxes=gt_boxes,
+            out_dir=out, curation_present=True,
         )
+
+
+def test_al_exemplars_require_a_confident_arm_box_the_baseline_missed(tmp_path: Path) -> None:
+    """The 2026-08-21 amendment (spec §2): an exemplar is valid iff at least one
+    VISIBLE GT box has the arm's prediction at ``tp`` while the baseline's matched
+    prediction is absent or ``low_conf``.
+
+    The old rule -- ``fixes_fn_vs_<baseline>_<arm> == True`` -- admitted frames whose
+    only "fix" was a far-away car the arm itself only claims at conf 0.07-0.35
+    (``matched_<model>`` counts a low-confidence claim as a match, so the flag fires
+    on a low-conf-to-low-conf pair). Those are not demo-worthy before/afters, so the
+    box-level rule replaces the flag entirely: the flag is neither necessary (last
+    case) nor sufficient (first three).
+    """
+    from nuscenes_data_engine.demo.exporters import export_al_exemplars
+
+    config, manifest, predictions, gt_boxes = _write_al_exemplar_inputs()
+    out = tmp_path / "demo_data"
+
+    # (1) the arm only claims the box at low confidence -> not an upgrade worth showing
+    low_conf_arm = predictions.copy()
+    low_conf_arm.loc[low_conf_arm["model"] == "graph_rate_night", "status"] = "low_conf"
+    with pytest.raises(ValueError, match="good"):
+        export_al_exemplars(
+            config=config, manifest=manifest, predictions=low_conf_arm, gt_boxes=gt_boxes,
+            out_dir=out, curation_present=True,
+        )
+
+    # (2) the baseline already detects the box confidently -> nothing was fixed
+    baseline_tp = predictions.copy()
+    baseline_tp.loc[baseline_tp["model"] == "baseline", "status"] = "tp"
+    with pytest.raises(ValueError, match="good"):
+        export_al_exemplars(
+            config=config, manifest=manifest, predictions=baseline_tp, gt_boxes=gt_boxes,
+            out_dir=out, curation_present=True,
+        )
+
+    # (3) the only qualifying box is below the visibility floor -> not shown on the
+    # page at all (the pages drop those rows everywhere), so it cannot justify one
+    invisible = gt_boxes.copy()
+    invisible["below_visibility_min"] = [True]
+    with pytest.raises(ValueError, match="good"):
+        export_al_exemplars(
+            config=config, manifest=manifest, predictions=predictions, gt_boxes=invisible,
+            out_dir=out, curation_present=True,
+        )
+
+    # (4) the flag being False no longer matters -- the box-level upgrade is the rule
+    flag_false = manifest.copy()
+    flag_false["fixes_fn_vs_baseline_graph_rate_night"] = [False]
+    tokens = export_al_exemplars(
+        config=config, manifest=flag_false, predictions=predictions, gt_boxes=gt_boxes,
+        out_dir=out, curation_present=True,
+    )
+    assert tokens == ["good"]
 
 
 def test_frame_manifest_gains_weak_verdict_and_al_selected_by(tmp_path: Path) -> None:
@@ -1140,13 +1199,23 @@ def _stage_minimal_curation(staging_dir: Path) -> None:
         "curation_buckets": [["night_failure"]],
         "n_preds_baseline": pd.array([1], dtype="Int64"),
         # Phase 7 (Task 1): al.exemplar_tokens=["v0"] (set by _stage_and_pick_hero)
-        # needs this flag True to pass export_al_exemplars' validation.
+        # carries the real manifest's fix flag; since the 2026-08-21 amendment the
+        # validation keys off the per-BOX upgrade staged below instead (see
+        # test_al_exemplars_require_a_confident_arm_box_the_baseline_missed), but
+        # the column stays here because the real curated manifest has it.
         "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
     }).to_parquet(staging_dir / "frame_manifest.parquet")
     pd.DataFrame({
-        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
-        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
-        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
+        # v0's exemplar shape: `baseline` claims a1 only; `graph_rate_night` also
+        # claims a2 (tp) -- the confident detection the baseline never made, which
+        # is what export_al_exemplars requires of a hand-approved exemplar token.
+        "sample_data_token": ["v0", "v0"],
+        "model": ["baseline", "graph_rate_night"],
+        "category_group": ["car", "car"],
+        "x_min": [1.0, 0.0], "y_min": [1.0, 0.0], "x_max": [2.0, 200.0],
+        "y_max": [2.0, 200.0],
+        "conf": [0.9, 0.61], "status": ["tp", "tp"],
+        "matched_annotation_token": ["a1", "a2"],
     }).to_parquet(staging_dir / "predictions.parquet")
     pd.DataFrame({
         "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
@@ -1154,6 +1223,10 @@ def _stage_minimal_curation(staging_dir: Path) -> None:
         "x_min": [0.0, 0.0], "y_min": [0.0, 0.0],
         "x_max": [20.0, 200.0], "y_max": [20.0, 200.0],
         "matched_baseline": [True, True],
+        # Real gt_boxes always carries the visibility floor flag (demo infer writes
+        # it) -- export_al_exemplars reads it to keep an invisible box from
+        # justifying an exemplar.
+        "below_visibility_min": [False, False],
     }).to_parquet(staging_dir / "gt_boxes.parquet")
     (staging_dir / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
 
@@ -1499,25 +1572,11 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
     from nuscenes_data_engine.demo.build import run_build
 
     config = yaml.safe_load(build_config.read_text())
-    staging = Path(config["curation"]["staging_dir"])
-    (staging / "crops").mkdir(parents=True)
-    pd.DataFrame({
-        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
-        "curation_buckets": [["night_failure"]],
-        "n_preds_baseline": pd.array([1], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
-    }).to_parquet(staging / "frame_manifest.parquet")
-    pd.DataFrame({
-        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
-        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
-        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
-    }).to_parquet(staging / "predictions.parquet")
-    pd.DataFrame({
-        "annotation_token": ["a1"], "sample_data_token": ["v0"],
-        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
-        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
-    }).to_parquet(staging / "gt_boxes.parquet")
-    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    # The staging this test used to write inline is exactly _stage_minimal_curation's
+    # shape; it adopts the helper now that the exemplar rule (2026-08-21 amendment)
+    # needs a per-box arm-beats-baseline upgrade staged as well -- one place to keep
+    # that shape correct, rather than three copies of it in this module.
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": "v0"}
     config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
@@ -1644,20 +1703,31 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
     }).to_parquet(staging / "frame_manifest.parquet")
     # baseline ran and found nothing on v0 -- predictions.parquet has zero rows for
     # it, same as a model that never ran would; n_preds is what disambiguates. v1
-    # gets one real row so it's a valid exemplar.
+    # gets two real rows: baseline's own claim, plus graph_rate_night's confident
+    # claim on GT box b1 which baseline never makes -- the per-box upgrade
+    # export_al_exemplars requires of an exemplar token since the 2026-08-21
+    # amendment.
     pd.DataFrame({
-        "sample_data_token": ["v1"], "model": ["baseline"], "category_group": ["car"],
-        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
-        "conf": [0.9], "status": ["tp"], "matched_annotation_token": [None],
+        "sample_data_token": ["v1", "v1"],
+        "model": ["baseline", "graph_rate_night"],
+        "category_group": ["car", "car"],
+        "x_min": [1.0, 1.0], "y_min": [1.0, 1.0], "x_max": [2.0, 2.0],
+        "y_max": [2.0, 2.0],
+        "conf": [0.9, 0.61], "status": ["tp", "tp"],
+        "matched_annotation_token": [None, "b1"],
     }).to_parquet(staging / "predictions.parquet")
-    # matched_baseline: zero rows, but the column itself must still exist -- this
-    # staging is fully "included" (unlike the two sibling tests above, which fail
-    # inside _include_curation before ever reaching it), so build_events'
-    # _model_preset_tags reads it too (presets.model_for_results in build_config
-    # is "baseline") and needs the column present even with nothing in it.
-    pd.DataFrame(columns=["annotation_token", "sample_data_token", "category_group",
-                          "x_min", "y_min", "x_max", "y_max", "matched_baseline"]).to_parquet(
-        staging / "gt_boxes.parquet")
+    # matched_baseline must exist here -- this staging is fully "included" (unlike
+    # the two sibling tests above, which fail inside _include_curation before ever
+    # reaching it), so build_events' _model_preset_tags reads it too
+    # (presets.model_for_results in build_config is "baseline"). The single b1 row
+    # is v1's exemplar box: unmatched by baseline, caught by graph_rate_night.
+    pd.DataFrame({
+        "annotation_token": ["b1"], "sample_data_token": ["v1"],
+        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
+        "x_max": [2.0], "y_max": [2.0],
+        "matched_baseline": pd.array([False], dtype="boolean"),
+        "below_visibility_min": [False],
+    }).to_parquet(staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     (staging / "crops" / "v1.jpg").write_bytes(b"\xff\xd8\xff\xe0crop1")
     config["hero"] = {"token": "v0"}
@@ -1702,25 +1772,9 @@ def test_build_tolerates_a_corrupt_lancedb_store(
     from nuscenes_data_engine.demo.build import run_build
 
     config = yaml.safe_load(build_config.read_text())
-    staging = Path(config["curation"]["staging_dir"])
-    (staging / "crops").mkdir(parents=True)
-    pd.DataFrame({
-        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
-        "curation_buckets": [["night_failure"]],
-        "n_preds_baseline": pd.array([1], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
-    }).to_parquet(staging / "frame_manifest.parquet")
-    pd.DataFrame({
-        "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
-        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
-        "conf": [0.9], "status": ["tp"], "matched_annotation_token": ["a1"],
-    }).to_parquet(staging / "predictions.parquet")
-    pd.DataFrame({
-        "annotation_token": ["a1"], "sample_data_token": ["v0"],
-        "category_group": ["car"], "x_min": [1.0], "y_min": [1.0],
-        "x_max": [2.0], "y_max": [2.0], "matched_baseline": [True],
-    }).to_parquet(staging / "gt_boxes.parquet")
-    (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    # Same shape as _stage_minimal_curation (see the sibling curation test above) --
+    # this test is about the thumbnail export degrading, not about the staging.
+    _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": "v0"}
     config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
