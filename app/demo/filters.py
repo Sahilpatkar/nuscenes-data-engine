@@ -698,3 +698,140 @@ def selection_factors(
             None,
         ),
     ]
+
+
+# --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
+#
+# Pure, like the rest of this module: the Weak Supervision page's three derived
+# shapes -- one frame's verdict badge and VLM-vs-GT counts, a base arm's loss
+# split, and the accepted/rejected crowding pairs -- are computed here and unit-
+# tested without a Streamlit runtime.
+
+# The five detector classes the VLM was asked to count, in exporters.py's own
+# _VLM_CLASS_COLUMNS order: vlm_counts.parquet carries a vlm_<class>/gt_<class>
+# pair for each of them.
+_VLM_CLASSES = ("car", "truck", "bus", "pedestrian", "bicycle")
+
+_COUNT_TABLE_COLUMNS = ["class", "vlm_count", "gt_count"]
+_LOSS_COLUMNS = ["base_arm", "component", "value", "share"]
+_CROWDING_COLUMNS = ["arm", "side", "gt_boxes_per_frame"]
+
+
+def _count_text(value: Any) -> str:
+    """A count as a plain integer string, or "n/a" when it is missing.
+
+    The VLM's counts are float columns and a curated frame the VLM never labelled
+    has NA in every one of them (export_vlm_counts fills GT counts with a real 0,
+    but never invents a VLM count) -- rendering that NaN into the table would read
+    as "the VLM counted zero", which is a different claim from "the VLM never
+    looked at this frame".
+    """
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{int(value)}"
+
+
+def weak_frame_summary(
+    verdict: str | None, vlm_rows: pd.DataFrame, counts_row: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """One curated weak frame's verdict badge and its VLM-vs-GT count table.
+
+    ``verdict`` is ``frame_manifest.weak_verdict`` ("accepted"/"rejected"/NA),
+    ``vlm_rows`` that token's ``weak_labels.parquet`` rows (its verified pseudo
+    boxes), ``counts_row`` its ``vlm_counts.parquet`` row (or None when the VLM
+    never labelled it). Returns ``{verdict_label, mutual_zero, table}``.
+
+    "accepted" with ZERO pseudo boxes is the mutual-zero case and is labelled as
+    such: the detector proposed nothing on that frame and the VLM's counts agreed,
+    so it was accepted carrying no supervision at all -- materially different from
+    "accepted, here are its boxes", and not rare (see weak_verifier_by_class's
+    mutual_zero_share). "rejected" frames never have boxes at all, by construction,
+    so their label says so instead of reading as an absence of data.
+
+    (The boxes themselves are the baseline detector's; the VLM emits per-class
+    counts and verifies them -- see active_learning/pseudo_label.py.)
+    """
+    label = None if verdict is None or pd.isna(verdict) else str(verdict)
+    n_boxes = len(vlm_rows)
+    mutual_zero = bool(label == "accepted" and n_boxes == 0)
+    if mutual_zero:
+        verdict_label = "accepted — 0 pseudo boxes (mutual zero)"
+    elif label == "accepted":
+        verdict_label = f"accepted — {n_boxes} pseudo box{'' if n_boxes == 1 else 'es'}"
+    elif label == "rejected":
+        verdict_label = "rejected — no pseudo boxes by construction"
+    else:
+        verdict_label = "not a candidate of the weak-supervision arm"
+
+    table = pd.DataFrame(
+        [
+            {
+                "class": category,
+                "vlm_count": _count_text(
+                    None if counts_row is None else counts_row.get(f"vlm_{category}")
+                ),
+                "gt_count": _count_text(
+                    None if counts_row is None else counts_row.get(f"gt_{category}")
+                ),
+            }
+            for category in _VLM_CLASSES
+        ],
+        columns=_COUNT_TABLE_COLUMNS,
+    )
+    return {"verdict_label": verdict_label, "mutual_zero": mutual_zero, "table": table}
+
+
+def loss_long(row: Mapping[str, Any]) -> pd.DataFrame:
+    """One ``weak_loss_decomposition`` row as the three stacked components, in the
+    order they stack: what weak supervision RETAINED of the GT arm's gain, then
+    each of the two ways it lost the rest (frames the verifier dropped, then label
+    noise on the frames it kept).
+
+    ``share`` for the retained component is the RAW ``weak_gain / gt_gain`` ratio,
+    not the stored ``retention`` (which the exporter rounds to 4 dp so the build
+    can assert it against overview_metrics.json) -- so the three shares sum to 1.0
+    to float precision, which is what a stacked bar claims visually.
+    """
+    gt_gain = float(row["gt_gain"])
+    weak_gain = float(row["weak_gain"])
+    retained_share = weak_gain / gt_gain if gt_gain else float("nan")
+    return pd.DataFrame(
+        [
+            {
+                "base_arm": row["base_arm"], "component": "retained",
+                "value": weak_gain, "share": retained_share,
+            },
+            {
+                "base_arm": row["base_arm"], "component": "dropped-frame cost",
+                "value": float(row["dropped_frame_cost"]),
+                "share": float(row["dropped_frame_share"]),
+            },
+            {
+                "base_arm": row["base_arm"], "component": "label cost",
+                "value": float(row["label_cost"]), "share": float(row["label_share"]),
+            },
+        ],
+        columns=_LOSS_COLUMNS,
+    )
+
+
+def crowding_long(results: pd.DataFrame) -> pd.DataFrame:
+    """``weak_supervision_results`` as paired (arm, side, gt_boxes_per_frame) rows,
+    accepted before rejected within each arm -- the shape the paired bar chart
+    needs to show what the verifier's agreement rule actually selects for: sparse
+    frames pass, crowded ones are rejected.
+    """
+    records = [
+        {
+            "arm": row.arm,
+            "side": side,
+            "gt_boxes_per_frame": float(
+                row.gt_boxes_per_accepted_frame
+                if side == "accepted"
+                else row.gt_boxes_per_rejected_frame
+            ),
+        }
+        for row in results.itertuples(index=False)
+        for side in ("accepted", "rejected")
+    ]
+    return pd.DataFrame.from_records(records, columns=_CROWDING_COLUMNS)

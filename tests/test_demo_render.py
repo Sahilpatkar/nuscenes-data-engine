@@ -20,6 +20,7 @@ from render import (  # noqa: E402
     STYLE_GT,
     STYLE_LOW_CONF,
     STYLE_TP,
+    STYLE_VLM,
     BoxStyle,
     _draw_rect,
     draw_overlay,
@@ -282,3 +283,81 @@ def test_bar_chart_color_field_keeps_its_own_legend() -> None:
     # pass-through colours (which set scale/legend to None explicitly).
     assert encoding["color"].get("scale", "default") != None    # noqa: E711
     assert encoding["color"].get("legend", "default") != None   # noqa: E711
+
+
+# --- Phase 7 (Task 5): the VLM pseudo-box layer ----------------------------------
+
+
+def _vlm() -> pd.DataFrame:
+    """One verified VLM pseudo box, in weak_labels.parquet's own schema: no
+    ``matched`` and no ``status`` (those are GT/prediction concepts) -- a
+    verifier ``score`` instead of a detector confidence."""
+    return pd.DataFrame({
+        "x_min": [600.0], "y_min": [600.0], "x_max": [900.0], "y_max": [800.0],
+        "category_group": ["car"], "score": [0.73],
+    })
+
+
+def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pseudo boxes are a THIRD, independent layer: they render in every mode
+    (a weak-supervision frame is a train-pool frame -- it has GT but no
+    predictions, so "gt" is the mode the page actually uses), and the existing
+    two-layer signature is untouched.
+    """
+    gt, preds, vlm = _gt(matched=True), _preds("tp"), _vlm()
+    modes = ("gt", "pred", "overlay")
+    before = {
+        mode: draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6) for mode in modes
+    }
+
+    # Backward compatible: omitted / None / empty are all byte-identical to the
+    # pre-change two-layer render of the same inputs.
+    for mode, baseline in before.items():
+        assert (
+            draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=None).tobytes()
+            == baseline.tobytes()
+        )
+        assert (
+            draw_overlay(
+                _blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=vlm.iloc[0:0]
+            ).tobytes()
+            == baseline.tobytes()
+        )
+
+    # 600..900 x 600..800 scaled by 0.6 -> 360..540 x 360..480; sample the top
+    # edge clear of both corners. Solid (no gaps), blue, in every mode.
+    for mode, baseline in before.items():
+        out = draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=vlm)
+        edge = {out.getpixel((x, 360)) for x in range(362, 538)}
+        assert edge == {STYLE_VLM.color}, mode
+        assert out.tobytes() != baseline.tobytes(), mode
+
+    # Corrupt coordinates raise the same named ValueError the GT/prediction
+    # layers do, rather than half-rendering.
+    with pytest.raises(ValueError, match="inverted VLM box") as exc_info:
+        draw_overlay(
+            _blank(), gt, preds, mode="gt", scale=0.6, vlm_boxes=vlm.assign(x_max=[10.0])
+        )
+    assert "car" in str(exc_info.value)
+
+    # The label is the verifier score, not a category: "VLM 0.73".
+    #
+    # Patched through ``draw_overlay.__globals__`` rather than
+    # ``monkeypatch.setattr(render, ...)``: tests/test_demo_app.py's
+    # ``_reset_demo_app_modules`` deletes app/demo's modules from sys.modules
+    # between AppTest runs, so a later ``import render`` in THIS process yields a
+    # DIFFERENT module object from the one this file's own top-level import bound
+    # -- patching that one leaves the ``draw_overlay`` under test calling the
+    # original ``_draw_label`` (a real cross-file failure, caught by the full-suite
+    # run). A function's ``__globals__`` is always the module namespace it actually
+    # resolves names in.
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setitem(
+        draw_overlay.__globals__,
+        "_draw_label",
+        lambda draw, xyxy, text, style: calls.append((text, style)),
+    )
+    draw_overlay(_blank(), gt, preds, mode="gt", scale=0.6, vlm_boxes=vlm)
+    assert ("VLM 0.73", STYLE_VLM) in calls

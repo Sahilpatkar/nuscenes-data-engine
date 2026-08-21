@@ -201,6 +201,78 @@ def load_al_explain_validation() -> dict[str, Any]:
     return data
 
 
+# --- Phase 7: the Weak Supervision tables -----------------------------------------
+#
+# weak_loss_decomposition.parquet and weak_verifier_by_class.parquet ship with every
+# `demo build` from package_version 0.6 on; weak_labels.parquet and vlm_counts.parquet
+# only when the curation group was staged (build.py's `_include_curation` branch --
+# they are the curated weak frames' pseudo boxes and VLM count votes). All four load
+# through load_semsearch's graceful-absence pattern, so an older/stale committed
+# package renders the page with the sections that have no data saying so, rather than
+# a bare FileNotFoundError.
+
+_EMPTY_WEAK_LOSS_COLUMNS = [
+    "base_arm", "gt_gain", "weak_gt_gain", "weak_gain", "retention",
+    "dropped_frame_cost", "dropped_frame_share", "label_cost", "label_share", "headline",
+]
+
+_EMPTY_WEAK_BY_CLASS_COLUMNS = [
+    "arm", "category_group", "n_rejected_disagreements",
+    "n_accepted_mutual_zero", "mutual_zero_share",
+]
+
+_EMPTY_WEAK_LABELS_COLUMNS = [
+    "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+]
+
+_EMPTY_VLM_COUNTS_COLUMNS = [
+    "sample_data_token", "parse_status", "label_confidence", "vlm_time_of_day",
+    "vlm_weather", "vlm_car", "vlm_truck", "vlm_bus", "vlm_pedestrian", "vlm_bicycle",
+    "gt_car", "gt_truck", "gt_bus", "gt_pedestrian", "gt_bicycle",
+]
+
+
+@st.cache_data
+def load_weak_loss() -> pd.DataFrame:
+    """Each weak/GT pair's gain split (retained / dropped-frame / label cost)."""
+    path = DEMO_DATA / "weak_loss_decomposition.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_LOSS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_weak_by_class() -> pd.DataFrame:
+    """The verifier's per-class rejected disagreements and mutual-zero shares."""
+    path = DEMO_DATA / "weak_verifier_by_class.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_BY_CLASS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_weak_labels() -> pd.DataFrame:
+    """The curated accepted frames' verified pseudo boxes (native 1600x900 coords).
+
+    An accepted frame with no rows here is the mutual-zero case (the verifier
+    accepted zero VLM boxes against zero detector boxes), not missing data --
+    ``filters.weak_frame_summary`` is what turns that absence into a label.
+    """
+    path = DEMO_DATA / "weak_labels.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_LABELS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_vlm_counts() -> pd.DataFrame:
+    """One row per curated weak frame: the VLM's per-class counts next to GT's."""
+    path = DEMO_DATA / "vlm_counts.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_VLM_COUNTS_COLUMNS)
+    return pd.read_parquet(path)
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 

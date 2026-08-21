@@ -7,7 +7,7 @@ FastAPI service, the databases, or src/nuscenes_data_engine.
 from __future__ import annotations
 
 import streamlit as st
-from views import active_learning, failures, overview, scenarios, stubs
+from views import active_learning, failures, overview, scenarios, stubs, weak_supervision
 
 from data import package_missing
 
@@ -41,7 +41,14 @@ pages = [
         icon=":material/model_training:",
         url_path="active_learning",
     ),
-    st.Page(stubs.weak_supervision, title="Weak Supervision", icon=":material/fact_check:"),
+    # url_path="weak_supervision" (same rationale as the pages above): the
+    # Phase-7 AppTest smokes navigate via switch_page("views/weak_supervision.py").
+    st.Page(
+        weak_supervision.render,
+        title="Weak Supervision",
+        icon=":material/fact_check:",
+        url_path="weak_supervision",
+    ),
     st.Page(stubs.chat_replay, title="Ask the Dataset", icon=":material/chat:"),
 ]
 st.navigation(pages).run()

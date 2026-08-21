@@ -51,6 +51,11 @@ STYLE_FN = BoxStyle(color=(255, 133, 27), width=3, dash=8)          # orange das
 STYLE_TP = BoxStyle(color=(255, 255, 255), width=1, dash=None)      # white thin
 STYLE_FP = BoxStyle(color=(255, 65, 54), width=2, dash=None)        # red solid
 STYLE_LOW_CONF = BoxStyle(color=(255, 220, 0), width=2, dash=2)     # yellow dotted
+# Phase 7 (Task 5): a pseudo box on a weak-supervision train-pool frame. Blue solid
+# -- a colour no GT/prediction style uses, because a pseudo box is neither: it is a
+# baseline-detector proposal that a VLM's per-class counts corroborated (the VLM
+# never draws a box), drawn alongside GT so the two can be compared by eye.
+STYLE_VLM = BoxStyle(color=(0, 116, 217), width=2, dash=None)       # blue solid
 
 _PRED_STYLES: dict[str, BoxStyle] = {"tp": STYLE_TP, "fp": STYLE_FP, "low_conf": STYLE_LOW_CONF}
 _VALID_MODES = ("gt", "pred", "overlay")
@@ -169,6 +174,7 @@ def draw_overlay(
     *,
     mode: str,
     scale: float,
+    vlm_boxes: pd.DataFrame | None = None,
 ) -> Image.Image:
     """Render GT and/or predictions onto a copy of ``image``.
 
@@ -180,6 +186,14 @@ def draw_overlay(
     "tp"/"fp"/"low_conf" -- anything else raises ValueError).
     ``mode``: "gt" | "pred" | "overlay", else raises ValueError. The input image is
     never mutated.
+
+    ``vlm_boxes`` (Phase 7) is a THIRD, independent layer: the weak-supervision
+    pseudo boxes for the frame (x_min..y_max, category_group, score --
+    weak_labels.parquet's own schema), drawn last, in every mode. It is
+    mode-independent on purpose: the frames that carry pseudo boxes are train-pool
+    frames, which have GT but never predictions, so the page draws them in "gt"
+    mode and still needs the blue layer. Left as ``None`` (the default) the render
+    is byte-identical to the two-layer one this signature had before.
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"draw_overlay: unknown mode {mode!r} — expected one of {_VALID_MODES}")
@@ -213,6 +227,19 @@ def draw_overlay(
             _draw_rect(draw, xyxy, style)
             label = f"{row.category_group} {row.conf:.2f}"
             _draw_label(draw, xyxy, label, style)
+
+    if vlm_boxes is not None:
+        for row in vlm_boxes.itertuples(index=False):
+            xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
+            _validate_xyxy(xyxy, kind="VLM", category=str(row.category_group))
+            _draw_rect(draw, xyxy, STYLE_VLM)
+            # The score, not the category: the category is already on the GT box
+            # underneath, and what a viewer needs to judge a pseudo box is how
+            # confident the proposal was. "VLM" names the LAYER -- the VLM-verified
+            # weak-supervision pipeline (spec §4d pins this label) -- while the
+            # number is the baseline detector's own confidence, which the page's
+            # legend caption spells out in words.
+            _draw_label(draw, xyxy, f"VLM {row.score:.2f}", STYLE_VLM)
 
     return out
 

@@ -1394,3 +1394,223 @@ def test_active_learning_page_why_selected_panel_with_explain(
     assert any(
         "train-pool frame — no predictions" in str(c.value) for c in at.caption
     )
+
+
+# --- Phase 7 (Task 5): the Weak Supervision page -------------------------------
+
+
+def _weak_supervision_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="weak_supervision" in main.py, same rationale as the other pages'
+    # explicit url_paths (switch_page resolves by hashing the filename-derived name).
+    at.switch_page("views/weak_supervision.py").run(timeout=30)
+    return at
+
+
+def _add_second_weak_pair(built_demo_data: Path) -> None:
+    """Give the built package a SECOND weak/GT pair (the real package carries two:
+    the documented ``random`` headline and the ``graph_rate_night`` pair Overview
+    promises). This fixture's results.json only has ``weak_random``/
+    ``weak_random_gt``, so the non-headline card/caption/arrow would otherwise be
+    untestable -- the row is appended to the built parquet directly, the same
+    idiom the scenario tests use to edit a built package after the fact.
+
+    Deliberately NO ``weak_graph_rate_night`` row is added to
+    active_learning_results.parquet: the page must then say plainly that the
+    trained arm isn't in this package rather than inventing a delta for it.
+    """
+    path = built_demo_data / "weak_loss_decomposition.parquet"
+    existing = pd.read_parquet(path)
+    second = pd.DataFrame([{
+        "base_arm": "graph_rate_night", "gt_gain": 0.03, "weak_gt_gain": 0.02,
+        "weak_gain": 0.01181, "retention": 0.3937,
+        "dropped_frame_cost": 0.01, "dropped_frame_share": 0.01 / 0.03,
+        "label_cost": 0.00819, "label_share": 0.00819 / 0.03, "headline": False,
+    }])
+    pd.concat([existing, second], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_weak_supervision_page_cards_decomposition_bias_and_tabs(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a)-(e) The page's spine: both retention pairs as cards, the loss split, the
+    crowded-frame bias, and the accepted/rejected gallery with the VLM-vs-GT
+    counts -- every number read from the package (the fixture's headline pair is
+    0.0018/0.0100 = 18.0% retained, 50.0% dropped-frame, 32.0% label cost).
+    """
+    pytest.importorskip("streamlit")
+    _add_second_weak_pair(built_demo_data)
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # (a) both pairs, the documented headline attributed as such
+    labels = {m.label: m.value for m in at.metric}
+    headline = next(
+        label for label in labels
+        if "Share of GT gain retained" in label and "`random`" in label
+    )
+    assert "documented headline" in headline
+    assert labels[headline] == "18.0%"
+    other = next(
+        label for label in labels
+        if "Share of GT gain retained" in label and "`graph_rate_night`" in label
+    )
+    assert "documented headline" not in other
+    assert labels[other] == "39.4%"
+    # verifier retention (a DIFFERENT quantity: what the verifier kept, not what
+    # the training run retained) and the night pedestrian slice
+    assert any(
+        "Verifier retention" in label and "`random`" in label and labels[label] == "60%"
+        for label in labels
+    )
+    assert any(label.startswith("Night pedestrian mAP50-95") for label in labels)
+
+    # (b)/(c) the stacked loss decomposition and the paired crowding chart
+    assert len(at.get("vega_lite_chart")) >= 2
+    captions = [str(c.value) for c in at.caption]
+    assert any("18.0%" in c and "50.0%" in c and "32.0%" in c for c in captions)
+    assert any("accepted frames average 3.00 GT boxes/frame" in c for c in captions)
+    by_class = [
+        d.value for d in at.dataframe
+        if "mutual_zero_share" in list(getattr(d.value, "columns", []))
+    ]
+    assert len(by_class) == 1
+    assert "16.7%" in list(by_class[0]["mutual_zero_share"])
+
+    # (d) the two tabs over frame_manifest.weak_verdict
+    assert {"accepted", "rejected"} <= {str(tab.label) for tab in at.tabs}
+
+    at.session_state["ws_accepted_token"] = "wA"
+    at.session_state["ws_rejected_token"] = "wR"
+    at.run(timeout=30)
+    assert not at.exception
+
+    text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
+    assert any("accepted — 1 pseudo box" in t for t in text)
+    assert any("rejected — no pseudo boxes by construction" in t for t in text)
+    assert any(
+        "no pseudo boxes exist for rejected frames by construction" in t for t in text
+    )
+    assert len(at.image) >= 1                                   # wA's crop + pseudo box
+    counts = [
+        d.value for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == ["class", "vlm_count", "gt_count"]
+    ]
+    assert len(counts) == 2                                     # one per tab
+    accepted_counts = counts[0]
+    assert list(accepted_counts.loc[accepted_counts["class"] == "car", "vlm_count"]) == ["1"]
+
+    # the downstream result stated at ARM level (train-pool frames have no
+    # predictions), from active_learning_results: weak_random is +0.0050 night
+    assert any(
+        "`weak_random`" in t and "+0.0050" in t and "+0.0018" in t for t in text
+    )
+    # ... and the pair whose trained arm this package doesn't carry says so
+    assert any("`weak_graph_rate_night`" in t and "not in this package" in t for t in text)
+
+
+def test_weak_supervision_mutual_zero_flag(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted frame with zero pseudo boxes is the MUTUAL-ZERO case, and the
+    badge says so -- "accepted" alone would read as "the VLM labelled it", when
+    what actually happened is that the verifier agreed with the detector that the
+    frame holds none of the five classes.
+
+    Empties wA's rows out of the built package's weak_labels.parquet (the fixture
+    stages exactly one pseudo box, for wA) rather than rebuilding: the badge keys
+    off the frame's pseudo-box count, and the exporter's own "accepted frames with
+    no rows are simply absent" contract is pinned on the builder side.
+    """
+    pytest.importorskip("streamlit")
+    labels_path = built_demo_data / "weak_labels.parquet"
+    pd.read_parquet(labels_path).iloc[0:0].to_parquet(labels_path, index=False)
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    at.session_state["ws_accepted_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
+    assert any("accepted — 0 pseudo boxes (mutual zero)" in t for t in text)
+
+
+def test_overview_no_longer_promises_phase_7(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overview's live promise is fulfilled: the non-headline pair's sentence names
+    the page in the present tense, and no caption still says "Phase 7".
+
+    The fixture's results.json carries a single weak/GT pair, so a second
+    by_base_arm entry is patched into the built overview_metrics.json (the page's
+    whole input for this sentence) -- same idiom as
+    test_overview_flagship_caption_when_the_cypher_twin_is_only_sourced.
+    """
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    overview_path = built_demo_data / "overview_metrics.json"
+    overview = json.loads(overview_path.read_text())
+    overview["results"]["weak_retention"]["by_base_arm"]["graph_rate_night"] = 0.3937
+    overview_path.write_text(json.dumps(overview, indent=2, sort_keys=True))
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception
+
+    captions = [str(c.value) for c in at.caption]
+    assert not any("Phase 7" in c for c in captions)
+    assert any(
+        "`graph_rate_night` (39.4%)" in c and "The Weak Supervision page presents it." in c
+        for c in captions
+    )
+
+
+def test_weak_supervision_page_on_a_pre_phase_7_package(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before Phase 7 (the committed demo_data/ is still
+    package_version 0.5) carries weak_supervision_results.parquet in its OLD,
+    narrower schema -- no ``tolerance``/``conf``/``gt_boxes_per_rejected_frame``/
+    ``gt_boxes_per_candidate_frame`` -- no decomposition/by-class/labels/counts
+    tables at all, and a frame_manifest without ``weak_verdict``. The page must
+    then show what the package does carry and say what is missing, rather than
+    raising an AttributeError on a column that didn't exist yet.
+
+    Rebuilt from the built package by dropping exactly those columns/files (the
+    builder's own absent/included recording is pinned on the builder side) --
+    same idiom as test_scenario_page_errors_on_stale_package_missing_events.
+    """
+    pytest.importorskip("streamlit")
+    for name in (
+        "weak_loss_decomposition.parquet", "weak_verifier_by_class.parquet",
+        "weak_labels.parquet", "vlm_counts.parquet",
+    ):
+        (built_demo_data / name).unlink()
+    weaksup_path = built_demo_data / "weak_supervision_results.parquet"
+    pd.read_parquet(weaksup_path)[[
+        "arm", "n_candidates", "n_accepted", "verifier_retention", "n_pseudo_boxes",
+        "boxes_per_accepted_frame", "gt_boxes_per_accepted_frame",
+    ]].to_parquet(weaksup_path, index=False)
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    pd.read_parquet(manifest_path).drop(columns=["weak_verdict"]).to_parquet(
+        manifest_path, index=False
+    )
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert any("needs demo_data >= 0.6" in str(i.value) for i in at.info)
+    # the one thing the old package does carry is still on screen
+    assert any(
+        "Verifier retention" in m.label and "`random`" in m.label for m in at.metric
+    )

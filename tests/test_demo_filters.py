@@ -15,12 +15,14 @@ from filters import (  # noqa: E402
     braking_caption,
     community_jump,
     confidence_caption,
+    crowding_long,
     distance_caption,
     failure_counts,
     failure_flags,
     filter_frames,
     fixed_boxes,
     graph_node_label,
+    loss_long,
     model_label,
     parity_caption,
     rank_events,
@@ -29,6 +31,7 @@ from filters import (  # noqa: E402
     sort_frames,
     speed_caption,
     subgraph_narrative,
+    weak_frame_summary,
 )
 
 
@@ -826,3 +829,110 @@ def test_model_label_names_the_champion_checkpoint_honestly() -> None:
     assert model_label("champion") == "champion (yolov8m @960)"
     assert model_label("baseline") == "baseline"
     assert model_label("graph_rate_night") == "graph_rate_night"
+
+
+# --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
+
+
+def _vlm_rows(n: int) -> pd.DataFrame:
+    """``n`` of one token's weak_labels.parquet rows."""
+    return pd.DataFrame({
+        "sample_data_token": ["wA"] * n,
+        "category_group": ["car"] * n,
+        "x_min": [50.0] * n, "y_min": [50.0] * n,
+        "x_max": [150.0] * n, "y_max": [150.0] * n,
+        "score": [0.73] * n,
+    })
+
+
+def _counts_row() -> dict[str, object]:
+    """One vlm_counts.parquet row (exporters.export_vlm_counts' own columns)."""
+    return {
+        "sample_data_token": "wA", "parse_status": "ok", "label_confidence": 0.8,
+        "vlm_time_of_day": "night", "vlm_weather": "clear",
+        "vlm_car": 2.0, "vlm_truck": 0.0, "vlm_bus": 0.0,
+        "vlm_pedestrian": 1.0, "vlm_bicycle": 0.0,
+        "gt_car": 2, "gt_truck": 0, "gt_bus": 1, "gt_pedestrian": 1, "gt_bicycle": 0,
+    }
+
+
+def test_weak_frame_summary_flags_mutual_zero_and_counts() -> None:
+    """The verdict badge and the VLM-vs-GT count table for one curated frame.
+
+    "accepted" with zero pseudo boxes is the MUTUAL-ZERO case (the verifier
+    agreed with the detector that the frame holds none of the five classes), a
+    materially different claim from "accepted, here are its boxes" -- and
+    "rejected" never has boxes at all, by construction.
+    """
+    accepted = weak_frame_summary("accepted", _vlm_rows(2), _counts_row())
+    assert accepted["mutual_zero"] is False
+    assert accepted["verdict_label"] == "accepted — 2 pseudo boxes"
+    assert weak_frame_summary("accepted", _vlm_rows(1), _counts_row())["verdict_label"] == (
+        "accepted — 1 pseudo box"
+    )
+
+    table = accepted["table"]
+    assert list(table.columns) == ["class", "vlm_count", "gt_count"]
+    assert list(table["class"]) == ["car", "truck", "bus", "pedestrian", "bicycle"]
+    assert list(table["vlm_count"]) == ["2", "0", "0", "1", "0"]
+    assert list(table["gt_count"]) == ["2", "0", "1", "1", "0"]
+
+    mutual = weak_frame_summary("accepted", _vlm_rows(0), _counts_row())
+    assert mutual["mutual_zero"] is True
+    assert mutual["verdict_label"] == "accepted — 0 pseudo boxes (mutual zero)"
+
+    rejected = weak_frame_summary("rejected", _vlm_rows(0), _counts_row())
+    assert rejected["mutual_zero"] is False
+    assert rejected["verdict_label"] == "rejected — no pseudo boxes by construction"
+
+    # A curated frame with no vlm_counts row at all (the VLM never labelled it):
+    # "n/a" strings, never a NaN rendered into the table.
+    absent = weak_frame_summary("accepted", _vlm_rows(1), None)
+    assert list(absent["table"]["vlm_count"]) == ["n/a"] * 5
+    assert list(absent["table"]["gt_count"]) == ["n/a"] * 5
+
+    partial = weak_frame_summary("accepted", _vlm_rows(1), {**_counts_row(), "vlm_car": None})
+    car = partial["table"].loc[partial["table"]["class"] == "car"]
+    assert list(car["vlm_count"]) == ["n/a"]
+    assert list(car["gt_count"]) == ["2"]
+    assert not partial["table"].isna().to_numpy().any()
+
+
+def test_loss_decomposition_long_format() -> None:
+    """One weak_loss_decomposition row -> the three stacked-chart components, in
+    the order they are stacked (what weak supervision kept, then each way it lost
+    the rest). The retained share is the RAW ``weak_gain / gt_gain`` ratio, not
+    the stored (4-dp rounded) ``retention``, so the three shares sum to 1."""
+    row = {
+        "base_arm": "random", "gt_gain": 0.0362, "weak_gt_gain": 0.0182,
+        "weak_gain": 0.0066, "retention": 0.1824,
+        "dropped_frame_cost": 0.018, "dropped_frame_share": 0.4972,
+        "label_cost": 0.0116, "label_share": 0.3204, "headline": True,
+    }
+    long = loss_long(row)
+
+    assert list(long.columns) == ["base_arm", "component", "value", "share"]
+    assert list(long["base_arm"]) == ["random"] * 3
+    assert list(long["component"]) == ["retained", "dropped-frame cost", "label cost"]
+    assert list(long["value"]) == pytest.approx([0.0066, 0.018, 0.0116])
+    assert list(long["share"]) == pytest.approx([0.0066 / 0.0362, 0.4972, 0.3204])
+    assert sum(long["share"]) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_crowding_long_format() -> None:
+    """weak_supervision_results -> the paired accepted/rejected bars, two rows per
+    arm, accepted first (the verifier keeps the SPARSE frames -- the rejected side
+    is the crowded one, which is the whole point of the chart)."""
+    df = pd.DataFrame({
+        "arm": ["random", "graph_rate_night"],
+        "gt_boxes_per_accepted_frame": [3.8674, 3.4114],
+        "gt_boxes_per_rejected_frame": [7.6052, 6.6817],
+    })
+    long = crowding_long(df)
+
+    assert list(long.columns) == ["arm", "side", "gt_boxes_per_frame"]
+    assert list(long["arm"]) == ["random", "random", "graph_rate_night", "graph_rate_night"]
+    assert list(long["side"]) == ["accepted", "rejected", "accepted", "rejected"]
+    assert list(long["gt_boxes_per_frame"]) == pytest.approx(
+        [3.8674, 7.6052, 3.4114, 6.6817]
+    )
