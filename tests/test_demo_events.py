@@ -128,6 +128,12 @@ def _write_staging(
             "sample_data_token": token,
             "category_group": "pedestrian",
             "matched_baseline": False,
+            # False for every synthetic row here: this helper's fn_pedestrian_tokens
+            # path isn't testing the visibility-floor exclusion itself (see the
+            # dedicated test_fn_pedestrians_night_ignores_below_visibility_min_misses
+            # below for that) -- it just needs the column to exist at all, since
+            # _model_preset_tags now requires it (item 3a, consolidated review).
+            "below_visibility_min": False,
         }
         for token in fn_pedestrian_tokens
     ]
@@ -141,6 +147,7 @@ def _write_staging(
                     "sample_data_token": token,
                     "category_group": "pedestrian",
                     "matched_baseline": True,
+                    "below_visibility_min": False,
                 }
             )
     pd.DataFrame(gt_rows).to_parquet(staging_dir / "gt_boxes.parquet")
@@ -376,6 +383,8 @@ def test_event_features_and_flagship_agrees_with_sql(tmp_path: Path) -> None:
         "is_rain",
         "preset_tags",
         "in_curated_set",
+        "fn_ped_min_dist_m",
+        "low_conf_min_conf",
     ):
         assert col in events.columns
     assert row["speed_mps"] == 8.0
@@ -512,3 +521,119 @@ def test_only_tagged_events_exported_and_deterministic(tmp_path: Path) -> None:
     assert all(len(t) > 0 for t in events_a["preset_tags"])  # no zero-tag rows survive
 
     pd.testing.assert_frame_equal(events_a, events_b)
+
+
+# --- Consolidated review fixes (item 3, item 9) -------------------------------------
+
+
+def test_near_dist_m_must_be_10_or_raises(tmp_path: Path) -> None:
+    """The exported n_peds_within_10m column name promises a literal 10m threshold
+    -- a config drifting presets.near_dist_m away from 10.0 must fail loudly
+    rather than silently shipping a column whose own name is now a lie."""
+    with pytest.raises(ValueError, match="near_dist_m"):
+        _build(tmp_path, presets_cfg={**PRESETS_CFG, "near_dist_m": 5.0}, with_staging=False)
+
+
+def test_fn_pedestrians_night_ranks_by_missed_pedestrian_distance(tmp_path: Path) -> None:
+    """fn_pedestrians_night's rank/severity key (and its exported distance column)
+    reflect the MISSED pedestrian's own distance, not the frame's nearest
+    pedestrian overall -- a near, CAUGHT pedestrian on the same frame must not
+    stand in for "this [missed] pedestrian" (the card's verdict text names the
+    specific box the model got wrong)."""
+    processed_dir = tmp_path / "processed"
+    frames = [
+        {
+            "sdt": "d0_sdt", "st": "d0_st", "scene_token": "sceneD",
+            "scene_name": "scene-D", "timestamp": 5000, "is_night": True,
+            "is_rain": False, "hard_braking": False, "accel": -0.5, "speed": 5.0,
+            # near (3m, CAUGHT) + far (40m, MISSED) pedestrian on the same frame --
+            # annotation_token order here ("d0_sdt-ped-0"/"-1") must match the
+            # staged gt_boxes rows below for the distance join to resolve.
+            "pedestrians": [3.0, 40.0],
+        },
+        {
+            "sdt": "d1_sdt", "st": "d1_st", "scene_token": "sceneD",
+            "scene_name": "scene-D", "timestamp": 5001, "is_night": True,
+            "is_rain": False, "hard_braking": False, "accel": -0.5, "speed": 5.0,
+            # a single MISSED pedestrian, nearer than d0's missed one (20m < 40m)
+            # -- d1 must rank ABOVE d0 (nearest missed pedestrian first).
+            "pedestrians": [20.0],
+        },
+    ]
+    _write_processed(processed_dir, frames)
+
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["d0_sdt", "d1_sdt"], "split": ["val", "val"],
+    }).to_parquet(staging_dir / "frame_manifest.parquet")
+    pd.DataFrame({
+        "annotation_token": ["d0_sdt-ped-0", "d0_sdt-ped-1", "d1_sdt-ped-0"],
+        "sample_data_token": ["d0_sdt", "d0_sdt", "d1_sdt"],
+        "category_group": ["pedestrian"] * 3,
+        "matched_baseline": [True, False, False],  # d0's near box CAUGHT, far box MISSED
+        "below_visibility_min": [False, False, False],
+    }).to_parquet(staging_dir / "gt_boxes.parquet")
+    pd.DataFrame({
+        "sample_data_token": pd.array([], dtype="object"),
+        "model": pd.array([], dtype="object"),
+        "status": pd.array([], dtype="object"),
+        "conf": pd.array([], dtype="float64"),
+    }).to_parquet(staging_dir / "predictions.parquet")
+
+    events = build_events(
+        processed_dir=processed_dir, staging_dir=staging_dir,
+        presets_cfg=PRESETS_CFG, flagship_expected=None,
+    )
+    d0 = events.loc[events["sample_data_token"] == "d0_sdt"].iloc[0]
+    d1 = events.loc[events["sample_data_token"] == "d1_sdt"].iloc[0]
+    assert d0["fn_ped_min_dist_m"] == 40.0   # the FAR missed box, not the near 3m one
+    assert d1["fn_ped_min_dist_m"] == 20.0
+    assert int(d1["preset_rank_fn_pedestrians_night"]) == 1   # nearest missed ped first
+    assert int(d0["preset_rank_fn_pedestrians_night"]) == 2
+
+
+def test_fn_pedestrians_night_ignores_below_visibility_min_misses(tmp_path: Path) -> None:
+    """A missed pedestrian flagged below_visibility_min must not count as a false
+    negative here -- the rest of the app (views/failures.py, views/scenarios.py)
+    drops such rows entirely rather than treating them as a real miss, and this
+    preset must agree or it would flag a pedestrian the rest of the app never
+    shows as missed."""
+    processed_dir = tmp_path / "processed"
+    frames = [{
+        "sdt": "e0_sdt", "st": "e0_st", "scene_token": "sceneE",
+        "scene_name": "scene-E", "timestamp": 6000, "is_night": True,
+        "is_rain": False, "hard_braking": False, "accel": -0.5, "speed": 5.0,
+        # 15m, not <10m: this pedestrian must not ALSO trip the dynamics
+        # night_pedestrians preset (which reads distance from this same
+        # annotations_3d row, independent of below_visibility_min) -- otherwise
+        # e0's presence in the output couldn't distinguish "correctly excluded
+        # from fn_pedestrians_night" from "kept via the other preset".
+        "pedestrians": [15.0],
+    }]
+    _write_processed(processed_dir, frames)
+
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["e0_sdt"], "split": ["val"],
+    }).to_parquet(staging_dir / "frame_manifest.parquet")
+    pd.DataFrame({
+        "annotation_token": ["e0_sdt-ped-0"],
+        "sample_data_token": ["e0_sdt"],
+        "category_group": ["pedestrian"],
+        "matched_baseline": [False],      # a real miss...
+        "below_visibility_min": [True],   # ...but below the visibility floor
+    }).to_parquet(staging_dir / "gt_boxes.parquet")
+    pd.DataFrame({
+        "sample_data_token": pd.array([], dtype="object"),
+        "model": pd.array([], dtype="object"),
+        "status": pd.array([], dtype="object"),
+        "conf": pd.array([], dtype="float64"),
+    }).to_parquet(staging_dir / "predictions.parquet")
+
+    events = build_events(
+        processed_dir=processed_dir, staging_dir=staging_dir,
+        presets_cfg=PRESETS_CFG, flagship_expected=None,
+    )
+    assert "e0_sdt" not in set(events["sample_data_token"])

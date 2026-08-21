@@ -21,11 +21,13 @@ from nuscenes_data_engine.demo.curate import front_camera_hits
 
 logger = logging.getLogger("nuscenes_data_engine")
 
-# Over-request factor for semantic search: the LanceDB frame store spans all six
-# camera channels, but every semsearch result must be CAM_FRONT (mirrors demo
-# curate's semantic bucket, cli.py's `semantic_oversample`) -- 8x leaves enough
-# headroom for `front_camera_hits` to still fill `k` after filtering.
-_SEMSEARCH_OVERSAMPLE = 8
+# Default over-request factor for semantic search: the LanceDB frame store spans
+# all six camera channels, but every semsearch result must be CAM_FRONT (mirrors
+# demo curate's semantic bucket, cli.py's `semantic_oversample`) -- 8x leaves
+# enough headroom for `front_camera_hits` to still fill `k` after filtering.
+# Overridable via configs/demo.yaml's `semsearch.oversample` (item 7, consolidated
+# review) -- this is only the fallback when that key is absent.
+_DEFAULT_SEMSEARCH_OVERSAMPLE = 8
 
 # Verbatim from docs/GRAPH.md — the flagship SQL/Cypher parity query.
 FLAGSHIP_SQL = """
@@ -251,6 +253,7 @@ def export_semsearch(
     queries: list[str],
     k: int,
     staging_dir: Path,
+    oversample: int = _DEFAULT_SEMSEARCH_OVERSAMPLE,
 ) -> pd.DataFrame:
     """Run the recorded semantic-search queries, write ``semantic_search_results.parquet``.
 
@@ -258,21 +261,25 @@ def export_semsearch(
     ``SearchEngine.search_text``, so this module itself never imports torch/lancedb)
     returning an ORDERED (nearest-first) list of result dicts with at least
     ``sample_data_token``, ``channel``, ``score``. Each query is over-requested by
-    ``_SEMSEARCH_OVERSAMPLE`` (8x) and filtered to CAM_FRONT via
-    ``curate.py::front_camera_hits`` — the same helper (and the same reason: the
-    LanceDB store spans all six camera channels) ``demo curate``'s semantic bucket
-    reuses, so the filtering logic lives in exactly one place.
+    ``oversample`` (``configs/demo.yaml``'s ``semsearch.oversample``, default 8 when
+    absent) and filtered to CAM_FRONT via ``curate.py::front_camera_hits`` — the
+    same helper (and the same reason: the LanceDB store spans all six camera
+    channels) ``demo curate``'s semantic bucket reuses, so the filtering logic
+    lives in exactly one place.
 
-    Writes ``(query, rank, sample_data_token, score)`` rows in rank order (rank
-    restarts at 1 per query) to ``staging_dir/semantic_search_results.parquet``,
-    creating ``staging_dir`` if needed, and returns the same DataFrame.
+    Writes ``(query, rank, sample_data_token, score, k)`` rows in rank order (rank
+    restarts at 1 per query; ``k`` is the CONFIGURED target repeated on every row of
+    that query, not how many actually came back — the demo page's gallery caption
+    ("N of k front-camera hits") needs both numbers) to
+    ``staging_dir/semantic_search_results.parquet``, creating ``staging_dir`` if
+    needed, and returns the same DataFrame.
     """
     if not queries:
         raise ValueError("export_semsearch: empty queries")
 
     rows: list[dict[str, Any]] = []
     for query in queries:
-        raw = search_fn(query, k * _SEMSEARCH_OVERSAMPLE)
+        raw = search_fn(query, k * oversample)
         front = front_camera_hits(raw, k)
         for rank, hit in enumerate(front, start=1):
             rows.append(
@@ -281,10 +288,11 @@ def export_semsearch(
                     "rank": rank,
                     "sample_data_token": hit["sample_data_token"],
                     "score": hit["score"],
+                    "k": k,
                 }
             )
 
-    df = pd.DataFrame(rows, columns=["query", "rank", "sample_data_token", "score"])
+    df = pd.DataFrame(rows, columns=["query", "rank", "sample_data_token", "score", "k"])
     staging_dir = Path(staging_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(staging_dir / "semantic_search_results.parquet", index=False)

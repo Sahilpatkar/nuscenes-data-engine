@@ -17,15 +17,17 @@ from typing import TypedDict
 
 import pandas as pd
 import streamlit as st
-from filters import rank_events
+from filters import rank_events, severity_caption, speed_caption
 from PIL import Image
 from render import draw_overlay, recorded_banner
 
 from data import (
     crop_path,
+    events_available,
     load_events,
     load_frame_manifest,
     load_gt_boxes,
+    load_overview,
     load_predictions,
     load_semsearch,
     thumb_path,
@@ -34,8 +36,6 @@ from data import (
 # configs/demo.yaml's presets.model_for_results -- which model's matched_<model> /
 # predictions the two model-result presets (and this page's model panel) key off.
 _MODEL_FOR_RESULTS = "baseline"
-
-_STANDARD_GRAVITY_MPS2 = 9.80665  # braking-g captions divide accel_long_min_mps2 by this
 
 _NOT_CURATED_CAPTION = "not in the curated prediction set"
 
@@ -147,18 +147,7 @@ def _render_preset_buttons() -> None:
             st.caption(preset["description"])
 
 
-def _format_braking_g(accel_mps2: float) -> str:
-    if pd.isna(accel_mps2):
-        return "no braking data"
-    g_force = abs(float(accel_mps2)) / _STANDARD_GRAVITY_MPS2
-    return f"{g_force:.2f}g braking"
-
-
-def _format_distance(meters: float, *, label: str) -> str:
-    return f"{meters:.1f}m {label}" if pd.notna(meters) else f"no {label}"
-
-
-def _render_card_grid(ranked: pd.DataFrame, preset: _Preset) -> None:
+def _render_card_grid(ranked: pd.DataFrame, preset_name: str, preset: _Preset) -> None:
     if ranked.empty:
         st.info("No events match this preset in the current package.")
         return
@@ -166,15 +155,17 @@ def _render_card_grid(ranked: pd.DataFrame, preset: _Preset) -> None:
     columns = st.columns(4)
     for position, row in enumerate(ranked.itertuples()):
         token = row.sample_data_token
+        row_dict = row._asdict()
         with columns[position % 4]:
             image_path = _card_image_path(token)
             if image_path is not None:
                 st.image(str(image_path))
-            caption_parts = [
-                _format_braking_g(row.accel_long_min_mps2),
-                _format_distance(row.min_dist_pedestrian_m, label="ped"),
-                f"{row.speed_mps:.1f} m/s" if pd.notna(row.speed_mps) else "no speed",
-            ]
+            # The headline figure is THIS preset's own ranking quantity (item 6,
+            # consolidated review) -- braking g for hard_braking_near_pedestrians,
+            # speed for fast_cyclists, the missed pedestrian's own distance for
+            # fn_pedestrians_night, etc. -- not a fixed field shown regardless of
+            # which preset produced the card.
+            caption_parts = [severity_caption(preset_name, row_dict)]
             if row.is_night:
                 caption_parts.append("night")
             if row.is_rain:
@@ -191,14 +182,25 @@ def _render_viewer(row: pd.Series) -> None:
     gt = _gt_for_render(load_gt_boxes(), token)
 
     if row.in_curated_set:
+        preds = load_predictions()
+        preds_token = preds.loc[
+            (preds["sample_data_token"] == token) & (preds["model"] == _MODEL_FOR_RESULTS)
+        ]
         crop = crop_path(token)
         if crop.is_file():
-            preds = load_predictions()
-            preds_token = preds.loc[
-                (preds["sample_data_token"] == token) & (preds["model"] == _MODEL_FOR_RESULTS)
-            ]
             image = draw_overlay(Image.open(crop), gt, preds_token, mode="overlay", scale=0.6)
             st.image(image)
+            return
+        thumb = thumb_path(token)
+        if thumb.is_file():
+            # Crop missing (a partial/corrupted package) -- fall back to the
+            # thumb at its own scale rather than rendering nothing (item 5,
+            # consolidated review): the same resilience the non-curated branch
+            # below already has.
+            image = draw_overlay(Image.open(thumb), gt, preds_token, mode="overlay", scale=0.16)
+            st.image(image)
+        else:
+            st.caption("no image available for this curated frame")
         return
 
     thumb = thumb_path(token)
@@ -217,11 +219,15 @@ def _render_viewer(row: pd.Series) -> None:
 def _render_ego_panel(row: pd.Series) -> None:
     st.markdown("**Ego dynamics**")
     columns = st.columns(3)
-    columns[0].metric("Speed", f"{row.speed_mps:.1f} m/s" if pd.notna(row.speed_mps) else "n/a")
-    columns[1].metric(
-        "Peak decel",
-        f"{row.accel_long_min_mps2:.2f} m/s²" if pd.notna(row.accel_long_min_mps2) else "n/a",
-    )
+    columns[0].metric("Speed", speed_caption(row.speed_mps))
+    accel = row.accel_long_min_mps2
+    # "Peak decel" only makes sense for a NEGATIVE (decelerating) reading -- 27/126
+    # real flagship-adjacent events have a positive accel_long_min_mps2 (the frame
+    # was accelerating, not braking, at its most extreme longitudinal sample), and
+    # labeling that a "decel" figure misrepresents the frame (item 1, consolidated
+    # review).
+    decel_label = "Peak decel" if pd.notna(accel) and accel < 0 else "Peak long. accel"
+    columns[1].metric(decel_label, f"{accel:.2f} m/s²" if pd.notna(accel) else "n/a")
     columns[2].metric("Hard braking", "Yes" if row.is_hard_braking else "No")
 
 
@@ -278,7 +284,7 @@ def _render_filmstrip(row: pd.Series) -> None:
 
     # (label, token, speed, accel) for every non-NA t-2..t+2 neighbor, plus the
     # current frame in the middle -- NA neighbors (scene edges) are omitted from
-    # the slider entirely, per the design doc.
+    # the strip entirely, per the design doc.
     steps: list[tuple[str, str, float, float]] = []
     for column, label in _BEFORE_STEPS:
         token = getattr(row, column)
@@ -294,12 +300,21 @@ def _render_filmstrip(row: pd.Series) -> None:
     selected_label = st.select_slider(
         "Step", options=[label for label, *_ in steps], value=_CURRENT_STEP, key="scenario_filmstrip"
     )
-    step_token, step_speed, step_accel = by_label[selected_label]
 
-    thumb = thumb_path(step_token)
-    if thumb.is_file():
-        st.image(str(thumb))
-    speed_text = f"{step_speed:.1f} m/s" if pd.notna(step_speed) else "n/a"
+    # All five ship already (item 12, consolidated review): a strip of every
+    # available step's thumbnail, the selected one marked via its own caption --
+    # not just the single selected image the slider alone would show.
+    strip_columns = st.columns(len(steps))
+    for strip_col, (label, step_tok, _speed, _accel) in zip(strip_columns, steps, strict=True):
+        with strip_col:
+            step_thumb = thumb_path(step_tok)
+            if step_thumb.is_file():
+                st.image(str(step_thumb))
+            marker = " (selected)" if label == selected_label else ""
+            st.caption(f"{label}{marker}")
+
+    _step_token, step_speed, step_accel = by_label[selected_label]
+    speed_text = speed_caption(step_speed)
     accel_text = f"{step_accel:.2f} m/s²" if pd.notna(step_accel) else "n/a"
     st.caption(f"{selected_label}: speed {speed_text}, accel {accel_text}")
 
@@ -316,6 +331,12 @@ def _render_semantic_gallery() -> None:
     for query, group in semsearch.groupby("query", sort=False):
         st.markdown(f"**{query}**")
         ranked_group = group.sort_values("rank")
+        target_k = (
+            int(ranked_group["k"].iloc[0])
+            if "k" in ranked_group.columns and pd.notna(ranked_group["k"].iloc[0])
+            else len(ranked_group)
+        )
+        st.caption(f"{len(ranked_group)} of {target_k} front-camera hits")
         columns = st.columns(len(ranked_group))
         for column, hit in zip(columns, ranked_group.itertuples(), strict=True):
             with column:
@@ -333,6 +354,13 @@ def render() -> None:
         "an event, to open the synchronized viewer below."
     )
 
+    if not events_available():
+        # scenario_events.parquet shipped starting package_version 0.4 (Phase 5) --
+        # a stale/older demo_data/ package must not crash the page with a bare
+        # traceback (item 4, consolidated review).
+        st.error("needs demo_data >= 0.4 — rerun demo build")
+        return
+
     events = load_events()
     st.session_state.setdefault("scenario_preset", _FLAGSHIP_PRESET)
 
@@ -347,12 +375,21 @@ def render() -> None:
     st.caption(f"{preset['scope_caption']} {preset['severity_caption']}")
 
     if preset_name == _FLAGSHIP_PRESET:
+        # The parity claim ("identical count in DuckDB SQL and Neo4j Cypher")
+        # states the ASSERTED numbers from overview_metrics.json (item 2,
+        # consolidated review) -- exporters.export_overview computes flagship.sql
+        # live via DuckDB and run_build asserts it against flagship.expected_sql_
+        # count before the package ships; flagship.cypher is separately sourced
+        # from GRAPH.md. Reading len(ranked) here instead would report the
+        # (post-cap) card-grid count, which is a different number from the
+        # headline claim if a future config ever capped below the real count.
+        flagship = load_overview()["flagship"]
         st.success(
-            f"{len(ranked)} events — identical count in DuckDB SQL and Neo4j "
-            "Cypher (Cypher sourced from GRAPH.md until Phase 6)"
+            f"{flagship['sql']} events — identical count in DuckDB SQL and Neo4j "
+            f"Cypher (Cypher sourced from {flagship['cypher_source']} until Phase 6)"
         )
 
-    _render_card_grid(ranked, preset)
+    _render_card_grid(ranked, preset_name, preset)
 
     selected_token = st.session_state.get("scenario_token")
     if selected_token and selected_token in set(ranked["sample_data_token"]):
@@ -364,6 +401,9 @@ def render() -> None:
         _render_context_panel(row)
         _render_model_panel(row, preset)
         _render_filmstrip(row)
+        # Phase-6 slot (item 11, consolidated review): the interactive graph page
+        # plugs into this labelled placeholder.
+        st.info("Interactive graph traversal for this scenario lands in Phase 6.")
 
     st.divider()
     _render_semantic_gallery()

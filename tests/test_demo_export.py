@@ -322,15 +322,31 @@ def test_export_semsearch_writes_ranked_rows_and_oversamples(tmp_path: Path) -> 
 
     on_disk = pd.read_parquet(out / "semantic_search_results.parquet")
     pd.testing.assert_frame_equal(df, on_disk)
-    assert list(df.columns) == ["query", "rank", "sample_data_token", "score"]
+    assert list(df.columns) == ["query", "rank", "sample_data_token", "score", "k"]
     # CAM_FRONT filter applied, non-CAM_FRONT b1 dropped, rank order preserved
     # (nearest-first), truncated to k=2 -- f3 never makes it in.
     assert list(df["sample_data_token"]) == ["f1", "f2"]
     assert list(df["rank"]) == [1, 2]
     assert list(df["score"]) == [0.9, 0.8]
     assert (df["query"] == "foggy road").all()
-    # oversample x8: search_fn called with k=2*8=16, not the raw k=2
+    # k column carries the CONFIGURED target (2), not how many actually returned --
+    # the demo page's gallery caption ("N of k front-camera hits") needs both.
+    assert list(df["k"]) == [2, 2]
+    # default oversample x8: search_fn called with k=2*8=16, not the raw k=2
     assert search_fn.calls == [("foggy road", 16)]  # type: ignore[attr-defined]
+
+
+def test_export_semsearch_oversample_is_configurable(tmp_path: Path) -> None:
+    """configs/demo.yaml's semsearch.oversample overrides the default 8x (item 7,
+    consolidated review) -- passed straight through to the search_fn call size."""
+    from nuscenes_data_engine.demo.exporters import export_semsearch
+
+    hits = {"foggy road": [{"sample_data_token": "f1", "channel": "CAM_FRONT", "score": 0.9}]}
+    search_fn = _fake_search_fn(hits)
+    export_semsearch(
+        search_fn=search_fn, queries=["foggy road"], k=2, staging_dir=tmp_path, oversample=16,
+    )
+    assert search_fn.calls == [("foggy road", 32)]  # type: ignore[attr-defined]  # 2*16, not 2*8
 
 
 def test_export_semsearch_multiple_queries_in_order(tmp_path: Path) -> None:
@@ -1201,6 +1217,7 @@ def test_build_includes_semsearch_when_staged(build_config: Path) -> None:
             "rank": [1, 2],
             "sample_data_token": ["semq1", "semq2"],
             "score": [0.9, 0.8],
+            "k": [8, 8],
         }
     ).to_parquet(staging / "semantic_search_results.parquet")
     db = lancedb.connect(config["paths"]["lancedb_path"])
@@ -1225,3 +1242,30 @@ def test_build_includes_semsearch_when_staged(build_config: Path) -> None:
     )
     assert (out / "sample_frames" / "thumbs" / "semq1.jpg").is_file()
     assert (out / "sample_frames" / "thumbs" / "semq2.jpg").is_file()
+
+
+def test_build_rejects_malformed_staged_semsearch_before_copying(build_config: Path) -> None:
+    """A staged semantic_search_results.parquet missing a required column (e.g. a
+    stale pre-`k`-column file from before item 7's schema change) must fail the
+    build BEFORE the file is copied into the package -- not ship a gallery the
+    page can't fully render, and not leave a partially-included package behind."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    staging = Path(config["curation"]["staging_dir"])
+    staging.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "query": ["foggy road"],
+            "rank": [1],
+            "sample_data_token": ["semq1"],
+            "score": [0.9],
+            # no "k" column -- the schema this build now requires.
+        }
+    ).to_parquet(staging / "semantic_search_results.parquet")
+
+    with pytest.raises(ValueError, match="missing columns"):
+        run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    assert not (out / "semantic_search_results.parquet").exists()

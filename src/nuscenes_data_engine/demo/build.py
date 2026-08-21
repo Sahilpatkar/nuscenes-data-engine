@@ -318,12 +318,48 @@ def _include_events(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
         tokens |= set(events[col].dropna())
     _export_thumbs_deduped(config=config, out_dir=out_dir, tokens=tokens, context="event")
 
-    flagship_n = int(
-        events["preset_tags"]
-        .apply(lambda tags: "hard_braking_near_pedestrians" in tags)
-        .sum()
-    )
-    return {"events": "included", "flagship_events": flagship_n, "n_events": len(events)}
+    # The manifest's flagship_events is the PRE-cap ASSERTED count (item 2,
+    # consolidated review), not a re-derivation from the (post-cap) returned
+    # frame: build_events already raised above if its own pre-cap
+    # hard_braking_near_pedestrians count disagreed with expected_sql_count, so by
+    # this point the two are guaranteed equal -- config["flagship"]["expected_sql_
+    # count"] IS that asserted number. Counting tags on the post-cap frame instead
+    # would silently under-report if a future config ever set cap_per_preset below
+    # expected_sql_count (today cap_per_preset=30 == expected_sql_count=30, so
+    # nothing is actually capped away, but the manifest key's own meaning should
+    # not depend on that coincidence holding forever).
+    flagship_events = config["flagship"]["expected_sql_count"]
+    return {"events": "included", "flagship_events": flagship_events, "n_events": len(events)}
+
+
+_SEMSEARCH_COLUMNS = ("query", "rank", "sample_data_token", "score", "k")
+
+
+def _validate_semsearch(df: pd.DataFrame, path: Path) -> None:
+    """Reject a malformed/stale staged semsearch parquet BEFORE it's copied into
+    the package (item 7, consolidated review) -- a schema mismatch (e.g. from a
+    pre-`k`-column ``demo semsearch`` run) must fail the build loudly rather than
+    ship a file the gallery page can't fully render.
+    """
+    missing = [c for c in _SEMSEARCH_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"demo build: {path} missing columns {missing}")
+    if df.empty:
+        raise ValueError(f"demo build: {path} has zero rows — re-run `demo semsearch`")
+    if df["sample_data_token"].isna().any():
+        raise ValueError(f"demo build: {path} has null sample_data_token rows")
+    # rank must be exactly 1..n per query, in order -- the gallery page sorts by
+    # rank and trusts it starts at 1 with no gaps.
+    bad_queries = [
+        query
+        for query, ranks in df.groupby("query")["rank"]
+        if sorted(ranks) != list(range(1, len(ranks) + 1))
+    ]
+    if bad_queries:
+        raise ValueError(
+            f"demo build: {path} rank column isn't a clean 1..n sequence per "
+            f"query for: {sorted(bad_queries)}"
+        )
 
 
 def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
@@ -333,7 +369,8 @@ def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
     config section, or no staged ``semantic_search_results.parquet`` (``demo
     semsearch`` hasn't run yet), logs a warning and the manifest records "absent" —
     a package built without it is still honest and still usable, same rationale as
-    curation's own TRINITY-unreachable fallback.
+    curation's own TRINITY-unreachable fallback. When present, the staged parquet
+    is validated (``_validate_semsearch``) BEFORE it's copied in.
     """
     curation_cfg = config.get("curation")
     if not curation_cfg:
@@ -352,10 +389,11 @@ def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
         )
         return "absent"
 
+    staged = pd.read_parquet(semsearch_path)
+    _validate_semsearch(staged, semsearch_path)
+
     shutil.copy2(semsearch_path, out_dir / "semantic_search_results.parquet")
-    tokens = set(pd.read_parquet(semsearch_path, columns=["sample_data_token"])[
-        "sample_data_token"
-    ])
+    tokens = set(staged["sample_data_token"])
     _export_thumbs_deduped(config=config, out_dir=out_dir, tokens=tokens, context="semsearch")
     return "included"
 

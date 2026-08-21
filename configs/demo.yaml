@@ -62,6 +62,11 @@ semsearch:                        # Phase 5: `demo semsearch` (torch required) -
     - pedestrian crossing at a red light at night
     - construction zone with traffic cones
   k: 8
+  oversample: 16                  # consolidated review (item 7): the LanceDB store
+                                   # spans all six camera channels, and 8x sometimes
+                                   # left fewer than k CAM_FRONT hits for a query;
+                                   # exporters.export_semsearch defaults to 8 when
+                                   # this key is absent.
 
 curation:
   staging_dir: data/demo_curation

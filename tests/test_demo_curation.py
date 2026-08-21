@@ -967,6 +967,46 @@ def test_demo_semsearch_missing_torch_lancedb_raises_directive_error(
     assert "uv sync --extra train --extra engine" in str(result.exception)
 
 
+def test_demo_semsearch_missing_lancedb_store_raises_directive_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing LanceDB store surfaces as FileNotFoundError from engine
+    construction, not ImportError -- `demo semsearch`'s except clause must catch
+    both (item 8, consolidated review) and give the same directive message,
+    mirroring `demo curate`'s semantic-bucket except clause (cli.py::demo_curate's
+    ``except (ImportError, FileNotFoundError)``). A fake module standing in for
+    ``nuscenes_data_engine.data_engine.search`` drives the real CLI command and the
+    real try/except in cli.py::demo_semsearch; only the engine construction itself
+    is faked."""
+    import sys
+    import types
+
+    from typer.testing import CliRunner
+
+    from nuscenes_data_engine.cli import app
+
+    config = {
+        "paths": {"lancedb_path": str(tmp_path / "lancedb"), "lancedb_table": "frames"},
+        "curation": {"staging_dir": str(tmp_path / "staging")},
+        "semsearch": {"queries": ["foggy road with heavy lens glare"], "k": 8},
+    }
+    config_path = tmp_path / "demo.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+
+    class _RaisingSearchEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise FileNotFoundError("no such LanceDB table")
+
+    fake_module = types.ModuleType("nuscenes_data_engine.data_engine.search")
+    fake_module.SearchEngine = _RaisingSearchEngine  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nuscenes_data_engine.data_engine.search", fake_module)
+
+    result = CliRunner().invoke(app, ["demo", "semsearch", "--config", str(config_path)])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "uv sync --extra train --extra engine" in str(result.exception)
+
+
 def test_front_camera_hits_drops_non_cam_front_and_preserves_rank_order() -> None:
     """Task-5 live-run fix: real SigLIP search returned a CAM_BACK token
     (85f49850a882409ea01b2e8f3d006d05) that reached run_curate's channel guard and

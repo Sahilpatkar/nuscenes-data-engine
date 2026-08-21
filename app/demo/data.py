@@ -57,14 +57,30 @@ def load_predictions() -> pd.DataFrame:
     return pd.read_parquet(DEMO_DATA / "predictions.parquet")
 
 
+def _events_path() -> Path:
+    return DEMO_DATA / "scenario_events.parquet"
+
+
+def events_available() -> bool:
+    """``scenario_events.parquet`` shipped starting package_version 0.4 (Phase 5) --
+    a package built by an older ``demo build`` (or a stale committed demo_data/)
+    won't have it. The Scenario Search page checks this BEFORE calling
+    ``load_events()`` and shows a directive ``st.error`` instead of letting a bare
+    ``FileNotFoundError`` (or a downstream ``rank_events`` ``ValueError`` on a
+    frame missing every ``preset_rank_*`` column) surface as a traceback
+    (item 4, consolidated review).
+    """
+    return _events_path().is_file()
+
+
 @st.cache_data
 def load_events() -> pd.DataFrame:
-    return pd.read_parquet(DEMO_DATA / "scenario_events.parquet")
+    return pd.read_parquet(_events_path())
 
 
 # semsearch's schema (build.py's _include_semsearch / exporters.export_semsearch):
-# query, rank, sample_data_token, score.
-_EMPTY_SEMSEARCH_COLUMNS = ["query", "rank", "sample_data_token", "score"]
+# query, rank, sample_data_token, score, k.
+_EMPTY_SEMSEARCH_COLUMNS = ["query", "rank", "sample_data_token", "score", "k"]
 
 
 @st.cache_data

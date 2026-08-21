@@ -1195,8 +1195,15 @@ def demo_semsearch(
             queries=semsearch_cfg["queries"],
             k=int(semsearch_cfg["k"]),
             staging_dir=Path(curation_cfg["staging_dir"]),
+            # semsearch.oversample: consolidated review (item 7) -- falls back to
+            # export_semsearch's own default (8) when the config doesn't set it.
+            oversample=int(semsearch_cfg.get("oversample", 8)),
         )
-    except ImportError as exc:
+    # FileNotFoundError alongside ImportError, same as `demo curate`'s semantic
+    # bucket (item 8, consolidated review): a missing LanceDB store directory
+    # raises FileNotFoundError from lancedb.connect, not ImportError, and this
+    # command's directive message applies equally to that case.
+    except (ImportError, FileNotFoundError) as exc:
         raise ValueError(
             "demo semsearch: torch/lancedb not installed — this command requires "
             "the train+engine extras: `uv sync --extra train --extra engine`"

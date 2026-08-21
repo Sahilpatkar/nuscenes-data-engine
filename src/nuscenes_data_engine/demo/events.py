@@ -66,6 +66,8 @@ _NULLABLE_FLOAT_COLUMNS = (
     "min_dist_pedestrian_m",
     "min_dist_vehicle_m",
     "min_dist_cyclist_m",
+    "fn_ped_min_dist_m",
+    "low_conf_min_conf",
     *(f"speed_{label}" for label, _ in _NEIGHBORS),
     *(f"accel_{label}" for label, _ in _NEIGHBORS),
 )
@@ -86,6 +88,12 @@ _COLUMN_ORDER = (
     "is_rain",
     "preset_tags",
     "in_curated_set",
+    # Model-preset-specific severity figures (item 6, consolidated review): the
+    # MISSED pedestrian's own distance and the lowest low-conf-braking confidence
+    # -- distinct from the frame-wide min_dist_pedestrian_m above, which can be a
+    # DIFFERENT, caught pedestrian on the same frame.
+    "fn_ped_min_dist_m",
+    "low_conf_min_conf",
     *(label for label, _ in _NEIGHBORS),
     *(f"speed_{label}" for label, _ in _NEIGHBORS),
     *(f"accel_{label}" for label, _ in _NEIGHBORS),
@@ -261,22 +269,43 @@ def _load_staging(
     return manifest, gt_boxes, predictions
 
 
-def _model_preset_tags(
-    df: pd.DataFrame, staging: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None, model: str
-) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
-    """``(in_curated_set, fn_pedestrians_night, low_conf_braking, low_conf_min_conf)``.
+def _load_annotation_distances(processed_dir: Path) -> pd.DataFrame:
+    """``annotation_token -> distance_to_ego_m``, for joining a missed pedestrian's
+    OWN per-box distance onto the ``fn_pedestrians_night`` preset's severity key.
 
-    All four are boolean/float Series aligned to ``df``'s index; when staging isn't
-    ready the tags are all-False and ``in_curated_set`` all-False (the honest "not
-    curated" state the UI is expected to render, per the design doc).
+    The staged ``gt_boxes.parquet`` itself carries no distance column — that
+    enrichment only happens at build time (``build.py::_include_curation``, from
+    this same ``annotations_3d`` table) — so this preset joins it in directly
+    rather than waiting for the package-time copy.
+    """
+    return pd.read_parquet(
+        _require(processed_dir / "annotations_3d.parquet"),
+        columns=["annotation_token", "distance_to_ego_m"],
+    )
+
+
+def _model_preset_tags(
+    df: pd.DataFrame,
+    staging: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None,
+    model: str,
+    annotation_distances: pd.DataFrame,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """``(in_curated_set, fn_pedestrians_night, fn_ped_min_dist_m, low_conf_braking,
+    low_conf_min_conf)``.
+
+    All five are boolean/float Series aligned to ``df``'s index; when staging isn't
+    ready the tags are all-False, the two float series are all-NaN, and
+    ``in_curated_set`` is all-False (the honest "not curated" state the UI is
+    expected to render, per the design doc).
     """
     in_curated_set = pd.Series(False, index=df.index)
     fn_pedestrians_night = pd.Series(False, index=df.index)
+    fn_ped_min_dist = pd.Series(np.nan, index=df.index, dtype="float64")
     low_conf_braking = pd.Series(False, index=df.index)
     low_conf_min_conf = pd.Series(np.nan, index=df.index, dtype="float64")
 
     if staging is None:
-        return in_curated_set, fn_pedestrians_night, low_conf_braking, low_conf_min_conf
+        return in_curated_set, fn_pedestrians_night, fn_ped_min_dist, low_conf_braking, low_conf_min_conf
 
     manifest, gt_boxes, predictions = staging
     val_tokens = set(manifest.loc[manifest["split"] == "val", "sample_data_token"])
@@ -288,13 +317,37 @@ def _model_preset_tags(
             f"demo events: gt_boxes.parquet has no column {matched_col!r} — check "
             "presets.model_for_results in configs/demo.yaml"
         )
-    ped_gt = gt_boxes.loc[
-        gt_boxes["sample_data_token"].isin(val_tokens)
-        & (gt_boxes["category_group"] == "pedestrian")
+    if "annotation_token" not in gt_boxes.columns:
+        raise ValueError("demo events: gt_boxes.parquet missing annotation_token column")
+
+    # below_visibility_min rows are dropped everywhere else the app touches GT
+    # (views/failures.py, views/scenarios.py render only ~below_visibility_min
+    # rows) rather than treated as "ghost boxes" -- a missed one must not count
+    # as a false negative here either, or this preset would flag a pedestrian the
+    # rest of the app never shows as a miss. The real staged gt_boxes.parquet
+    # (from `demo infer`) always carries this column; it's optional here (default:
+    # nothing flagged) only so older/synthetic fixtures that predate it don't need
+    # updating for an invariant they aren't exercising.
+    if "below_visibility_min" in gt_boxes.columns:
+        visible_gt = gt_boxes.loc[~_null_safe_bool(gt_boxes["below_visibility_min"])]
+    else:
+        visible_gt = gt_boxes
+    ped_gt = visible_gt.loc[
+        visible_gt["sample_data_token"].isin(val_tokens)
+        & (visible_gt["category_group"] == "pedestrian")
     ]
-    fn_tokens = set(ped_gt.loc[_is_definitely_false(ped_gt[matched_col]), "sample_data_token"])
+    fn_ped_gt = ped_gt.loc[_is_definitely_false(ped_gt[matched_col])]
+    fn_tokens = set(fn_ped_gt["sample_data_token"])
     night_tokens = set(df.loc[df["is_night"], "sample_data_token"])
     fn_pedestrians_night = df["sample_data_token"].isin(fn_tokens & night_tokens)
+
+    # Per-token min distance among the MISSED pedestrians specifically -- not the
+    # frame's nearest pedestrian overall (min_dist_pedestrian_m), which can be a
+    # DIFFERENT, CAUGHT box on the same frame. The card's verdict text says "this
+    # [missed] pedestrian", so its distance must be that box's own.
+    fn_with_dist = fn_ped_gt.merge(annotation_distances, on="annotation_token", how="left")
+    per_token_min_fn_dist = fn_with_dist.groupby("sample_data_token")["distance_to_ego_m"].min()
+    fn_ped_min_dist = df["sample_data_token"].map(per_token_min_fn_dist).astype("float64")
 
     if "model" not in predictions.columns or "status" not in predictions.columns:
         raise ValueError("demo events: predictions.parquet missing model/status columns")
@@ -306,7 +359,7 @@ def _model_preset_tags(
     low_conf_min_conf = df["sample_data_token"].map(per_token_min_conf).astype("float64")
     low_conf_braking = df["sample_data_token"].isin(low_conf_tokens) & df["is_hard_braking"]
 
-    return in_curated_set, fn_pedestrians_night, low_conf_braking, low_conf_min_conf
+    return in_curated_set, fn_pedestrians_night, fn_ped_min_dist, low_conf_braking, low_conf_min_conf
 
 
 def _cap_preset(
@@ -365,6 +418,18 @@ def build_events(
     cap_per_preset = int(presets_cfg["cap_per_preset"])
     model = str(presets_cfg["model_for_results"])
 
+    # The exported n_peds_within_10m column NAME promises a literal 10m threshold
+    # -- item 9, consolidated review. presets.near_dist_m is configurable for
+    # every OTHER preset predicate, but this one specific column would silently
+    # lie about its own name if near_dist_m ever drifted from 10.0; rename the
+    # column (and every reader of it, app/demo included) before changing this.
+    if near_dist_m != 10.0:
+        raise ValueError(
+            f"demo events: presets.near_dist_m={near_dist_m} but the exported "
+            "n_peds_within_10m column name promises exactly 10.0 — rename the "
+            "column everywhere it's read before changing this threshold"
+        )
+
     df = _load_base(processed_dir)
     context = _context_features(processed_dir, near_dist_m)
     df = df.merge(context, on="sample_token", how="left")
@@ -373,10 +438,25 @@ def build_events(
     df = _add_neighbors(df)
 
     staging = _load_staging(staging_dir)
-    in_curated_set, fn_pedestrians_night, low_conf_braking, low_conf_min_conf = _model_preset_tags(
-        df, staging, model
+    # Only read annotations_3d a second time (for the fn distance join) when
+    # staging is actually ready -- an absent/partial staging dir never touches
+    # this frame (_model_preset_tags's early-return path), so there is no reason
+    # to pay for the read.
+    annotation_distances = (
+        _load_annotation_distances(processed_dir)
+        if staging is not None
+        else pd.DataFrame(columns=["annotation_token", "distance_to_ego_m"])
     )
+    (
+        in_curated_set,
+        fn_pedestrians_night,
+        fn_ped_min_dist,
+        low_conf_braking,
+        low_conf_min_conf,
+    ) = _model_preset_tags(df, staging, model, annotation_distances)
     df["in_curated_set"] = in_curated_set
+    df["fn_ped_min_dist_m"] = fn_ped_min_dist
+    df["low_conf_min_conf"] = low_conf_min_conf
 
     vru_dist = pd.concat([df["min_dist_pedestrian_m"], df["min_dist_cyclist_m"]], axis=1).min(
         axis=1, skipna=True
@@ -409,8 +489,11 @@ def build_events(
         "night_pedestrians": (df["min_dist_pedestrian_m"], True),
         "fast_cyclists": (df["speed_mps"], False),
         "rain_vru": (vru_dist, True),
-        "fn_pedestrians_night": (df["min_dist_pedestrian_m"], True),
-        "low_conf_braking": (low_conf_min_conf, True),
+        # Ranked by the MISSED pedestrian's own distance (item 3, consolidated
+        # review) -- not min_dist_pedestrian_m, which can be a different, caught
+        # box on the same frame.
+        "fn_pedestrians_night": (df["fn_ped_min_dist_m"], True),
+        "low_conf_braking": (df["low_conf_min_conf"], True),
     }
 
     kept_masks: dict[str, pd.Series] = {}

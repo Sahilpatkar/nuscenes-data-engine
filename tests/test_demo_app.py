@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -265,6 +266,10 @@ def built_demo_data(tmp_path: Path) -> Path:
         "rank": [1, 1],
         "sample_data_token": ["v1", "v0"],
         "score": [0.91, 0.77],
+        # k=2 while only 1 hit landed per query -- exercises the gallery's "N of
+        # k front-camera hits" caption (item 7c, consolidated review) actually
+        # distinguishing N from k, not just echoing the row count back.
+        "k": [2, 2],
     }).to_parquet(staging / "semantic_search_results.parquet")
 
     out = tmp_path / "demo_data"
@@ -482,9 +487,35 @@ PRESETS_UNDER_TEST = (
 )
 
 
+def _reset_demo_app_modules() -> None:
+    """Force every app/demo module to be re-imported fresh on the next AppTest run.
+
+    Streamlit's AppTest re-executes main.py's top-level code on each .run(), but
+    modules main.py (or a page module) merely `import`s -- data, filters, render,
+    views.* -- are cached in sys.modules like any normal Python import and are
+    NOT re-executed across separate `AppTest.from_file(...)` instances within the
+    same pytest process. Left alone, data.py's module-level `DEMO_DATA =
+    Path(os.environ.get("DEMO_DATA_DIR", ...))` stays pinned to whichever test's
+    monkeypatched env var was active the FIRST time "data" was ever imported this
+    process, silently ignoring every later test's own built_demo_data (verified
+    directly: a second AppTest instance, with DEMO_DATA_DIR repointed at a
+    different tmp package, still read the FIRST instance's directory). Most
+    existing assertions never noticed, since every built_demo_data fixture
+    produces the same token shape (same "v0"/"v1"/"s1" names) regardless of which
+    test built it -- but a test that checks for a file's ABSENCE needs the
+    CURRENT test's own directory actually read.
+    """
+    for name in list(sys.modules):
+        module = sys.modules[name]
+        module_file = getattr(module, "__file__", None)
+        if module_file and Path(module_file).is_relative_to(DEMO_DIR):
+            del sys.modules[name]
+
+
 def _scenarios_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch):
     from streamlit.testing.v1 import AppTest
 
+    _reset_demo_app_modules()
     monkeypatch.syspath_prepend(str(DEMO_DIR))
     monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
     at = AppTest.from_file(str(DEMO_DIR / "main.py"))
@@ -575,8 +606,15 @@ def test_scenario_flagship_badge(
     assert not at.exception
     badges = [str(s.value) for s in at.success]
     assert any("identical count in DuckDB SQL and Neo4j Cypher" in b for b in badges)
-    assert any("Cypher sourced from GRAPH.md until Phase 6" in b for b in badges)
-    assert any(b.startswith("1 events") for b in badges)   # n from the events frame
+    # cypher_source is read straight from overview_metrics.json's flagship dict
+    # (item 2, consolidated review) -- the fixture's config sets it to
+    # "docs/GRAPH.md" (the real configs/demo.yaml value), not the bare "GRAPH.md"
+    # the badge text used to hardcode.
+    assert any("Cypher sourced from docs/GRAPH.md until Phase 6" in b for b in badges)
+    # The count is the ASSERTED overview_metrics flagship.sql number, not a
+    # re-derivation from the (post-cap) events frame -- both happen to be 1 in
+    # this fixture, but for the right reason now.
+    assert any(b.startswith("1 events") for b in badges)
 
 
 def test_scenario_semantic_gallery_renders(
@@ -591,6 +629,10 @@ def test_scenario_semantic_gallery_renders(
     all_text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
     assert any("crowded nighttime pedestrian crossing" in t for t in all_text)
     assert any("foggy road with heavy lens glare" in t for t in all_text)
+    # item 7c, consolidated review: "N of k front-camera hits" -- the fixture
+    # stages k=2 with exactly 1 hit per query, so N != k here (not just echoing
+    # the row count back as both numbers).
+    assert any("1 of 2 front-camera hits" in t for t in all_text)
 
 
 def test_scenario_every_preset_renders_without_exception(
@@ -608,3 +650,35 @@ def test_scenario_every_preset_renders_without_exception(
         at.button(key=f"scenario_preset_{name}").click().run(timeout=30)
         assert not at.exception, f"preset {name!r} raised: {at.exception}"
         assert at.session_state["scenario_preset"] == name
+
+
+def test_scenario_page_errors_on_stale_package_missing_events(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item 4, consolidated review) A package built by an older `demo build` (no
+    scenario_events.parquet, package_version < 0.4) must show a directive
+    st.error, not a bare FileNotFoundError/ValueError traceback."""
+    pytest.importorskip("streamlit")
+    (built_demo_data / "scenario_events.parquet").unlink()
+
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("needs demo_data >= 0.4" in str(e.value) for e in at.error)
+
+
+def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item 5, consolidated review) A curated event whose crop file is missing
+    (a partial/corrupted package) must still render via its thumb, the same
+    resilience the non-curated branch already had -- not render nothing."""
+    pytest.importorskip("streamlit")
+    (built_demo_data / "sample_frames" / "crops" / "v1.jpg").unlink()
+
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.session_state["scenario_token"] = "v1"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.image) >= 1   # the thumb-fallback overlay still rendered
+    assert not any("no image available" in str(c.value) for c in at.caption)
