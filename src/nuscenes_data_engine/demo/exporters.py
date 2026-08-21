@@ -774,11 +774,10 @@ def export_vlm_counts(
     ``label_paths`` are the VLM label tables ``run_pseudo_label`` merged, in its
     order (see ``vlm_label_tables``) -- BOTH of them, because a curated frame's
     label may live in either. They are concatenated in that order and deduped with
-    the same preference the run applies: the first ``parse_status == "ok"`` row
-    wins; if none of a token's rows parsed ok, the first row (in table then file
-    order) is kept instead — uniqueness is asserted afterwards. (The run keeps the
-    LAST ok row rather than the first; on the shipped data no token has an ok row
-    in more than one table, so the two rules pick the same row.)
+    the same preference the run applies: any ``parse_status == "ok"`` row beats any
+    row that didn't parse; among a token's ok rows (or, if none parsed ok, among its
+    not-ok rows) the LAST one in merged-table order wins — uniqueness is asserted
+    afterwards.
 
     Every token in ``tokens`` gets a row even with no VLM label at all (``vlm_*``/
     ``parse_status`` NA) — but GT counts always fill 0 rather than NA, since "zero
@@ -795,15 +794,15 @@ def export_vlm_counts(
 
     labels = _merged_vlm_labels(label_paths)
     labels = labels.loc[labels["sample_data_token"].isin(set(tokens))].copy()
-    # Stable sort by (token, "is this row NOT ok") -- ties (same token, same
-    # ok-ness) keep their original relative position (table order, then file order
-    # within a table), so the first row after sorting is exactly "first ok row,
-    # else first row".
-    labels["_not_ok"] = (labels["parse_status"] != "ok").astype(int)
-    labels = labels.sort_values(["sample_data_token", "_not_ok"], kind="stable")
+    # Mirrors run_pseudo_label's dedup exactly: stable sort by "is this row ok"
+    # (not-ok=0 before ok=1) preserves each token's rows in merged-table order
+    # within their ok/not-ok group, so keep="last" picks the LAST ok row if the
+    # token has one, else the last not-ok row.
+    labels["_ok"] = (labels["parse_status"] == "ok").astype(int)
+    labels = labels.sort_values("_ok", kind="stable")
     deduped = (
-        labels.drop_duplicates(subset="sample_data_token", keep="first")
-        .drop(columns="_not_ok")
+        labels.drop_duplicates(subset="sample_data_token", keep="last")
+        .drop(columns="_ok")
         .set_index("sample_data_token")
     )
     if deduped.index.duplicated().any():

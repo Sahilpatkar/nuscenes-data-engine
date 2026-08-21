@@ -223,15 +223,15 @@ Phase-3 overlay (`draw_overlay`, mode `overlay`, 0.6 crop), and a per-box table
 built by a pure `filters.fixed_boxes(gt, preds, *, baseline, arm)` helper: every
 visible GT box where the arm's claim beats the baseline's — baseline `none` (no
 prediction ≥ floor) or `low-conf 0.22` → arm `0.61 (tp)` / `low-conf 0.41` — with
-class and distance.
+class and distance. Below it the arm-level line: night mAP50-95 0.1667 → 0.1768 on
+the held-out val split. The doc's `Failure → Selected → Added → Retrained →
+Improved` arrows close the section.
 
 *Amendment (2026-08-21, consolidated review): `arm_claim` is a bare confidence
 string like `0.61` (the `(tp)` suffix the paragraph above sketches is not written),
 and only `tp` arm claims qualify as an upgrade — the same per-box rule the exemplar
 validation amendment below applies, so the table and the validation agree by
-construction.* Below it the arm-level line: night mAP50-95 0.1667 → 0.1768 on
-the held-out val split. The doc's `Failure → Selected → Added → Retrained →
-Improved` arrows close the section.
+construction.*
 
 ## 4. Weak Supervision page — `app/demo/views/weak_supervision.py`
 
@@ -255,7 +255,13 @@ mutual-zero shares from `weak_verifier_by_class.parquet` (pedestrian 79%).
 **(d) Visual comparison.** Tabs *accepted* / *rejected* over the 40 curated weak
 frames (`weak_verdict`): crop with GT (green) and VLM pseudo boxes in a new style
 (`STYLE_VLM`: blue solid, label `VLM 0.73`) via a `draw_overlay` `vlm_boxes=`
-extension that keeps the existing signature backward-compatible;
+extension that keeps the existing signature backward-compatible; verdict badge
+(accepted-with-zero-boxes flagged "accepted — 0 pseudo boxes (mutual zero)";
+rejected frames have no boxes by construction and the caption says the verifier
+compared the VLM's counts to the *detector's*, which are not in the package); a VLM
+count vs GT count table per class from `vlm_counts.parquet`; and the downstream
+result stated at arm level (`weak_graph_rate_night` Δnight −0.0262) — train-pool
+frames carry no predictions and the page says so.
 
 *Amendment (2026-08-21, consolidated review C2): the pseudo boxes are the BASELINE
 DETECTOR's proposals at conf ≥ 0.5 (`pseudo_label.py::propose_boxes`), kept only
@@ -264,13 +270,7 @@ boxes. So the style is `STYLE_PSEUDO`, the label `pseudo 0.73`, and the kwarg
 `pseudo_boxes=`; `VLM 0.73` attributed the detector's own confidence to the VLM.
 `docs/DEMO_PLAN.md:606`'s "VLM-generated labels" wording is the master plan's
 shorthand, which the demo deliberately corrects. The tab scope is every
-`weak_verdict` frame (78), not 40 — see the `vlm_counts` amendment in §2.* verdict badge
-(accepted-with-zero-boxes flagged "accepted — 0 pseudo boxes (mutual zero)";
-rejected frames have no boxes by construction and the caption says the verifier
-compared the VLM's counts to the *detector's*, which are not in the package); a VLM
-count vs GT count table per class from `vlm_counts.parquet`; and the downstream
-result stated at arm level (`weak_graph_rate_night` Δnight −0.0262) — train-pool
-frames carry no predictions and the page says so.
+`weak_verdict` frame (78), not 40 — see the `vlm_counts` amendment in §2.*
 
 **(e) Story arrows** for the weak-sup experiment: Hypothesis → Labelling (Qwen2.5-VL
 counts, conf ≥ 0.5, tolerance 1 — from the summaries) → Verification (retention) →

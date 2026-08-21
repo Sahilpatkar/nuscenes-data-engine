@@ -1551,6 +1551,14 @@ def test_weak_supervision_page_cards_decomposition_bias_and_tabs(
     # (b)/(c) the stacked loss decomposition and the paired crowding chart
     assert len(at.get("vega_lite_chart")) >= 2
     captions = [str(c.value) for c in at.caption]
+    # the "(headline)" card suffix carries its own attribution caption, naming
+    # docs/ACTIVE_LEARNING.md and clarifying it marks the LOWER share, not the
+    # better one (real-browser finding: a bare "(headline)" read as "best").
+    assert any(
+        "(headline) marks the pair docs/ACTIVE_LEARNING.md publishes" in c
+        and "the lower of the two shares, not the better one" in c
+        for c in captions
+    )
     assert any("18.0%" in c and "50.0%" in c and "32.0%" in c for c in captions)
     assert any("accepted frames average 3.00 GT boxes/frame" in c for c in captions)
     by_class = [

@@ -314,6 +314,19 @@ def test_bar_chart_grouped_puts_alternatives_side_by_side() -> None:
     assert stacked["y"].get("stack", "zero") == "zero"
 
 
+def test_bar_chart_grouped_without_color_field_raises() -> None:
+    """``grouped=True`` needs ``color_field`` to offset -- without one there is
+    nothing to group BY, and the chart would silently render unstacked and
+    ungrouped (a single bar per x, indistinguishable from a plain chart) instead
+    of failing loudly on the missing argument."""
+    from render import bar_chart
+
+    quotas = pd.DataFrame({"community": ["#10301", "#7"], "frames": [83, 40]})
+
+    with pytest.raises(ValueError, match="grouped=True needs a color_field"):
+        bar_chart(quotas, x="community", y="frames", grouped=True, zero_line=False)
+
+
 def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
     """13 arm names across ~1100 px were clipped to "weak_graph_rate..." -- an arm
     name is an identifier, and a clipped one names nothing (real-browser finding 2);

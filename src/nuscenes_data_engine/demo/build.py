@@ -626,7 +626,10 @@ def _vlm_label_paths(config: dict[str, Any], *, al_dir: Path) -> list[Path]:
     settings expression is the fallback, exactly what the run computes), and
     ``paths.autolabel_weak_config``'s ``state.dir`` the second (falling back to
     ``<active_learning_dir>/autolabel_weak``, the shipped config's own value).
-    Both keys are optional so a pre-Phase-7 demo.yaml still builds.
+    Both keys are optional so a pre-Phase-7 demo.yaml still builds -- but if
+    ``autolabel_weak_config`` IS set, it must point at a real file: a configured
+    path that doesn't exist is a typo, not "unconfigured", so it raises rather
+    than silently falling back to the shipped default.
     """
     paths = config["paths"]
     configured_autolabel = paths.get("autolabel_dir")
@@ -637,8 +640,14 @@ def _vlm_label_paths(config: dict[str, Any], *, al_dir: Path) -> list[Path]:
     )
     weak_state = al_dir / "autolabel_weak"
     weak_config = paths.get("autolabel_weak_config")
-    if weak_config and Path(weak_config).is_file():
-        configured_weak = (load_yaml(Path(weak_config)).get("state") or {}).get("dir")
+    if weak_config:
+        weak_config_path = Path(weak_config)
+        if not weak_config_path.is_file():
+            raise ValueError(
+                f"configs/demo.yaml paths.autolabel_weak_config points at {weak_config}, "
+                "which does not exist"
+            )
+        configured_weak = (load_yaml(weak_config_path).get("state") or {}).get("dir")
         if configured_weak:
             weak_state = Path(configured_weak)
     return exporters.vlm_label_tables(autolabel_dir=autolabel_dir, weak_state_dir=weak_state)

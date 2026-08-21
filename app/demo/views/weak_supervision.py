@@ -188,6 +188,10 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
             "the weak arm with the worst night result in this package."
         )
     metric_cards(cards)
+    st.caption(
+        "(headline) marks the pair docs/ACTIVE_LEARNING.md publishes as the "
+        "weak-supervision result — the lower of the two shares, not the better one."
+    )
 
     if night_pedestrian_caption is not None:
         st.caption(night_pedestrian_caption)

@@ -919,24 +919,27 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
         return {name: [None] * n for name in names}
 
     rows: dict[str, Any] = {
-        "sample_data_token": ["wA", "wA", "wR", "wBothBad", "wBothBad"],
-        "model": ["qwen2.5-vl"] * 5,
+        "sample_data_token": ["wA", "wA", "wR", "wBothBad", "wBothBad", "wBothOk"],
+        "model": ["qwen2.5-vl"] * 6,
         # wA: first row truncated (must be skipped), second is "ok" -> kept.
         # wR: single ok row.
-        # wBothBad: neither row is "ok" -> falls back to the first row in file order.
-        "parse_status": ["truncated", "ok", "ok", "truncated", "truncated"],
-        "time_of_day": [None, "night", "day", "dusk", "dusk2"],
-        "weather": [None, "clear", "rain", "fog", "fog2"],
-        "hazards": ["[]"] * 5,
-        "notable_conditions": ["[]"] * 5,
+        # wBothBad: neither row is "ok" -> falls back to the LAST row in file order
+        # (mirrors the run: keep="last" applies regardless of ok-ness too).
+        # wBothOk: an "ok" row here too, in the SECOND (later-merged) table -- see
+        # the other "ok" row for it in the autolabel table below.
+        "parse_status": ["truncated", "ok", "ok", "truncated", "truncated", "ok"],
+        "time_of_day": [None, "night", "day", "dusk", "dusk2", "day"],
+        "weather": [None, "clear", "rain", "fog", "fog2", "rain"],
+        "hazards": ["[]"] * 6,
+        "notable_conditions": ["[]"] * 6,
         # A STRING enum in the real table ("high"/"low"/None), never a float
         # (consolidated review C1).
-        "label_confidence": [None, "high", "low", None, None],
+        "label_confidence": [None, "high", "low", None, None, "high"],
     }
-    for name, values in _count_cols(5).items():
+    for name, values in _count_cols(6).items():
         rows[name] = values
-    rows["cars"] = [None, 1.0, 0.0, 5.0, 6.0]
-    rows["pedestrians"] = [None, 2.0, 0.0, 0.0, 0.0]
+    rows["cars"] = [None, 1.0, 0.0, 5.0, 6.0, 20.0]
+    rows["pedestrians"] = [None, 2.0, 0.0, 0.0, 0.0, 9.0]
     pd.DataFrame(rows).to_parquet(al / "autolabel_weak" / "labels.parquet")
 
     pd.DataFrame({
@@ -950,25 +953,26 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
     autolabel = tmp_path / "autolabel"
     autolabel.mkdir()
     other: dict[str, Any] = {
-        "sample_data_token": ["wOther"],
-        "model": ["qwen2.5-vl"],
-        "parse_status": ["ok"],
-        "time_of_day": ["night"],
-        "weather": ["clear"],
-        "hazards": ["[]"],
-        "notable_conditions": ["[]"],
-        "label_confidence": ["high"],
+        "sample_data_token": ["wOther", "wBothOk"],
+        "model": ["qwen2.5-vl"] * 2,
+        "parse_status": ["ok", "ok"],
+        "time_of_day": ["night", "dawn"],
+        "weather": ["clear", "snow"],
+        "hazards": ["[]"] * 2,
+        "notable_conditions": ["[]"] * 2,
+        "label_confidence": ["high", "low"],
     }
-    for name, values in _count_cols(1).items():
+    for name, values in _count_cols(2).items():
         other[name] = values
-    other["cars"] = [3.0]
-    other["pedestrians"] = [1.0]
+    other["cars"] = [3.0, 10.0]
+    other["pedestrians"] = [1.0, 5.0]
     pd.DataFrame(other).to_parquet(autolabel / "labels.parquet")
 
     out = tmp_path / "demo_data"
     df = export_vlm_counts(
         label_paths=[autolabel / "labels.parquet", al / "autolabel_weak" / "labels.parquet"],
-        processed_dir=processed, tokens=["wA", "wR", "wNoVlm", "wBothBad", "wOther"],
+        processed_dir=processed,
+        tokens=["wA", "wR", "wNoVlm", "wBothBad", "wOther", "wBothOk"],
         out_dir=out,
     ).set_index("sample_data_token")
 
@@ -990,10 +994,11 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
     # wR: a single ok row, straightforward.
     assert df.loc["wR", "parse_status"] == "ok"
     assert df.loc["wR", "gt_car"] == 1
-    # wBothBad: neither dup is "ok" -> falls back to the first row (cars=5.0, dusk).
+    # wBothBad: neither dup is "ok" -> falls back to the LAST row (cars=6.0,
+    # dusk2), mirroring the run's keep="last" regardless of ok-ness.
     assert df.loc["wBothBad", "parse_status"] == "truncated"
-    assert df.loc["wBothBad", "vlm_car"] == 5.0
-    assert df.loc["wBothBad", "vlm_time_of_day"] == "dusk"
+    assert df.loc["wBothBad", "vlm_car"] == 6.0
+    assert df.loc["wBothBad", "vlm_time_of_day"] == "dusk2"
     assert df.loc["wBothBad", "gt_bus"] == 1
     # wNoVlm: no row in labels.parquet at all -> vlm_* NA, parse_status NA, but GT
     # is a real fact (0), not "unknown".
@@ -1006,6 +1011,14 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
     assert df.loc["wOther", "label_confidence"] == "high"
     assert df.loc["wOther", "vlm_car"] == 3.0
     assert df.loc["wOther", "vlm_pedestrian"] == 1.0
+    # wBothOk: an "ok" row in BOTH tables with DIFFERENT counts -- the run's rule
+    # (LAST ok row in merged-table order wins) means the SECOND table's (weak)
+    # row wins over the FIRST table's (autolabel) row, not the other way round.
+    assert df.loc["wBothOk", "parse_status"] == "ok"
+    assert df.loc["wBothOk", "label_confidence"] == "high"
+    assert df.loc["wBothOk", "vlm_car"] == 20.0
+    assert df.loc["wBothOk", "vlm_pedestrian"] == 9.0
+    assert df.loc["wBothOk", "vlm_time_of_day"] == "day"
 
 
 def test_vlm_counts_empty_tokens_writes_empty_table_with_schema(tmp_path: Path) -> None:
@@ -1605,9 +1618,15 @@ def test_build_vlm_counts_cover_every_weak_verdict_frame_from_both_label_tables(
 
     "v0" is the staged curated frame: it carries ``curation_buckets =
     ["night_failure"]`` (so the old bucket-scoped list skipped it entirely) but is
-    in the weak arm's accepted set, so ``weak_verdict == "accepted"``. Its VLM
-    label is staged ONLY in the Phase-6b autolabel table here, so a row that is
-    populated at all proves both fixes at once.
+    in the weak arm's accepted set, so ``weak_verdict == "accepted"``. ``tiny_
+    inputs`` already gives it an "ok" row in the weak table (cars=1.0); this test
+    adds a SECOND "ok" row for it in the Phase-6b autolabel table (cars=3.0, a
+    deliberately different count) so a populated, non-NA result proves both
+    tables were read and hashed. The two tables disagreeing is also what pins the
+    dedup rule end to end: the exporter mirrors ``run_pseudo_label``'s (the LAST
+    ok row in merged-table order wins), and the weak table is listed SECOND
+    (``vlm_label_tables``), so the weak row's cars=1.0 -- not the autolabel row's
+    3.0 -- is what must come out here.
     """
     from nuscenes_data_engine.demo.build import run_build
 
@@ -1630,10 +1649,30 @@ def test_build_vlm_counts_cover_every_weak_verdict_frame_from_both_label_tables(
     assert manifest["validation"]["n_vlm_counts"] == 1
     assert counts.loc["v0", "parse_status"] == "ok"
     assert counts.loc["v0", "label_confidence"] == "high"
-    assert counts.loc["v0", "vlm_car"] == 3.0
+    # the weak table's row wins (listed second -> LAST in merged order), not the
+    # autolabel table's -- see the docstring.
+    assert counts.loc["v0", "vlm_car"] == 1.0
     # both tables hashed as inputs, the weak one and the Phase-6b one
     assert str(autolabel_dir / "labels.parquet") in manifest["inputs"]
     assert any(key.endswith("autolabel_weak/labels.parquet") for key in manifest["inputs"])
+
+
+def test_vlm_label_paths_rejects_a_configured_but_missing_weak_config(
+    tmp_path: Path,
+) -> None:
+    """`paths.autolabel_weak_config` pointing at a file that isn't there is a
+    typo in demo.yaml, not "unconfigured" -- it must fail loudly rather than
+    silently falling back to the shipped `<active_learning_dir>/autolabel_weak`
+    default (consolidated review follow-up)."""
+    from nuscenes_data_engine.demo.build import _vlm_label_paths
+
+    missing = tmp_path / "configs" / "autolabel_weak.yaml"
+    config: dict[str, Any] = {"paths": {"autolabel_weak_config": str(missing)}}
+
+    with pytest.raises(ValueError, match="does not exist") as excinfo:
+        _vlm_label_paths(config, al_dir=tmp_path / "active_learning")
+    assert str(missing) in str(excinfo.value)
+    assert "paths.autolabel_weak_config" in str(excinfo.value)
 
 
 def test_build_resolves_n_mine_from_the_graph_mining_override(

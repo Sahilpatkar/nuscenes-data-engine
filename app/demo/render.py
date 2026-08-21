@@ -334,6 +334,8 @@ def bar_chart(
     the return type is a union: an ``alt.LayerChart`` is not an ``alt.Chart``, and
     ``st.altair_chart`` takes either.
     """
+    if grouped and color_field is None:
+        raise ValueError("bar_chart: grouped=True needs a color_field")
     data = frame.copy()
     axis_kwargs: dict[str, Any] = {"labelLimit": 0}
     if label_angle is not None:
