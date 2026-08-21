@@ -1,0 +1,18 @@
+{
+  "arm": "graph_rate_night",
+  "communities_match": true,
+  "config": {
+    "channel": "CAM_FRONT",
+    "n_mine": 1500,
+    "night_floor": 375,
+    "route_k": 10,
+    "seed": 64,
+    "top_k": 1000
+  },
+  "first_mismatch": null,
+  "gds_version": "2.13.11",
+  "mass_total": 6769.7414,
+  "n_communities": 97,
+  "n_selected": 1500,
+  "selected_match": true
+}
