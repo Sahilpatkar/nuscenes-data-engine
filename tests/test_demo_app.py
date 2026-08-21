@@ -61,10 +61,11 @@ def test_demo_requirements_stay_minimal() -> None:
     assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
 
 
-def _stage_subgraphs(staging_dir: Path) -> None:
+def _stage_subgraphs_with_event(staging_dir: Path) -> None:
     """Stage six ``graph_subgraphs/<preset>.json`` files under ``staging_dir`` --
     adapted from tests/test_demo_export.py's own ``_stage_subgraphs`` helper (Task
-    2), which mirrors ``demo subgraph_export.export_subgraphs``'s real output shape
+    2), and deliberately NOT named the same (item M7, Phase 6 review: the two
+    differ), which mirrors ``demo subgraph_export.export_subgraphs``'s real output shape
     closely enough for ``run_build``'s ``_include_subgraphs`` copy/hash/flagship-
     read logic to exercise, without a live Neo4j connection.
 
@@ -450,10 +451,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     # Task 3 (Phase 6): stage graph_subgraphs/ BEFORE run_build so the Scenario
     # page's tests below get a package with the interactive graph panel included
     # by default (mirrors curation/semsearch already being staged above) --
-    # _stage_subgraphs's hardcoded cypher_count=1 matches this fixture's flagship
+    # _stage_subgraphs_with_event's hardcoded cypher_count=1 matches this fixture's flagship
     # expected_sql_count (also 1), so run_build's sql==cypher assertion (Task 2)
     # passes.
-    _stage_subgraphs(staging)
+    _stage_subgraphs_with_event(staging)
 
     run_build(config_path)
 
@@ -504,6 +505,7 @@ def test_overview_page_renders_from_a_built_package(
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
+    _reset_demo_app_modules()
     monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
     monkeypatch.syspath_prepend(str(DEMO_DIR))
     at = AppTest.from_file(str(DEMO_DIR / "main.py")).run()
@@ -511,6 +513,50 @@ def test_overview_page_renders_from_a_built_package(
     assert not at.exception
     metric_values = {m.label: m.value for m in at.metric}
     assert metric_values["Camera keyframes"] == "3"
+
+    # item I5 (Phase 6 review): this fixture stages graph_subgraphs/ before
+    # run_build, so overview_metrics.json's flagship.cypher_source is the COMPUTED
+    # one ("computed (neo4j, demo subgraphs)") -- the caption must not still promise
+    # a live-graph export that already landed (and must not read "...sourced from
+    # computed (neo4j, demo subgraphs) until the live-graph export lands").
+    captions = [str(c.value) for c in at.caption]
+    assert any("computed live against Neo4j at build time" in c for c in captions)
+    assert not any("until the live-graph export lands" in c for c in captions)
+
+
+def test_overview_flagship_caption_when_the_cypher_twin_is_only_sourced(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item I5) The other branch: a package built WITHOUT `demo subgraphs` staging
+    keeps overview_metrics.json's sourced flagship.cypher_source (the Phase 1-5
+    contract, pinned by tests/test_demo_export.py::test_build_notes_absent_
+    subgraphs), and the caption stays the honest "sourced from ... until the
+    live-graph export lands" sentence.
+
+    Patches that one field on the built package rather than rebuilding without the
+    staging: overview_metrics.json IS the page's whole input here, and the build's
+    own absent-subgraphs behaviour is already pinned on the builder side.
+    """
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    overview_path = built_demo_data / "overview_metrics.json"
+    overview = json.loads(overview_path.read_text())
+    overview["flagship"]["cypher_source"] = "docs/GRAPH.md"
+    overview_path.write_text(json.dumps(overview, indent=2, sort_keys=True))
+
+    _reset_demo_app_modules()
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py")).run()
+
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "sourced from docs/GRAPH.md until the live-graph export lands" in c
+        for c in captions
+    )
+    assert not any("computed live against Neo4j" in c for c in captions)
 
 
 def test_failure_explorer_renders_grid_and_detail(
@@ -660,7 +706,15 @@ def _reset_demo_app_modules() -> None:
     produces the same token shape (same "v0"/"v1"/"s1" names) regardless of which
     test built it -- but a test that checks for a file's ABSENCE needs the
     CURRENT test's own directory actually read.
+
+    data.py's loaders are ``@st.cache_data``-decorated and keyed by their arguments
+    alone (most take none), so the same staleness applies to their CACHED RETURN
+    VALUES across tests -- cleared here for the same reason, so a test that edits
+    its own package's contents actually sees the edit.
     """
+    import streamlit as st
+
+    st.cache_data.clear()
     for name in list(sys.modules):
         module = sys.modules[name]
         module_file = getattr(module, "__file__", None)
@@ -759,9 +813,12 @@ def test_scenario_flagship_badge(
     badge ("N events -- identical count ... Cypher sourced from ... until Phase
     6") with the generic per-preset parity line every dynamics preset now gets,
     read straight off that preset's own graph_subgraphs/<preset>.json --
-    built_demo_data's _stage_subgraphs (Task 3) stages cypher_count=sql_count=1
-    (parity True) for every dynamics preset, so the flagship's line here is
-    "Cypher: 1 · SQL: 1 ✓".
+    built_demo_data's _stage_subgraphs_with_event (Task 3) stages
+    cypher_count=sql_count=1 (parity True) for every dynamics preset.
+
+    The line says WHAT the number counts and that the grid below it is capped
+    (item I2, Phase 6 review): rendering a bare "Cypher: 786 · SQL: 786 ✓" above a
+    30-card grid left the viewer to guess whether 786 or 30 was the answer.
     """
     pytest.importorskip("streamlit")
     at = _scenarios_apptest(built_demo_data, monkeypatch)
@@ -770,7 +827,7 @@ def test_scenario_flagship_badge(
     at.run(timeout=30)
     assert not at.exception
     captions = [str(c.value) for c in at.caption]
-    assert any(c == "Cypher: 1 · SQL: 1 ✓" for c in captions)
+    assert any(c == "1 matching keyframes dataset-wide — Cypher 1 · SQL 1 ✓ · showing the top 1" for c in captions)
 
 
 def test_scenario_graph_panel_shows_parity_narrative_and_legend(
@@ -797,10 +854,10 @@ def test_scenario_graph_panel_shows_parity_narrative_and_legend(
     assert not at.exception
 
     captions = [str(c.value) for c in at.caption]
-    assert any(c == "Cypher: 1 · SQL: 1 ✓" for c in captions)
-    # The narrative is built by filters.subgraph_narrative from _stage_subgraphs's
-    # real assemble_subgraph output for "s1" -- see that helper's docstring for
-    # why 5.00m (not 3.80m) is the right distance here.
+    assert any(c == "1 matching keyframes dataset-wide — Cypher 1 · SQL 1 ✓ · showing the top 1" for c in captions)
+    # The narrative is built by filters.subgraph_narrative from
+    # _stage_subgraphs_with_event's real assemble_subgraph output for "s1" -- see
+    # that helper's docstring for why 5.00m (not 3.80m) is the right distance here.
     assert any(
         "Scene scene-X" in c and "EgoPose (hard braking -7.50 m/s²)" in c
         and "pedestrian at 5.00 m" in c
@@ -811,6 +868,37 @@ def test_scenario_graph_panel_shows_parity_narrative_and_legend(
         and "Category" in c and "Location" in c
         for c in captions
     )
+
+
+def test_scenario_parity_mismatch_is_a_warning_not_grey_small_print(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item M4, Phase 6 review) A recorded Cypher/SQL mismatch is a FINDING -- the
+    honest reporting the exporter deliberately doesn't raise on for the three
+    non-flagship dynamics presets. It must surface as st.warning, not as the same
+    grey caption a clean parity gets.
+
+    Patches the built package's own night_pedestrians JSON (the fixture stages
+    parity True for every dynamics preset, and the flagship's mismatch can never
+    reach the page at all -- `demo build` fails on it).
+    """
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "graph_subgraphs" / "night_pedestrians.json"
+    payload = json.loads(path.read_text())
+    payload["cypher_count"] = 4
+    payload["parity"] = False
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2))
+
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert any(
+        "mismatch recorded" in str(w.value) and "Cypher 4" in str(w.value)
+        for w in at.warning
+    )
+    assert not any("mismatch recorded" in str(c.value) for c in at.caption)
 
 
 def test_scenario_graph_panel_absent_when_subgraphs_not_staged(
@@ -835,7 +923,7 @@ def test_scenario_graph_panel_absent_when_subgraphs_not_staged(
     assert any("graph export not included in this package" in str(i.value) for i in at.info)
     # The header's parity line is silent (nothing to report), not a stale claim.
     captions = [str(c.value) for c in at.caption]
-    assert not any(c.startswith("Cypher:") for c in captions)
+    assert not any("matching keyframes dataset-wide" in c for c in captions)
 
 
 def test_scenario_model_preset_shows_gt_only_note(
@@ -851,7 +939,7 @@ def test_scenario_model_preset_shows_gt_only_note(
     assert not at.exception
     captions = [str(c.value) for c in at.caption]
     assert any("graph holds GT only" in c and "prediction set" in c for c in captions)
-    assert not any(c.startswith("Cypher:") for c in captions)
+    assert not any("matching keyframes dataset-wide" in c for c in captions)
 
 
 def test_scenario_semantic_gallery_renders(

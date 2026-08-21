@@ -318,21 +318,42 @@ def subgraph_narrative(subgraph: Mapping[str, Any]) -> str:
     EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m".
 
     ``path``'s ordered id chains pick out WHICH node fills each slot -- the backbone
-    ``[scene_id, sample_id, ego_id]`` (``path[0]``) and the first ``[sample_id,
-    object_id, category_id]`` chain (the earliest-matching on_path
-    ObjectObservation) -- while each node's own ``meta`` supplies the values. Every
-    piece degrades independently rather than raising or emitting a "None" literal:
-    a missing Scene name, EgoPose accel, or on_path object each just drops its own
-    segment. "Sample" always appears (even for a totally empty ``subgraph``) so the
-    panel never shows a blank caption.
+    ``[scene_id, sample_id, ego_id]`` and the first ``[sample_id, object_id,
+    category_id]`` chain (the NEAREST matching on_path ObjectObservation, since
+    ``assemble_subgraph`` sorts them by distance) -- while each node's own ``meta``
+    supplies the values. Every piece degrades independently rather than raising or
+    emitting a "None" literal: a missing Scene name, EgoPose accel, or on_path
+    object each just drops its own segment. "Sample" always appears (even for a
+    totally empty ``subgraph``) so the panel never shows a blank caption.
+
+    Which node fills the Scene / EgoPose slot is decided by node LABEL, never by
+    position in ``path`` (item I3): ``assemble_subgraph`` appends the backbone chain
+    ONLY when BOTH the Scene and the EgoPose exist, so on a subgraph missing either
+    of them ``path[0]`` is an object chain -- and reading its third element as the
+    EgoPose slot reported the Category node as an EgoPose ("Sample -> EgoPose" for a
+    sample that has no ego pose at all). Both nodes are unique in a subgraph, so the
+    label lookup gives the same answer as the backbone chain whenever that chain
+    exists, and keeps each segment dropping INDEPENDENTLY when it doesn't. The
+    backbone chain is still located (by its EgoPose-labelled tail) so it is not
+    mistaken for the object chain.
     """
     nodes = subgraph.get("nodes") or []
     path = subgraph.get("path") or []
     by_id = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
 
-    backbone = path[0] if path and len(path[0]) == 3 else [None, None, None]
-    scene = by_id.get(backbone[0])
-    ego = by_id.get(backbone[2])
+    def _first_labelled(label: str) -> dict[str, Any] | None:
+        return next((n for n in by_id.values() if n.get("label") == label), None)
+
+    backbone_index = next(
+        (
+            index
+            for index, chain in enumerate(path)
+            if len(chain) == 3 and (by_id.get(chain[2]) or {}).get("label") == "EgoPose"
+        ),
+        None,
+    )
+    scene = _first_labelled("Scene")
+    ego = _first_labelled("EgoPose")
 
     parts: list[str] = []
 
@@ -351,7 +372,14 @@ def subgraph_narrative(subgraph: Mapping[str, Any]) -> str:
         else:
             parts.append("EgoPose")
 
-    object_chain = next((chain for chain in path[1:] if len(chain) == 3), None)
+    object_chain = next(
+        (
+            chain
+            for index, chain in enumerate(path)
+            if index != backbone_index and len(chain) == 3
+        ),
+        None,
+    )
     obj = by_id.get(object_chain[1]) if object_chain else None
     if obj is not None:
         obj_meta = obj.get("meta") or {}
@@ -363,3 +391,61 @@ def subgraph_narrative(subgraph: Mapping[str, Any]) -> str:
             parts.append(str(category))
 
     return " → ".join(parts)
+
+
+# The agraph panel's node label for each graph node type (Phase 6 fix round). Pure
+# and Streamlit-free like every other formatter here, so it is unit-testable
+# directly; views/scenarios.py's _render_graph_panel is the only caller.
+_DEFAULT_CATEGORY_TAIL = "object"
+
+
+def _numeric(value: Any) -> float | None:
+    """``value`` as a float, or None when it is missing/NA/non-numeric."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(number) else number
+
+
+def graph_node_label(node: Mapping[str, Any]) -> str:
+    """The short, SEMANTIC label one subgraph node draws with in the agraph panel.
+
+    Nodes used to be labelled "<graph type>: <first 10 characters of the id>", which
+    tells a viewer nothing for a hex token ("ObjectObservation: 1bc3b8d...") and
+    actively misleads for a Category: head-truncating the id made
+    ``human.pedestrian.adult`` and ``human.pedestrian.construction_worker`` BOTH
+    render as "Category: human.pede..." -- duplicated labels on 30/126 real events
+    (item I4). Each type now shows the quantity a viewer reads the graph for:
+
+    - ObjectObservation: category tail + distance ("adult 9.9 m", "car 5.3 m"), or
+      the tail alone without a usable distance.
+    - EgoPose: signed peak longitudinal accel ("ego -4.5 m/s²"), the flagship
+      preset's own severity figure; "ego pose" when it is absent.
+    - Scene: its name ("scene-1084").
+    - Sample: "sample (t)" for the event's own frame (the on_path one), "sample" for
+      its prev/next temporal-context neighbours.
+    - Category / Location: the id tail in FULL -- it is already the name.
+
+    The node's graph type stays available on hover (``_render_graph_panel`` puts it
+    in the node's ``title``) and its full ``meta`` is one click away.
+    """
+    label = str(node.get("label") or "")
+    meta = node.get("meta") or {}
+
+    if label == "ObjectObservation":
+        category = str(meta.get("category") or _DEFAULT_CATEGORY_TAIL)
+        tail = category.rsplit(".", 1)[-1]
+        distance = _numeric(meta.get("distance_to_ego_m"))
+        return tail if distance is None else f"{tail} {distance:.1f} m"
+    if label == "EgoPose":
+        accel = _numeric(meta.get("accel_long_min_mps2"))
+        return "ego pose" if accel is None else f"ego {accel:+.1f} m/s²"
+    if label == "Scene":
+        return str(meta.get("name") or "scene")
+    if label == "Sample":
+        return "sample (t)" if node.get("on_path") else "sample"
+    if label in ("Category", "Location"):
+        node_id = str(node.get("id") or "")
+        return node_id.split(":", 1)[1] if ":" in node_id else node_id
+    return label

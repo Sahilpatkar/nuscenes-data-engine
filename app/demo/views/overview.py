@@ -102,10 +102,25 @@ def render() -> None:
         if other_pairs
         else "No other weak/GT pairs are in this build."
     )
-    st.caption(
-        f"Best night arm: `{results['best_night_arm']}` · flagship Cypher twin "
-        f"sourced from {flagship['cypher_source']} until the live-graph export lands."
-    )
+    # The flagship Cypher twin's provenance, stated as it actually is (item I5,
+    # Phase 6 review). Since `demo subgraphs` + `demo build` compute that count
+    # against the live graph, cypher_source reads "computed (neo4j, demo
+    # subgraphs)" -- and the old fixed sentence then claimed the number was
+    # "sourced from computed (neo4j, demo subgraphs) until the live-graph export
+    # lands", which is both ungrammatical and false about an export that already
+    # landed. A package built without that staging still ships the sourced value
+    # (build.py::_include_subgraphs' absent path), and keeps the original wording.
+    if str(flagship["cypher_source"]).startswith("computed"):
+        flagship_note = (
+            "flagship Cypher twin computed live against Neo4j at build time "
+            f"(SQL {flagship['sql']} / Cypher {flagship['cypher']})."
+        )
+    else:
+        flagship_note = (
+            f"flagship Cypher twin sourced from {flagship['cypher_source']} until "
+            "the live-graph export lands."
+        )
+    st.caption(f"Best night arm: `{results['best_night_arm']}` · {flagship_note}")
     st.caption(
         f"The card above is {retention_text} of the ground-truth mAP gain for the "
         f"`{weak['headline_arm']}` pair (the documented headline). {other_pairs_note}"

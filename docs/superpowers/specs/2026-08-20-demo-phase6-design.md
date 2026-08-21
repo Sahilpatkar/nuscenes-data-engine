@@ -74,6 +74,20 @@ For each of the six presets (events from the staged `scenario_events.parquet`):
   gains the new allowed name; the AST no-backend-import guard is unaffected
   (`streamlit_agraph` is not a backend module).
 
+**Amendment (2026-08-20, visual check).** Rendered in a real browser, the panel as
+specified was unreadable, so three details differ from the bullets above.
+`physics=True`, not `False`: vis.js is handed no seeded coordinates, so with physics
+off it scattered ~30 nodes into a random pile — the "static highlight (no
+animation)" call above is about the path COLORING, which is unchanged, not about the
+layout solver. Node labels are semantic rather than type-plus-token-prefix
+(`adult 9.9 m`, `ego -4.5 m/s²`, `scene-1084`, `human.pedestrian.adult` in full) —
+head-truncated ids made every `human.pedestrian.*` category render identically, and
+a hex token told the viewer nothing; the graph type and the raw token moved to the
+node's hover title. And edge labels are drawn only for the structural relationships
+(`AT_POSE`, `IN_SCENE`, `IN_LOCATION`, `NEXT`) — the up-to-14 `HAS_OBJECT`/
+`OF_CATEGORY` labels around the Sample hub were pure clutter, since their endpoints
+already name themselves.
+
 ## 3. Testing (batched reviews, as in Phase 5)
 
 - Exporter: Cypher text builders (threshold injection; the flagship text equals
