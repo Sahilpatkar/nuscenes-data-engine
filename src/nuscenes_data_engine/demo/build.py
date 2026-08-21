@@ -67,6 +67,12 @@ _SUBGRAPH_PRESETS = (
     "low_conf_braking",
 )
 
+# The two files `demo al-explain` stages under curation.staging_dir/al_explain/
+# (demo/al_explain.py). Same reasoning as _SUBGRAPH_PRESETS above: this tuple is
+# build.py's OWN contract about what a complete al_explain staging must hold, not a
+# re-export of the exporter's internals.
+_AL_EXPLAIN_FILES = ("al_selection_explain.parquet", "al_explain_validation.json")
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -530,6 +536,70 @@ def _include_subgraphs(
     }
 
 
+def _include_al_explain(config: dict[str, Any], out_dir: Path) -> str:
+    """Copy the staged per-frame AL selection facts into the package, or note absence.
+
+    Phase 7 (spec §1). Neo4j + LanceDB are OPERATIONAL dependencies, so this is the
+    same declared-optional input group ``_include_subgraphs`` is: ``demo build``
+    never re-derives anything itself, it copies + re-validates what ``demo
+    al-explain`` already staged at ``curation.staging_dir/al_explain/``. No
+    ``curation:`` section, or no ``al_explain/`` staging dir at all, is "absent" —
+    the ordinary state on a fresh clone, a warning rather than a build failure, and
+    the page degrades honestly (spec §3d).
+
+    A staging dir that EXISTS but holds only one of the two files is an operator
+    mid-flow (or an interrupted run), not a no-Neo4j machine: a ``ValueError``
+    naming the missing file, exactly as a partial subgraph staging raises.
+
+    Both files are re-validated before being copied even though ``run_al_explain``
+    already gated on them: a staging dir left behind by an earlier run of a
+    DIFFERENT arm, or (impossibly, but cheaply checked) one whose validation says
+    the re-derivation did not reproduce the experiment, must never ship — the whole
+    claim the page makes about these columns is that they ARE the run's.
+    """
+    curation_cfg = config.get("curation")
+    if not curation_cfg:
+        logger.warning(
+            "demo build: no `curation:` config section — shipping without the "
+            "per-frame AL selection facts (see docs/DEMO.md)"
+        )
+        return "absent"
+    staging_dir = Path(curation_cfg["staging_dir"]) / "al_explain"
+    if not staging_dir.is_dir():
+        logger.warning(
+            "demo build: no al_explain staging at %s — shipping without the per-frame "
+            "AL selection facts (run `demo al-explain` first, see docs/DEMO.md)",
+            staging_dir,
+        )
+        return "absent"
+
+    missing = [name for name in _AL_EXPLAIN_FILES if not (staging_dir / name).is_file()]
+    if missing:
+        raise ValueError(
+            f"demo build: al_explain staging at {staging_dir} is missing {missing} — "
+            "re-run `demo al-explain` (see docs/DEMO.md)"
+        )
+
+    validation = json.loads((staging_dir / "al_explain_validation.json").read_text())
+    expected_arm = config["al"]["arm"]
+    if validation.get("arm") != expected_arm:
+        raise ValueError(
+            f"demo build: al_explain staging at {staging_dir} is for arm "
+            f"{validation.get('arm')!r} but this package's al.arm is {expected_arm!r} "
+            "— re-run `demo al-explain` for the configured arm"
+        )
+    if not (validation.get("selected_match") and validation.get("communities_match")):
+        raise ValueError(
+            f"demo build: al_explain staging at {staging_dir} did not reproduce the "
+            f"persisted run (selected_match={validation.get('selected_match')}, "
+            f"communities_match={validation.get('communities_match')}) — it must not ship"
+        )
+
+    for name in _AL_EXPLAIN_FILES:
+        shutil.copy2(staging_dir / name, out_dir / name)
+    return "included"
+
+
 def _add_al_selection_columns(
     manifest: pd.DataFrame, *, al_dir: Path, weak_arm: str, al_arm: str
 ) -> pd.DataFrame:
@@ -781,6 +851,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
         overview_metrics["flagship"]["cypher_source"] = "computed (neo4j, demo subgraphs)"
         write_json(overview_path, overview_metrics)
 
+    # Phase 7 (Task 3): the per-frame AL selection facts are the last optional group,
+    # in the same slot as the subgraphs one (before the size-budget check and the
+    # outputs hash sweep below, so its two files count toward both).
+    al_explain_status = _include_al_explain(config, out_dir)
+
     package_bytes = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
     package_mb = package_bytes / 1e6
     if package_mb > config["budgets"]["max_package_mb"]:
@@ -862,6 +937,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
         for preset in _SUBGRAPH_PRESETS:
             path = subgraphs_staging / f"{preset}.json"
             inputs[str(path)] = _sha256(path)
+    if al_explain_status == "included":
+        al_explain_staging = Path(config["curation"]["staging_dir"]) / "al_explain"
+        for name in _AL_EXPLAIN_FILES:
+            path = al_explain_staging / name
+            inputs[str(path)] = _sha256(path)
 
     manifest: dict[str, Any] = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -884,6 +964,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "n_events": events_result["n_events"],
             "semsearch": semsearch_status,
             "subgraphs": subgraphs_result["status"],
+            "al_explain": al_explain_status,
         },
     }
     if subgraphs_result["status"] == "included":

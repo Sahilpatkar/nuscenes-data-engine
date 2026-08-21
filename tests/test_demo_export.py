@@ -2247,6 +2247,36 @@ def test_build_raises_on_stale_subgraph_staging(build_config: Path) -> None:
     assert "demo subgraphs" in str(excinfo.value)
 
 
+def test_build_records_al_explain_group_absent_then_included(build_config: Path) -> None:
+    """Phase 7 (Task 3): the `demo al-explain` staging is a declared-optional input
+    group, exactly like the subgraphs one -- absent on a fresh clone (the ordinary
+    state, a warning not a failure), and once staged copied flat next to the other
+    tables AND hashed as a build INPUT (the outputs sweep hashes the copies)."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    assert run_build(build_config)["validation"]["al_explain"] == "absent"
+
+    staging = Path(config["curation"]["staging_dir"]) / "al_explain"
+    staging.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"sample_data_token": ["t0"], "arm": ["graph_rate_night"]}).to_parquet(
+        staging / "al_selection_explain.parquet", index=False
+    )
+    (staging / "al_explain_validation.json").write_text(json.dumps({
+        "arm": "graph_rate_night", "selected_match": True, "communities_match": True,
+        "n_selected": 1, "n_communities": 1,
+    }))
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["al_explain"] == "included"
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "al_selection_explain.parquet").is_file()
+    assert (out / "al_explain_validation.json").is_file()
+    assert str(staging / "al_selection_explain.parquet") in manifest["inputs"]
+    assert str(staging / "al_explain_validation.json") in manifest["inputs"]
+    assert "al_selection_explain.parquet" in manifest["outputs"]
+
+
 def test_build_accepts_subgraph_staging_matching_the_events_frame(build_config: Path) -> None:
     """The other side of the stale guard: staging keyed by exactly the tokens this
     build's events frame ranks (the default helper shape) builds cleanly, and the

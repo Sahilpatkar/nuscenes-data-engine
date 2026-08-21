@@ -1295,6 +1295,56 @@ def demo_subgraphs(
         )
 
 
+@demo_app.command("al-explain")
+def demo_al_explain(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Re-derive the AL arm's per-frame selection facts, staging them for `demo build`.
+
+    Neo4j (GDS Louvain) and LanceDB are OPERATIONAL dependencies here, same as
+    `demo subgraphs`/`demo semsearch`: this command's entire purpose is re-running
+    the arm's acquisition against the live graph, so an unreachable driver is a
+    directive failure, not a silent skip. Connectivity is probed here (lazy neo4j
+    import) so that failure mode reads as a directive message rather than a driver
+    traceback out of `run_al_explain`, which then opens/closes its own driver.
+
+    Stages nothing unless the re-derivation reproduces the persisted run exactly
+    (see demo/al_explain.py).
+    """
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.data_engine.graph import connection
+    from nuscenes_data_engine.demo.al_explain import run_al_explain
+
+    cfg = load_yaml(config)
+    paths_cfg = cfg["paths"]
+    curation_cfg = cfg["curation"]
+    settings = get_settings()
+
+    try:
+        driver = connection.get_driver(settings)
+    except Exception as exc:
+        raise ValueError(
+            "demo al-explain: Neo4j unreachable — start it with `docker compose up "
+            "-d neo4j` (see docs/GRAPH.md)"
+        ) from exc
+    connection.close(driver)
+
+    summary = run_al_explain(
+        al_config_path=Path(paths_cfg["active_learning_config"]),
+        processed_dir=Path(paths_cfg["processed_dir"]),
+        al_dir=Path(paths_cfg["active_learning_dir"]),
+        out_dir=Path(curation_cfg["staging_dir"]) / "al_explain",
+        arm=cfg["al"]["arm"],
+    )
+    # run_al_explain already logs the reproduction verdict and the numbers; this
+    # line is the operator's next step, not a second copy of them.
+    logger.info(
+        "demo al-explain: staged %d rows for arm %s -> %s (run `demo build` to "
+        "include them in the package)",
+        summary["n_rows"], summary["arm"], summary["out_dir"],
+    )
+
+
 @demo_app.command("build")
 def demo_build(
     config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
