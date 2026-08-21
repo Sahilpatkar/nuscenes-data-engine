@@ -1215,6 +1215,86 @@ def demo_semsearch(
     )
 
 
+@demo_app.command("subgraphs")
+def demo_subgraphs(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Export per-event explanatory subgraphs from the live Neo4j graph.
+
+    Neo4j is an OPERATIONAL dependency here, same as `demo semsearch`'s torch/
+    lancedb: this command's entire purpose is querying the live graph, so an
+    unreachable driver is a directive failure, not a silent skip.
+    """
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.data_engine.graph import connection
+    from nuscenes_data_engine.demo import subgraph_export
+    from nuscenes_data_engine.demo.events import build_events, preset_counts
+
+    cfg = load_yaml(config)
+    curation_cfg = cfg["curation"]
+    presets_cfg = cfg["presets"]
+    settings = get_settings()
+
+    try:
+        driver = connection.get_driver(settings)
+    except Exception as exc:
+        raise ValueError(
+            "demo subgraphs: Neo4j unreachable — start it with `docker compose up "
+            "-d neo4j` (see docs/GRAPH.md)"
+        ) from exc
+
+    try:
+
+        def run_query(cypher: str, **params: Any) -> list[dict[str, Any]]:
+            return connection.read_query(
+                driver, cypher, database=settings.neo4j_database, params=params
+            )
+
+        processed_dir = Path(cfg["paths"]["processed_dir"])
+        staging_dir = Path(curation_cfg["staging_dir"])
+        # Mirrors _load_staging's own all-three-files readiness check (events.py) --
+        # staging model presets in when `demo curate` + `demo infer` have run, else
+        # build_events/preset_counts warn and skip the two model-result presets.
+        staging_ready = (
+            staging_dir
+            if all(
+                (staging_dir / name).is_file()
+                for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet")
+            )
+            else None
+        )
+
+        events = build_events(
+            processed_dir=processed_dir,
+            staging_dir=staging_ready,
+            presets_cfg=presets_cfg,
+            flagship_expected=cfg["flagship"]["expected_sql_count"],
+        )
+        sql_counts = preset_counts(
+            processed_dir=processed_dir, staging_dir=staging_ready, presets_cfg=presets_cfg,
+        )
+        thresholds = {
+            "near_dist_m": float(presets_cfg["near_dist_m"]),
+            "high_speed_mps": float(presets_cfg["high_speed_mps"]),
+        }
+        summary = subgraph_export.export_subgraphs(
+            run_query=run_query,
+            events=events,
+            thresholds=thresholds,
+            sql_counts=sql_counts,
+            flagship_expected=cfg["flagship"]["expected_sql_count"],
+            out_dir=staging_dir / "graph_subgraphs",
+        )
+    finally:
+        connection.close(driver)
+
+    for preset, info in summary.items():
+        logger.info(
+            "demo subgraphs: %s sql=%s cypher=%s parity=%s events=%d",
+            preset, info["sql_count"], info["cypher_count"], info["parity"], info["n_events"],
+        )
+
+
 @demo_app.command("build")
 def demo_build(
     config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),

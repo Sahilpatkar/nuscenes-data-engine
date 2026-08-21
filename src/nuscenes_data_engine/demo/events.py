@@ -535,3 +535,72 @@ def build_events(
         len(df),
     )
     return result[list(_COLUMN_ORDER)]
+
+
+def preset_counts(
+    *, processed_dir: Path, staging_dir: Path | None, presets_cfg: dict[str, Any]
+) -> dict[str, int]:
+    """Pre-cap per-preset tagged-row counts for all six presets, without capping/neighbors.
+
+    Phase 6 (``demo subgraphs``) needs the SQL-side count for every preset -- not just
+    the flagship's single asserted number (``build_events``'s ``flagship_expected``) -- to
+    compare against the graph's own computed Cypher counts. ``build_events``'s signature
+    is frozen (many callers), so this is a standalone function rather than a second return
+    value; it reuses every one of ``build_events``'s private helpers (``_load_base``,
+    ``_context_features``, ``_load_staging``, ``_load_annotation_distances``,
+    ``_model_preset_tags``) so the expensive/complex parts can't drift, and only
+    duplicates the short ``tags = {...}`` predicate dict -- kept lock-step with
+    ``build_events``'s own copy; if one changes, change both.
+    """
+    processed_dir = Path(processed_dir)
+    near_dist_m = float(presets_cfg["near_dist_m"])
+    high_speed_mps = float(presets_cfg["high_speed_mps"])
+    model = str(presets_cfg["model_for_results"])
+
+    # Same invariant build_events enforces (see its own comment): the exported
+    # n_peds_within_10m column name promises exactly 10.0.
+    if near_dist_m != 10.0:
+        raise ValueError(
+            f"demo events: presets.near_dist_m={near_dist_m} but the exported "
+            "n_peds_within_10m column name promises exactly 10.0 — rename the "
+            "column everywhere it's read before changing this threshold"
+        )
+
+    df = _load_base(processed_dir)
+    context = _context_features(processed_dir, near_dist_m)
+    df = df.merge(context, on="sample_token", how="left")
+    df["n_peds_within_10m"] = df["n_peds_within_10m"].fillna(0).astype("int64")
+
+    staging = _load_staging(staging_dir)
+    annotation_distances = (
+        _load_annotation_distances(processed_dir)
+        if staging is not None
+        else pd.DataFrame(columns=["annotation_token", "distance_to_ego_m"])
+    )
+    (
+        _in_curated_set,
+        fn_pedestrians_night,
+        _fn_ped_min_dist,
+        low_conf_braking,
+        _low_conf_min_conf,
+    ) = _model_preset_tags(df, staging, model, annotation_distances)
+
+    vru_dist = pd.concat([df["min_dist_pedestrian_m"], df["min_dist_cyclist_m"]], axis=1).min(
+        axis=1, skipna=True
+    )
+
+    # Kept in lockstep with build_events' own `tags` dict above -- same five
+    # predicates; only capping/neighbors are skipped (a plain count doesn't need them).
+    tags = {
+        "hard_braking_near_pedestrians": (
+            df["is_hard_braking"] & (df["min_dist_pedestrian_m"] < near_dist_m)
+        ),
+        "night_pedestrians": df["is_night"] & (df["min_dist_pedestrian_m"] < near_dist_m),
+        "fast_cyclists": (
+            (df["speed_mps"] >= high_speed_mps) & (df["min_dist_cyclist_m"] < near_dist_m)
+        ),
+        "rain_vru": df["is_rain"] & (vru_dist < near_dist_m),
+        "fn_pedestrians_night": fn_pedestrians_night,
+        "low_conf_braking": low_conf_braking,
+    }
+    return {name: int(tags[name].sum()) for name in _ALL_PRESETS}

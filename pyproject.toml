@@ -156,6 +156,7 @@ markers = [
     "engine_smoke: real-SigLIP embedding sanity run (manual, downloads the model; excluded by default)",
     "label_smoke: single live Claude API labeling call (manual, needs ANTHROPIC_API_KEY; excluded by default)",
     "graph_smoke: end-to-end graph build against an ephemeral Neo4j (manual; excluded by default)",
+    "integration: read-only test against a live external service (e.g. Neo4j); self-skips when unreachable, so INCLUDED by default (not in the -m filter above) unlike the destructive *_smoke marks",
 ]
 filterwarnings = [
     # Third-party deprecation noise from the nuScenes devkit's matplotlib/pyparsing deps.
