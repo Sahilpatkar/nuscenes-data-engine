@@ -1,0 +1,854 @@
+{
+  "count_cypher": null,
+  "cypher_count": null,
+  "events": {
+    "3a1bb022c79e4d4b9e3deeb7ecaa74f4": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "scene:8180a1dbbba3479bb0c7f4ff6e9a3f0e"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:8180a1dbbba3479bb0c7f4ff6e9a3f0e",
+          "target": "location:singapore-onenorth"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "egopose:1c58fd3206474e4684adeecd39b6b3de"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:c604ceb421f54f028c246cb68960dd53",
+          "target": "sample:84d3fc3616134756aa8a9545a5706e62"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "sample:8c9d04f0d9fe4fa49db9a99d4852f46a"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:b0445eb5061e4208a3ae1c1055f96e99"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:b0445eb5061e4208a3ae1c1055f96e99",
+          "target": "category:vehicle.bicycle"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:7326ce144b8b4615a8f5fa863b4f2e46"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:7326ce144b8b4615a8f5fa863b4f2e46",
+          "target": "category:vehicle.bicycle"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:51ce7becd13a4d13a9e3fe16dab89395"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:51ce7becd13a4d13a9e3fe16dab89395",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:05970d3b9c2a48558d4b22e33804fe79"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:05970d3b9c2a48558d4b22e33804fe79",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:85996303553e48d597b7da190da1705f"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:85996303553e48d597b7da190da1705f",
+          "target": "category:vehicle.motorcycle"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:d5528cf1a72143c5980f3fda04082632"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:d5528cf1a72143c5980f3fda04082632",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:98505dca6c3944cc9bb69df081b84bd4"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:98505dca6c3944cc9bb69df081b84bd4",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:33ac9a210afd42e29acd1d6042ff4b93"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:33ac9a210afd42e29acd1d6042ff4b93",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:cbbe0ac5ae164e06bcf0602713e984a2"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:cbbe0ac5ae164e06bcf0602713e984a2",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:d3cbf48cf12942b39f187d127fb1c895"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:d3cbf48cf12942b39f187d127fb1c895",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "target": "object:fdc550c894494d838d9f2950c68274d0"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:fdc550c894494d838d9f2950c68274d0",
+          "target": "category:vehicle.bus.bendy"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "bicycle",
+          "id": "category:vehicle.bicycle",
+          "label": "Category",
+          "meta": {
+            "group": "bicycle",
+            "name": "vehicle.bicycle"
+          },
+          "on_path": false
+        },
+        {
+          "group": "bus",
+          "id": "category:vehicle.bus.bendy",
+          "label": "Category",
+          "meta": {
+            "group": "bus",
+            "name": "vehicle.bus.bendy"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "category:vehicle.motorcycle",
+          "label": "Category",
+          "meta": {
+            "group": null,
+            "name": "vehicle.motorcycle"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:1c58fd3206474e4684adeecd39b6b3de",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": -3.1178919581449462,
+            "can_speed_kmh": 3.15,
+            "is_hard_braking": true,
+            "speed_mps": 1.540815532753477
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:singapore-onenorth",
+          "label": "Location",
+          "meta": {
+            "name": "singapore-onenorth"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:05970d3b9c2a48558d4b22e33804fe79",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 22.00267652269993,
+            "ego_rel_x": 21.78540584304543,
+            "ego_rel_y": 3.084455611023209,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:33ac9a210afd42e29acd1d6042ff4b93",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 50.27374615929682,
+            "ego_rel_x": 49.223262306190065,
+            "ego_rel_y": 10.22350237567439,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:51ce7becd13a4d13a9e3fe16dab89395",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 17.279518403290353,
+            "ego_rel_x": -17.27308459279561,
+            "ego_rel_y": -0.47149220542553216,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "bicycle",
+          "id": "object:7326ce144b8b4615a8f5fa863b4f2e46",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.bicycle",
+            "distance_to_ego_m": 8.347436504889073,
+            "ego_rel_x": -4.683908966240475,
+            "ego_rel_y": -6.909464016776323,
+            "group": "bicycle",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:85996303553e48d597b7da190da1705f",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.motorcycle",
+            "distance_to_ego_m": 23.502017322453177,
+            "ego_rel_x": 23.346758777730912,
+            "ego_rel_y": -2.696974749480205,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:98505dca6c3944cc9bb69df081b84bd4",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 40.85758692783286,
+            "ego_rel_x": -29.519451059667684,
+            "ego_rel_y": 28.247909988197424,
+            "group": "pedestrian",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "bicycle",
+          "id": "object:b0445eb5061e4208a3ae1c1055f96e99",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.bicycle",
+            "distance_to_ego_m": 6.884704230675265,
+            "ego_rel_x": -3.5836438225255374,
+            "ego_rel_y": -5.878490392707335,
+            "group": "bicycle",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:cbbe0ac5ae164e06bcf0602713e984a2",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 54.081563800556445,
+            "ego_rel_x": 54.04946350272709,
+            "ego_rel_y": 1.8630722425686095,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:d3cbf48cf12942b39f187d127fb1c895",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 57.07906195055658,
+            "ego_rel_x": -55.760792826333414,
+            "ego_rel_y": -12.19644606162796,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:d5528cf1a72143c5980f3fda04082632",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 36.40354271207207,
+            "ego_rel_x": -32.184875655941404,
+            "ego_rel_y": 17.010341001909573,
+            "group": "pedestrian",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "bus",
+          "id": "object:fdc550c894494d838d9f2950c68274d0",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.bus.bendy",
+            "distance_to_ego_m": 77.60490995879323,
+            "ego_rel_x": 77.27787897767006,
+            "ego_rel_y": 7.116984644144175,
+            "group": "bus",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:84d3fc3616134756aa8a9545a5706e62",
+          "label": "Sample",
+          "meta": {
+            "is_night": false,
+            "is_rain": false,
+            "scene": "scene-0271",
+            "timestamp": 1531281628404844
+          },
+          "on_path": true
+        },
+        {
+          "group": "sample",
+          "id": "sample:8c9d04f0d9fe4fa49db9a99d4852f46a",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "8c9d04f0d9fe4fa49db9a99d4852f46a"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:c604ceb421f54f028c246cb68960dd53",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "c604ceb421f54f028c246cb68960dd53"
+          },
+          "on_path": false
+        },
+        {
+          "group": "scene",
+          "id": "scene:8180a1dbbba3479bb0c7f4ff6e9a3f0e",
+          "label": "Scene",
+          "meta": {
+            "is_night": false,
+            "is_rain": false,
+            "location": "singapore-onenorth",
+            "name": "scene-0271"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:8180a1dbbba3479bb0c7f4ff6e9a3f0e",
+          "sample:84d3fc3616134756aa8a9545a5706e62",
+          "egopose:1c58fd3206474e4684adeecd39b6b3de"
+        ]
+      ]
+    },
+    "483866f34b1a4235a7618a989a654ad8": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "scene:3363f396bb43405fbdd17d65dc123d4e"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:3363f396bb43405fbdd17d65dc123d4e",
+          "target": "location:boston-seaport"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "egopose:6aacef45b45744abb04c4459db83f000"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:f5ebca871ac94036afc835926374bc9b",
+          "target": "sample:4967dbb7fa484682ad75504a986b94b1"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "sample:d1a6bacb424b404c9f9ac37d0a6757a4"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:e93bf97003ff41619b71ed1e3108c1ed"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:e93bf97003ff41619b71ed1e3108c1ed",
+          "target": "category:movable_object.trafficcone"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:960b1bf3415d4a37945d7fa0c628c3e0"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:960b1bf3415d4a37945d7fa0c628c3e0",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:d43fe183bac343ccbf2b619eef2e4cc4"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:d43fe183bac343ccbf2b619eef2e4cc4",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:4258b7853bd34d6b91e4a48b2ef1bdc8"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:4258b7853bd34d6b91e4a48b2ef1bdc8",
+          "target": "category:movable_object.trafficcone"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:8594ae9f05fe4ae6981ce56f4a8af3e4"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:8594ae9f05fe4ae6981ce56f4a8af3e4",
+          "target": "category:movable_object.barrier"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:8484b2a059d24bc8855b60a39e25d061"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:8484b2a059d24bc8855b60a39e25d061",
+          "target": "category:movable_object.barrier"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:bd91092dbf4b41b1aee5a51519b3526d"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:bd91092dbf4b41b1aee5a51519b3526d",
+          "target": "category:movable_object.barrier"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:1b6795c290924d4fb4ad7bb0a63e0d3e"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:1b6795c290924d4fb4ad7bb0a63e0d3e",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:ac7d4c650d3143c3bdd986551b66af66"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:ac7d4c650d3143c3bdd986551b66af66",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:425f37d8dde54750adbfcd3a41210177"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:425f37d8dde54750adbfcd3a41210177",
+          "target": "category:movable_object.barrier"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:73036f9ab71a402f95445f0e1ff02e1f"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:73036f9ab71a402f95445f0e1ff02e1f",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "target": "object:93281ddd2fe7460989d19c5782953528"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:93281ddd2fe7460989d19c5782953528",
+          "target": "category:movable_object.trafficcone"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "category:movable_object.barrier",
+          "label": "Category",
+          "meta": {
+            "group": null,
+            "name": "movable_object.barrier"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "category:movable_object.trafficcone",
+          "label": "Category",
+          "meta": {
+            "group": null,
+            "name": "movable_object.trafficcone"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:6aacef45b45744abb04c4459db83f000",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": -3.012632412682416,
+            "can_speed_kmh": 6.76,
+            "is_hard_braking": true,
+            "speed_mps": 2.338364586910544
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:boston-seaport",
+          "label": "Location",
+          "meta": {
+            "name": "boston-seaport"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:1b6795c290924d4fb4ad7bb0a63e0d3e",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 15.074669523103747,
+            "ego_rel_x": -9.374455605856676,
+            "ego_rel_y": 11.805305727706305,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:4258b7853bd34d6b91e4a48b2ef1bdc8",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.trafficcone",
+            "distance_to_ego_m": 11.22716234784181,
+            "ego_rel_x": 3.8358243156529546,
+            "ego_rel_y": -10.551569845489455,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:425f37d8dde54750adbfcd3a41210177",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.barrier",
+            "distance_to_ego_m": 17.53176153245667,
+            "ego_rel_x": 17.479442142381778,
+            "ego_rel_y": -1.3534270656579048,
+            "group": "unknown",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:73036f9ab71a402f95445f0e1ff02e1f",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 17.58329008698006,
+            "ego_rel_x": -14.404620568622198,
+            "ego_rel_y": -10.083600376696683,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:8484b2a059d24bc8855b60a39e25d061",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.barrier",
+            "distance_to_ego_m": 14.928981569347746,
+            "ego_rel_x": 13.467161185528955,
+            "ego_rel_y": 6.442830146830428,
+            "group": "unknown",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:8594ae9f05fe4ae6981ce56f4a8af3e4",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.barrier",
+            "distance_to_ego_m": 12.794819524589094,
+            "ego_rel_x": 12.64619194591291,
+            "ego_rel_y": -1.944540031455694,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:93281ddd2fe7460989d19c5782953528",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.trafficcone",
+            "distance_to_ego_m": 18.078743221878632,
+            "ego_rel_x": 17.25661075961687,
+            "ego_rel_y": -5.389836878208641,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:960b1bf3415d4a37945d7fa0c628c3e0",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 10.081604888886785,
+            "ego_rel_x": 3.147714650842312,
+            "ego_rel_y": -9.577611895065418,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:ac7d4c650d3143c3bdd986551b66af66",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 16.475545928345923,
+            "ego_rel_x": 4.141483710665547,
+            "ego_rel_y": 15.94652709248405,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:bd91092dbf4b41b1aee5a51519b3526d",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.barrier",
+            "distance_to_ego_m": 15.039964189953858,
+            "ego_rel_x": 14.956256868220603,
+            "ego_rel_y": -1.5845830135712298,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:d43fe183bac343ccbf2b619eef2e4cc4",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 10.856557241177907,
+            "ego_rel_x": -10.854854345915703,
+            "ego_rel_y": -0.192281720211259,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:e93bf97003ff41619b71ed1e3108c1ed",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.trafficcone",
+            "distance_to_ego_m": 9.01625788529989,
+            "ego_rel_x": 5.335958949818393,
+            "ego_rel_y": -7.267767768722761,
+            "group": "unknown",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:4967dbb7fa484682ad75504a986b94b1",
+          "label": "Sample",
+          "meta": {
+            "is_night": false,
+            "is_rain": false,
+            "scene": "scene-0555",
+            "timestamp": 1535489345604799
+          },
+          "on_path": true
+        },
+        {
+          "group": "sample",
+          "id": "sample:d1a6bacb424b404c9f9ac37d0a6757a4",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "d1a6bacb424b404c9f9ac37d0a6757a4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:f5ebca871ac94036afc835926374bc9b",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "f5ebca871ac94036afc835926374bc9b"
+          },
+          "on_path": false
+        },
+        {
+          "group": "scene",
+          "id": "scene:3363f396bb43405fbdd17d65dc123d4e",
+          "label": "Scene",
+          "meta": {
+            "is_night": false,
+            "is_rain": false,
+            "location": "boston-seaport",
+            "name": "scene-0555"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:3363f396bb43405fbdd17d65dc123d4e",
+          "sample:4967dbb7fa484682ad75504a986b94b1",
+          "egopose:6aacef45b45744abb04c4459db83f000"
+        ]
+      ]
+    }
+  },
+  "note": "the model verdict is not in the graph",
+  "parity": null,
+  "preset": "low_conf_braking",
+  "sql_count": 2
+}

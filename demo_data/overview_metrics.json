@@ -2,7 +2,7 @@
   "can_speed_r": 0.999,
   "flagship": {
     "cypher": 30,
-    "cypher_source": "docs/GRAPH.md",
+    "cypher_source": "computed (neo4j, demo subgraphs)",
     "sql": 30
   },
   "hero_token": "5994f34b836043b3b5be191bceba2e3e",

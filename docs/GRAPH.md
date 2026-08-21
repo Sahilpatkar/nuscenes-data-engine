@@ -231,6 +231,11 @@ WHERE c.is_hard_braking AND a.category_group = 'pedestrian'
   AND a.distance_to_ego_m < 10;   -- 30, identical to the Cypher above
 ```
 
+The public demo's `demo subgraphs` export re-runs the Cypher block above verbatim
+against the live graph (a test asserts the exporter's query text equals this file's,
+so edit both together) and records SQL/Cypher parity for all four dynamics presets in
+`demo_data/graph_subgraphs/` — see [DEMO.md](DEMO.md#interactive-graph-phase-6).
+
 > The `graph_smoke` test builds a tiny graph end-to-end against a live Neo4j and **deletes
 > all nodes** on cleanup — run it against a throwaway/dev instance, not a graph you want to
 > keep.

@@ -1,11 +1,17 @@
 {
-  "built_at": "2026-08-20T19:58:48-0700",
-  "git_sha": "26dd4941d125d8d712b1f585db2bc72ca4740f63",
+  "built_at": "2026-08-20T22:32:56-0700",
+  "git_sha": "ab46564a82dd5f4a2c743429365ce55243ba7bef",
   "inputs": {
     "data/active_learning/graph_rate_night_pseudo_summary.json": "dc0f3637a8785647addabbee8123823f14014c99959ea0590ad4078678f911ab",
     "data/active_learning/random_pseudo_summary.json": "aaac4d750f3bce819c92ba2949a5d34c607d65b6f1ae46d8a0e395c7be042e0e",
     "data/active_learning/results.json": "b13f8fd8678ebdc9ced40b060865aa799ce141175ad54ae853987bf5829fb756",
     "data/demo_curation/frame_manifest.parquet": "ef728efbf6490c91a94d6882f6a6192285a0cc0d365de95006c3e35e86575f7d",
+    "data/demo_curation/graph_subgraphs/fast_cyclists.json": "62a9b8c33799f4e8c685111a44cb306dca226e9780fc75ed4893bbffc960c578",
+    "data/demo_curation/graph_subgraphs/fn_pedestrians_night.json": "adfcc296fb2be9a617c67c927e3ddfc5d8e24b8a10e76a1f350c6b3834f6558a",
+    "data/demo_curation/graph_subgraphs/hard_braking_near_pedestrians.json": "6a566321108a30ddc366c7bf81b8ef945c8d2858428c14c991feb6740f4332de",
+    "data/demo_curation/graph_subgraphs/low_conf_braking.json": "41f94d2e793dd57a9d99354d05acb53d1e133a2405269c32d029ecbd23cb2d57",
+    "data/demo_curation/graph_subgraphs/night_pedestrians.json": "a80cb7235ce0299b3a08e4bd33b885f467f800a3dc7ffd5e2eb1ece8ff6e6ff6",
+    "data/demo_curation/graph_subgraphs/rain_vru.json": "d119a49d497ba6b3787de308975b2b733f8ff720a4304d5100ae4057f3ef348d",
     "data/demo_curation/gt_boxes.parquet": "acbab40a6b37e51ad5f46186f75a26ad40394a93daf020f3cf5a4b9798c7989d",
     "data/demo_curation/predictions.parquet": "ea191598c0c3b0465b11c075302e62fe06704bdc949a1401e92d40107da7cd4b",
     "data/demo_curation/semantic_search_results.parquet": "1c7a76d96f29f1af27998f2781f1932728df5afc6de45bc30668712c6fff1f50",
@@ -26,14 +32,38 @@
       "rows": 250,
       "sha256": "ef728efbf6490c91a94d6882f6a6192285a0cc0d365de95006c3e35e86575f7d"
     },
+    "graph_subgraphs/fast_cyclists.json": {
+      "bytes": 425906,
+      "sha256": "62a9b8c33799f4e8c685111a44cb306dca226e9780fc75ed4893bbffc960c578"
+    },
+    "graph_subgraphs/fn_pedestrians_night.json": {
+      "bytes": 40573,
+      "sha256": "adfcc296fb2be9a617c67c927e3ddfc5d8e24b8a10e76a1f350c6b3834f6558a"
+    },
+    "graph_subgraphs/hard_braking_near_pedestrians.json": {
+      "bytes": 490052,
+      "sha256": "6a566321108a30ddc366c7bf81b8ef945c8d2858428c14c991feb6740f4332de"
+    },
+    "graph_subgraphs/low_conf_braking.json": {
+      "bytes": 26970,
+      "sha256": "41f94d2e793dd57a9d99354d05acb53d1e133a2405269c32d029ecbd23cb2d57"
+    },
+    "graph_subgraphs/night_pedestrians.json": {
+      "bytes": 462817,
+      "sha256": "a80cb7235ce0299b3a08e4bd33b885f467f800a3dc7ffd5e2eb1ece8ff6e6ff6"
+    },
+    "graph_subgraphs/rain_vru.json": {
+      "bytes": 475445,
+      "sha256": "d119a49d497ba6b3787de308975b2b733f8ff720a4304d5100ae4057f3ef348d"
+    },
     "gt_boxes.parquet": {
       "bytes": 144956,
       "rows": 1595,
       "sha256": "64852acb0ab5d87f89c4b5d9491a3d957e666c3039d5caa41943ef5058570a08"
     },
     "overview_metrics.json": {
-      "bytes": 561,
-      "sha256": "7f5483e48e2f1f0bee5553d1bf1b329bc110bcad8465f384eecfe0132a234490"
+      "bytes": 580,
+      "sha256": "561e3619a054a42d0c5c5b0e2824d993cf9303a4920767e0fd000d754dd0df47"
     },
     "predictions.parquet": {
       "bytes": 180062,
@@ -3528,16 +3558,18 @@
       "sha256": "e801316d08dadd8e29fb592af8c9aab3c0759981c6cd2d3fc5bc9401deb4fc16"
     }
   },
-  "package_version": "0.4",
+  "package_version": "0.5",
   "validation": {
     "curation": "included",
     "events": "included",
+    "flagship_cypher": 30,
     "flagship_events": 30,
     "flagship_sql_count": 30,
     "n_arms": 13,
     "n_events": 126,
     "n_weak_arms": 2,
-    "package_mb": 22.98,
-    "semsearch": "included"
+    "package_mb": 24.9,
+    "semsearch": "included",
+    "subgraphs": "included"
   }
 }
