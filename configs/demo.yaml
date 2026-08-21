@@ -43,6 +43,31 @@ flagship:
   cypher_count: 30                 # sourced, not computed, until Phase 6
   cypher_source: docs/GRAPH.md
 
+presets:                          # Phase 5: demo/events.py's six scenario presets
+                                   # (docs/superpowers/specs/2026-08-20-demo-phase5-design.md §1)
+  cap_per_preset: 30
+  near_dist_m: 10.0                # matches exporters.py::FLAGSHIP_SQL's hardcoded "< 10"
+  high_speed_mps: 10.0
+  model_for_results: baseline      # which model's matched_<model>/predictions the two
+                                    # model-result presets (fn_pedestrians_night,
+                                    # low_conf_braking) key off
+
+semsearch:                        # Phase 5: `demo semsearch` (torch required) -- recorded
+                                   # SigLIP queries -> semantic_search_results.parquet,
+                                   # copied into the package by `demo build`'s
+                                   # _include_semsearch (see demo/exporters.py::export_semsearch)
+  queries:
+    - foggy road with heavy lens glare
+    - crowded nighttime pedestrian crossing
+    - pedestrian crossing at a red light at night
+    - construction zone with traffic cones
+  k: 8
+  oversample: 16                  # consolidated review (item 7): the LanceDB store
+                                   # spans all six camera channels, and 8x sometimes
+                                   # left fewer than k CAM_FRONT hits for a query;
+                                   # exporters.export_semsearch defaults to 8 when
+                                   # this key is absent.
+
 curation:
   staging_dir: data/demo_curation
   images_root: data/raw/demo_frames   # rsync destination (demo infer resolves images here)

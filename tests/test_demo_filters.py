@@ -11,7 +11,18 @@ import pytest
 APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
-from filters import failure_counts, failure_flags, filter_frames, sort_frames  # noqa: E402
+from filters import (  # noqa: E402
+    braking_caption,
+    confidence_caption,
+    distance_caption,
+    failure_counts,
+    failure_flags,
+    filter_frames,
+    rank_events,
+    severity_caption,
+    sort_frames,
+    speed_caption,
+)
 
 
 def _manifest() -> pd.DataFrame:
@@ -247,3 +258,100 @@ def test_sort_frames_invalid_key_raises() -> None:
     frames = filter_frames(manifest=_sort_manifest(), gt=_sort_gt(), preds=_sort_preds(), model="baseline")
     with pytest.raises(ValueError, match="unknown key"):
         sort_frames(frames, key="bogus", **_sort_kwargs())
+
+
+# --- rank_events: Scenario Search's pure filter/sort helper (Phase 5) --------------
+
+
+def _events() -> pd.DataFrame:
+    """Three events: two tagged `preset_a` (ranks 2, 1 -- deliberately NOT in row
+    order, so a bug that just returns rows as-is instead of sorting by rank would
+    still be caught), one untagged for `preset_a` (NA rank) but tagged `preset_b`.
+    """
+    return pd.DataFrame(
+        {
+            "sample_data_token": ["e0", "e1", "e2"],
+            "preset_rank_preset_a": pd.array([2, pd.NA, 1], dtype="Int64"),
+            "preset_rank_preset_b": pd.array([pd.NA, 1, pd.NA], dtype="Int64"),
+        }
+    )
+
+
+def test_rank_events_tag_filter() -> None:
+    """Only rows with a non-null preset_rank_<preset> come back -- e1 is untagged
+    for preset_a (NA rank) and must be excluded even though it's tagged preset_b."""
+    out = rank_events(_events(), "preset_a")
+    assert set(out["sample_data_token"]) == {"e0", "e2"}
+    assert "e1" not in set(out["sample_data_token"])
+
+
+def test_rank_events_rank_order() -> None:
+    """Sorted by the preset's own rank column ascending (1 = most severe first),
+    not by input row order -- e2 (rank 1) must come before e0 (rank 2), even
+    though e0 appears first in the input frame."""
+    out = rank_events(_events(), "preset_a")
+    assert list(out["sample_data_token"]) == ["e2", "e0"]
+
+    out_b = rank_events(_events(), "preset_b")
+    assert list(out_b["sample_data_token"]) == ["e1"]
+
+
+def test_rank_events_unknown_preset_raises() -> None:
+    with pytest.raises(ValueError, match="unknown preset"):
+        rank_events(_events(), "not_a_real_preset")
+
+
+# --- card/panel caption formatting (consolidated review, items 1 & 6) --------------
+
+
+def test_braking_caption_negative_accel_shows_g_force() -> None:
+    # -9.80665 m/s^2 == exactly 1.00g
+    assert braking_caption(-9.80665) == "1.00g braking"
+    assert braking_caption(-4.903325) == "0.50g braking"
+
+
+def test_braking_caption_positive_or_zero_accel_is_not_braking() -> None:
+    """27/126 real flagship-adjacent events have a POSITIVE accel_long_min_mps2
+    (accelerating, not braking, at their most extreme longitudinal sample) --
+    labeling that a braking-g figure misrepresented the frame (item 1)."""
+    assert braking_caption(2.5) == "no braking data"
+    assert braking_caption(0.0) == "no braking data"
+
+
+def test_braking_caption_na_is_no_braking_data() -> None:
+    assert braking_caption(float("nan")) == "no braking data"
+
+
+def test_distance_speed_confidence_captions() -> None:
+    assert distance_caption(7.25, label="ped") == "7.2m ped"
+    assert distance_caption(float("nan"), label="ped") == "no ped"
+    assert speed_caption(10.1) == "10.1 m/s"
+    assert speed_caption(float("nan")) == "no speed"
+    assert confidence_caption(0.234) == "0.23 conf"
+    assert confidence_caption(float("nan")) == "no low-conf detection"
+
+
+def test_severity_caption_uses_each_presets_own_ranking_quantity() -> None:
+    """Cards must show the SAME quantity the preset ranks by -- not always
+    min-pedestrian distance regardless of which preset produced the card (item 6).
+    One row carrying every field a preset might read, so each assertion below
+    proves the dispatcher picks the field that specific preset actually uses."""
+    row = {
+        "accel_long_min_mps2": -7.5,
+        "min_dist_pedestrian_m": 5.0,
+        "min_dist_cyclist_m": 3.0,
+        "speed_mps": 12.0,
+        "fn_ped_min_dist_m": 40.0,
+        "low_conf_min_conf": 0.21,
+    }
+    assert severity_caption("hard_braking_near_pedestrians", row) == "0.76g braking"
+    assert severity_caption("night_pedestrians", row) == "5.0m ped"
+    assert severity_caption("fast_cyclists", row) == "12.0 m/s"
+    assert severity_caption("rain_vru", row) == "3.0m VRU"   # nearer of ped(5)/cyc(3)
+    assert severity_caption("fn_pedestrians_night", row) == "40.0m missed ped"
+    assert severity_caption("low_conf_braking", row) == "0.21 conf"
+
+
+def test_severity_caption_unknown_preset_raises() -> None:
+    with pytest.raises(ValueError, match="unknown preset"):
+        severity_caption("not_a_real_preset", {})

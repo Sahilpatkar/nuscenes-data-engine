@@ -90,9 +90,9 @@ def _warn_if_underfilled(bucket_name: str, selected: list[str], quota: int) -> N
         )
 
 
-def _front_camera_hits(
+def front_camera_hits(
     results: list[dict[str, Any]], quota: int
-) -> list[tuple[str, list[str]]]:
+) -> list[dict[str, Any]]:
     """Filter a rank-ordered semantic-search hit list to CAM_FRONT, then truncate.
 
     The LanceDB frame store the semantic bucket draws from spans all six camera
@@ -106,9 +106,15 @@ def _front_camera_hits(
     ``quota``, e.g. 8x) so filtering still leaves enough CAM_FRONT hits to fill it;
     this function only filters and truncates, it does not know or care how ``results``
     was fetched.
+
+    Public (Phase 5) since ``demo/exporters.py::export_semsearch`` reuses it too and
+    needs the raw result dicts (``score`` included) — this returns the filtered rows
+    themselves rather than ``(token, bucket_labels)`` tuples; ``demo curate``'s own
+    caller (cli.py's ``semantic_hits`` closure) builds its ``["semantic"]`` bucket-
+    label tuples from these dicts itself.
     """
     front = [row for row in results if row.get("channel") == "CAM_FRONT"]
-    return [(row["sample_data_token"], ["semantic"]) for row in front[:quota]]
+    return front[:quota]
 
 
 def run_curate(

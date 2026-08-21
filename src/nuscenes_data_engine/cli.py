@@ -1020,7 +1020,7 @@ def demo_curate(
 ) -> None:
     """Curate deterministic buckets into a frame manifest + rsync filelist."""
     from nuscenes_data_engine.config import get_settings, load_yaml
-    from nuscenes_data_engine.demo.curate import _front_camera_hits, run_curate
+    from nuscenes_data_engine.demo.curate import front_camera_hits, run_curate
 
     cfg = load_yaml(config)
     curation_cfg = cfg["curation"]
@@ -1045,17 +1045,18 @@ def demo_curate(
             seen: set[str] = set()
             for search_query in queries:
                 raw = engine.search_text(search_query, quota * semantic_oversample)
-                front = _front_camera_hits(raw, quota)
+                front = front_camera_hits(raw, quota)
                 dropped = len(raw) - len(front)
                 if dropped:
                     logger.info(
                         "demo curate: semantic query %r dropped %d/%d non-CAM_FRONT hits",
                         search_query, dropped, len(raw),
                     )
-                for token, bucket_labels in front:
+                for row in front:
+                    token = row["sample_data_token"]
                     if token not in seen:
                         seen.add(token)
-                        hits.append((token, bucket_labels))
+                        hits.append((token, ["semantic"]))
             return hits
         except (ImportError, FileNotFoundError) as exc:
             logger.warning("demo curate: semantic bucket skipped (%s)", exc)
@@ -1154,6 +1155,64 @@ def demo_infer(
         visibility_min=visibility_min,
     )
     logger.info("demo infer: %s", out)
+
+
+@demo_app.command("semsearch")
+def demo_semsearch(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+) -> None:
+    """Run the recorded semantic-search queries, staging results for `demo build`.
+
+    Unlike `demo curate`'s semantic bucket (which degrades gracefully when torch/
+    lancedb are absent — the whole curate run must still succeed), this command's
+    entire purpose IS the semantic search: torch/lancedb missing is a hard failure
+    with a directive message, not a silent skip.
+    """
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.demo.exporters import export_semsearch
+
+    cfg = load_yaml(config)
+    semsearch_cfg = cfg["semsearch"]
+    curation_cfg = cfg["curation"]
+    settings = get_settings()
+
+    try:
+        from nuscenes_data_engine.data_engine.search import SearchEngine
+
+        # Lazy: the encoder (torch/transformers) is only built on the engine's
+        # first search_text call, not at SearchEngine construction -- both are
+        # inside this try block so either failure point is caught uniformly.
+        engine = SearchEngine(
+            Path(cfg["paths"]["lancedb_path"]), cfg["paths"]["lancedb_table"],
+            settings.search_model_name, device=settings.search_device,
+        )
+
+        def search_fn(query: str, k: int) -> list[dict[str, Any]]:
+            return engine.search_text(query, k)
+
+        df = export_semsearch(
+            search_fn=search_fn,
+            queries=semsearch_cfg["queries"],
+            k=int(semsearch_cfg["k"]),
+            staging_dir=Path(curation_cfg["staging_dir"]),
+            # semsearch.oversample: consolidated review (item 7) -- falls back to
+            # export_semsearch's own default (8) when the config doesn't set it.
+            oversample=int(semsearch_cfg.get("oversample", 8)),
+        )
+    # FileNotFoundError alongside ImportError, same as `demo curate`'s semantic
+    # bucket (item 8, consolidated review): a missing LanceDB store directory
+    # raises FileNotFoundError from lancedb.connect, not ImportError, and this
+    # command's directive message applies equally to that case.
+    except (ImportError, FileNotFoundError) as exc:
+        raise ValueError(
+            "demo semsearch: torch/lancedb not installed — this command requires "
+            "the train+engine extras: `uv sync --extra train --extra engine`"
+        ) from exc
+
+    logger.info(
+        "demo semsearch: %d rows across %d queries -> %s",
+        len(df), len(semsearch_cfg["queries"]), curation_cfg["staging_dir"],
+    )
 
 
 @demo_app.command("build")

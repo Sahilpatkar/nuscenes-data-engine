@@ -1,17 +1,32 @@
-"""Pure failure-filter logic for the Failure Explorer (no Streamlit import — the
-AST guard in tests/test_demo_app.py applies here too, so this module stays
-importable and testable without a Streamlit runtime; pandas is the only dependency.
+"""Pure filter/formatting logic shared by the Failure Explorer and Scenario Search
+pages (no Streamlit import — the AST guard in tests/test_demo_app.py applies here
+too, so this module stays importable and testable without a Streamlit runtime;
+pandas is the only dependency.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import pandas as pd
 
 _LIGHTING = {"night": True, "day": False}
 _FAILURE_TYPES = ("has_fn", "has_fp", "has_low_conf", "clean")
 _SORT_KEYS = ("failure_count", "distance", "scene_name")
+
+# Standard gravity (m/s^2) -- braking_caption divides accel_long_min_mps2 by this
+# to express peak deceleration in g's.
+_STANDARD_GRAVITY_MPS2 = 9.80665
+
+_SEVERITY_PRESETS = (
+    "hard_braking_near_pedestrians",
+    "night_pedestrians",
+    "fast_cyclists",
+    "rain_vru",
+    "fn_pedestrians_night",
+    "low_conf_braking",
+)
 
 
 def failure_flags(
@@ -203,3 +218,94 @@ def sort_frames(
     )
     out = out.sort_values("failure_count", ascending=False, kind="stable")
     return out.drop(columns="failure_count").reset_index(drop=True)
+
+
+def rank_events(events: pd.DataFrame, preset: str) -> pd.DataFrame:
+    """Scenario Search's card grid: ``events`` rows tagged with ``preset``, sorted by
+    that preset's own severity rank (ascending — rank 1 is most severe/first).
+
+    ``demo/events.py::build_events`` writes one ``preset_rank_<name>`` column per
+    known preset (Int64, NA for a row not tagged with that preset, even if it's
+    tagged with a DIFFERENT preset) — filtering on that column being non-null is
+    exactly "tagged with this preset", so no separate membership check against
+    ``preset_tags`` is needed. An unknown preset name (no matching column at all)
+    raises rather than silently returning nothing, mirroring ``sort_frames``'s
+    ``unknown key`` guard.
+    """
+    rank_col = f"preset_rank_{preset}"
+    if rank_col not in events.columns:
+        raise ValueError(
+            f"rank_events: unknown preset {preset!r} — no {rank_col!r} column in events"
+        )
+    tagged = events.loc[events[rank_col].notna()]
+    return tagged.sort_values(rank_col, kind="stable").reset_index(drop=True)
+
+
+# --- Scenario Search card/panel caption formatting (consolidated review, items 1 & 6) --
+#
+# Pure string formatters over already-extracted scalars -- no pandas DataFrame
+# required, so each is unit-testable directly without building a fixture frame.
+
+
+def braking_caption(accel_mps2: float) -> str:
+    """"X.XXg braking" for a NEGATIVE (decelerating) accel_long_min_mps2; the same
+    "no braking data" string covers both NA and a non-negative value.
+
+    27/126 real flagship-adjacent events have a POSITIVE accel_long_min_mps2 (the
+    frame was accelerating, not braking, at its most extreme longitudinal sample)
+    -- labeling that a braking-g figure misrepresents the frame (item 1,
+    consolidated review).
+    """
+    if pd.isna(accel_mps2) or accel_mps2 >= 0:
+        return "no braking data"
+    g_force = abs(float(accel_mps2)) / _STANDARD_GRAVITY_MPS2
+    return f"{g_force:.2f}g braking"
+
+
+def distance_caption(meters: float, *, label: str) -> str:
+    return f"{meters:.1f}m {label}" if pd.notna(meters) else f"no {label}"
+
+
+def speed_caption(mps: float) -> str:
+    return f"{mps:.1f} m/s" if pd.notna(mps) else "no speed"
+
+
+def confidence_caption(conf: float) -> str:
+    return f"{conf:.2f} conf" if pd.notna(conf) else "no low-conf detection"
+
+
+def _min_skip_na(*values: float) -> float:
+    """``min()`` over the given values, skipping NA -- mirrors ``events.py``'s own
+    ``vru_dist`` computation (``pd.concat(...).min(skipna=True)``) but for two
+    already-extracted scalars rather than a whole column."""
+    present = [v for v in values if pd.notna(v)]
+    return min(present) if present else float("nan")
+
+
+def severity_caption(preset: str, row: Mapping[str, Any]) -> str:
+    """The headline severity figure for one Scenario Search event card -- the SAME
+    quantity that ``preset`` ranks by (its own severity key in
+    ``demo/events.py::build_events``), not a fixed field shown regardless of which
+    preset produced the card (item 6, consolidated review: cards previously always
+    showed min-pedestrian distance, even for e.g. fast_cyclists, whose own ranking
+    key is speed).
+
+    ``row`` needs whichever of ``accel_long_min_mps2`` / ``min_dist_pedestrian_m`` /
+    ``speed_mps`` / ``min_dist_cyclist_m`` / ``fn_ped_min_dist_m`` /
+    ``low_conf_min_conf`` the given ``preset`` reads (a dict, or a ``scenario_
+    events`` row's ``._asdict()`` — anything supporting ``row["col"]``).
+    """
+    if preset == "hard_braking_near_pedestrians":
+        return braking_caption(row["accel_long_min_mps2"])
+    if preset == "night_pedestrians":
+        return distance_caption(row["min_dist_pedestrian_m"], label="ped")
+    if preset == "fast_cyclists":
+        return speed_caption(row["speed_mps"])
+    if preset == "rain_vru":
+        vru = _min_skip_na(row["min_dist_pedestrian_m"], row["min_dist_cyclist_m"])
+        return distance_caption(vru, label="VRU")
+    if preset == "fn_pedestrians_night":
+        return distance_caption(row["fn_ped_min_dist_m"], label="missed ped")
+    if preset == "low_conf_braking":
+        return confidence_caption(row["low_conf_min_conf"])
+    raise ValueError(f"severity_caption: unknown preset {preset!r} — expected one of {_SEVERITY_PRESETS}")
