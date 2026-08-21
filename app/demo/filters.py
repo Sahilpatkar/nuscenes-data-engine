@@ -532,6 +532,38 @@ def _claims(preds: pd.DataFrame, model: str) -> dict[str, tuple[str, float]]:
     return best
 
 
+def visible_gt(gt: pd.DataFrame, token: str) -> pd.DataFrame:
+    """One frame's GT rows, visibility-floor rows dropped.
+
+    Rows under the visibility floor were never scored against, so no page counts
+    them, draws them, or explains them (the Failure Explorer drops them for the
+    same reason). The ``below_visibility_min`` column is checked for rather than
+    assumed: an older package predates it.
+
+    Shared by the Active Learning and Weak Supervision pages (consolidated review
+    M6 -- it was duplicated in both views).
+    """
+    subset = gt.loc[gt["sample_data_token"] == token]
+    if "below_visibility_min" not in subset.columns:
+        return subset
+    return subset.loc[~subset["below_visibility_min"].fillna(False)]
+
+
+def gt_for_render(gt_rows: pd.DataFrame, model: str | None = None) -> pd.DataFrame:
+    """``matched_<model>`` renamed to the ``matched`` column ``draw_overlay`` reads.
+
+    ``model=None`` (or a model this package has no column for) yields an all-NA
+    ``matched``: a train-pool frame was never evaluated by anyone, and draw_overlay
+    renders NA as plain GT rather than as a miss -- "not evaluated" is not the same
+    claim as "missed". The Weak Supervision page always passes None (its frames are
+    train-pool ones and the comparison it draws is GT vs the pseudo labels).
+    """
+    column = f"matched_{model}"
+    if model is not None and column in gt_rows.columns:
+        return gt_rows.rename(columns={column: "matched"})
+    return gt_rows.assign(matched=pd.Series(pd.NA, index=gt_rows.index, dtype="boolean"))
+
+
 def fixed_boxes(
     gt: pd.DataFrame, preds: pd.DataFrame, *, baseline: str, arm: str
 ) -> pd.DataFrame:
@@ -623,11 +655,32 @@ def community_jump(
 _PICK_PASS_LABELS = {"main": "main pass", "backfill": "seeded backfill"}
 
 
+# 11th/12th/13th (and the whole 111-119 family) break the last-digit rule, so the
+# teens are handled before this lookup is consulted.
+_ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
+
+
 def _ordinal(number: int) -> str:
     """1 -> "1st", 2 -> "2nd", 11 -> "11th", 21 -> "21st"."""
     if 10 <= number % 100 <= 20:
         return f"{number}th"
-    return f"{number}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(number % 10, 'th') }".replace(" ", "")
+    return f"{number}{_ORDINAL_SUFFIXES.get(number % 10, 'th')}"
+
+
+def _quota_text(row: Mapping[str, Any]) -> str:
+    """A community's quota, saying where it came from when mass didn't buy it.
+
+    ``select_by_mass`` gives every community that got no night pick a FLOOR of one
+    frame, so a community with zero routed failure mass still mines one. Printing a
+    bare "1 frame" under "Community failure mass: 0.00 (rank 81 of 97)" reads as a
+    quota the mass bought -- it didn't (consolidated review I3: 6 of the 78 gallery
+    frames are in zero-mass communities).
+    """
+    quota = int(row["community_quota"])
+    frames = f"{quota} frame{'' if quota == 1 else 's'}"
+    if float(row["community_mass"]) == 0:
+        return f"{frames} (per-community floor — this community drew no routed failure mass)"
+    return frames
 
 
 def _optional_int(value: Any) -> int | None:
@@ -680,7 +733,7 @@ def selection_factors(
             f"(rank {mass_rank if mass_rank is not None else 'n/a'} of {n_communities})",
             None,
         ),
-        ("Community quota", f"{int(row['community_quota'])} frames", None),
+        ("Community quota", _quota_text(row), None),
         ("Picked in", pass_label, None),
         (
             "Similarity-degree rank",

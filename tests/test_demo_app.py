@@ -594,7 +594,9 @@ def built_demo_data(tmp_path: Path) -> Path:
         "weather": ["clear", "rain"],
         "hazards": ["[]", "[]"],
         "notable_conditions": ["[]", "[]"],
-        "label_confidence": [0.8, 0.6],
+        # The VLM's own STRING enum -- rendering it as a float crashed the page on
+        # every frame it had actually labelled (consolidated review C1).
+        "label_confidence": ["high", "low"],
         "cars": [1.0, 0.0], "trucks": [0.0, 0.0], "buses": [0.0, 0.0],
         "trailers": [0.0, 0.0], "construction_vehicles": [0.0, 0.0],
         "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
@@ -1396,6 +1398,90 @@ def test_active_learning_page_why_selected_panel_with_explain(
     )
 
 
+def test_active_learning_page_on_a_pre_phase_7_package(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before Phase 7 carries none of this page's tables --
+    al_exemplars.json, al_communities.parquet, the al_explain group -- and a
+    frame_manifest without ``al_selected_by``. The page must say what is missing
+    and stop, not raise (consolidated review M11).
+
+    Stripped from a built package rather than rebuilt, the same idiom
+    test_weak_supervision_page_on_a_pre_phase_7_package uses.
+    """
+    pytest.importorskip("streamlit")
+    for name in (
+        "al_exemplars.json", "al_communities.parquet",
+        "al_selection_explain.parquet", "al_explain_validation.json",
+    ):
+        (built_demo_data / name).unlink()
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    pd.read_parquet(manifest_path).drop(columns=["al_selected_by"]).to_parquet(
+        manifest_path, index=False
+    )
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    notes = [str(e.value) for e in at.error] + [str(i.value) for i in at.info]
+    assert any("needs demo_data >= 0.6" in note for note in notes)
+
+
+def test_active_learning_page_with_an_empty_exemplar_list(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``al_exemplars.json`` with no tokens is a real, allowed state (a package built
+    with curation absent) -- the before/after section says so instead of raising on
+    an empty selectbox (consolidated review M11)."""
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "al_exemplars.json"
+    package = json.loads(path.read_text())
+    package["tokens"] = []
+    path.write_text(json.dumps(package, indent=2, sort_keys=True))
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("no exemplar frames in this package" in str(i.value) for i in at.info)
+    # the rest of the page is unaffected -- the arm chart is still there
+    assert len(at.get("vega_lite_chart")) >= 1
+
+
+def test_active_learning_gallery_pages_night_frames_first(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """78 selected frames rendered as 78 images and 78 buttons in one grid is a wall
+    (consolidated review M8): the gallery shows the first 24, night frames first
+    (this arm is night-targeted), behind a "show all" checkbox.
+
+    The built package's manifest is widened with synthetic selected frames rather
+    than rebuilt -- the page reads ``al_selected_by``/``is_night``/``scene_name``
+    and nothing else about them, and no crop needs to exist for a thumb-less frame.
+    """
+    pytest.importorskip("streamlit")
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    extra = pd.DataFrame({
+        "sample_data_token": [f"g{i}" for i in range(30)],
+        "scene_name": [f"scene-{i:03d}" for i in range(30)],
+        # the last one is the ONLY night frame, so night-first ordering must lift it
+        # out of the tail and into the first page
+        "is_night": [False] * 29 + [True],
+        "al_selected_by": pd.array(["graph_rate_night"] * 30, dtype="string"),
+        "split": ["train_pool"] * 30,
+    })
+    pd.concat([manifest, extra], ignore_index=True).to_parquet(manifest_path, index=False)
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("night frames first" in str(c.value) for c in at.caption)
+    # night frame first, day frame 29 (alphabetically last) past the first page
+    assert at.button(key="al_frame_select_g29")
+    assert not [b for b in at.button if b.key == "al_frame_select_g28"]
+
+    at.checkbox(key="al_gallery_show_all").set_value(True).run(timeout=30)
+    assert not at.exception
+    assert at.button(key="al_frame_select_g28")
+
+
 # --- Phase 7 (Task 5): the Weak Supervision page -------------------------------
 
 
@@ -1450,26 +1536,17 @@ def test_weak_supervision_page_cards_decomposition_bias_and_tabs(
     assert not at.exception
 
     # (a) both pairs, the documented headline attributed as such
+    # Short, backtick-free card labels: st.metric breaks its label mid-TOKEN in a
+    # narrow column ("graph_ra te_night"), so the arm names carry no markup and the
+    # night card's arm pair moved to a caption (real-browser finding 4).
     labels = {m.label: m.value for m in at.metric}
-    headline = next(
-        label for label in labels
-        if "Share of GT gain retained" in label and "`random`" in label
-    )
-    assert "documented headline" in headline
-    assert labels[headline] == "18.0%"
-    other = next(
-        label for label in labels
-        if "Share of GT gain retained" in label and "`graph_rate_night`" in label
-    )
-    assert "documented headline" not in other
-    assert labels[other] == "39.4%"
+    assert labels["GT gain retained — random (headline)"] == "18.0%"
+    assert labels["GT gain retained — graph_rate_night"] == "39.4%"
+    assert "`" not in "".join(labels)
     # verifier retention (a DIFFERENT quantity: what the verifier kept, not what
     # the training run retained) and the night pedestrian slice
-    assert any(
-        "Verifier retention" in label and "`random`" in label and labels[label] == "60%"
-        for label in labels
-    )
-    assert any(label.startswith("Night pedestrian mAP50-95") for label in labels)
+    assert labels["Verifier retention — random"] == "60%"
+    assert "Night pedestrian mAP50-95" in labels
 
     # (b)/(c) the stacked loss decomposition and the paired crowding chart
     assert len(at.get("vega_lite_chart")) >= 2
@@ -1498,6 +1575,10 @@ def test_weak_supervision_page_cards_decomposition_bias_and_tabs(
         "no pseudo boxes exist for rejected frames by construction" in t for t in text
     )
     assert len(at.image) >= 1                                   # wA's crop + pseudo box
+    # label_confidence is the VLM's string enum, rendered as text: formatting it as
+    # a float raised ValueError and took the page down on every frame the VLM had
+    # labelled (consolidated review C1) -- 32 of the 78 real gallery frames.
+    assert any("label confidence high" in t for t in text)
     counts = [
         d.value for d in at.dataframe
         if list(getattr(d.value, "columns", [])) == ["class", "vlm_count", "gt_count"]
@@ -1539,6 +1620,39 @@ def test_weak_supervision_mutual_zero_flag(
 
     text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
     assert any("accepted — 0 pseudo boxes (mutual zero)" in t for t in text)
+
+
+def test_weak_supervision_gallery_pages_its_tabs(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The accepted tab holds 47 frames in the real package -- one grid of 47 images
+    and 47 buttons is the same wall the AL gallery was (consolidated review M8), so
+    each tab shows the first 24 behind its own "show all" checkbox."""
+    pytest.importorskip("streamlit")
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    extra = pd.DataFrame({
+        "sample_data_token": [f"a{i}" for i in range(30)],
+        "scene_name": [f"scene-{i:03d}" for i in range(30)],
+        "is_night": [False] * 30,
+        "weak_verdict": pd.array(["accepted"] * 30, dtype="string"),
+        "split": ["train_pool"] * 30,
+    })
+    pd.concat([manifest, extra], ignore_index=True).to_parquet(manifest_path, index=False)
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any(
+        str(c.value).startswith("The first 24 of ") and "verifier accepted" in str(c.value)
+        for c in at.caption
+    )
+    assert not [b for b in at.button if b.key == "ws_accepted_select_a29"]
+
+    at.checkbox(key="ws_accepted_show_all").set_value(True).run(timeout=30)
+    assert not at.exception
+    assert at.button(key="ws_accepted_select_a29")
+    # the rejected tab has 1 frame, well under the page size -- no checkbox for it
+    assert not [c for c in at.checkbox if c.key == "ws_rejected_show_all"]
 
 
 def test_overview_no_longer_promises_phase_7(
@@ -1611,6 +1725,4 @@ def test_weak_supervision_page_on_a_pre_phase_7_package(
 
     assert any("needs demo_data >= 0.6" in str(i.value) for i in at.info)
     # the one thing the old package does carry is still on screen
-    assert any(
-        "Verifier retention" in m.label and "`random`" in m.label for m in at.metric
-    )
+    assert any(m.label == "Verifier retention — random" for m in at.metric)

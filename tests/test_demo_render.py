@@ -19,8 +19,8 @@ from render import (  # noqa: E402
     STYLE_FP,
     STYLE_GT,
     STYLE_LOW_CONF,
+    STYLE_PSEUDO,
     STYLE_TP,
-    STYLE_VLM,
     BoxStyle,
     _draw_rect,
     draw_overlay,
@@ -285,20 +285,71 @@ def test_bar_chart_color_field_keeps_its_own_legend() -> None:
     assert encoding["color"].get("legend", "default") != None   # noqa: E711
 
 
-# --- Phase 7 (Task 5): the VLM pseudo-box layer ----------------------------------
+def test_bar_chart_grouped_puts_alternatives_side_by_side() -> None:
+    """Two ALTERNATIVE allocations of the same budget must not stack: stacked, the
+    Active Learning page's per-community quotas read as a total that never existed
+    (consolidated review, real-browser finding 1). ``grouped=True`` offsets them
+    along x and turns stacking explicitly off.
+    """
+    from render import bar_chart
+
+    quotas = pd.DataFrame({
+        "community": ["#10301", "#10301", "#7", "#7"],
+        "frames": [83, 323, 40, 12],
+        "allocation": ["quota_graph_rate", "quota_graph_rate_night"] * 2,
+    })
+
+    grouped = bar_chart(
+        quotas, x="community", y="frames", color_field="allocation",
+        grouped=True, zero_line=False,
+    ).to_dict()["encoding"]
+    assert grouped["xOffset"]["field"] == "allocation"
+    # explicitly unstacked, not merely defaulting to vega-lite's "zero"
+    assert grouped["y"].get("stack", "zero") is None
+
+    stacked = bar_chart(
+        quotas, x="community", y="frames", color_field="allocation", zero_line=False,
+    ).to_dict()["encoding"]
+    assert "xOffset" not in stacked
+    assert stacked["y"].get("stack", "zero") == "zero"
 
 
-def _vlm() -> pd.DataFrame:
-    """One verified VLM pseudo box, in weak_labels.parquet's own schema: no
-    ``matched`` and no ``status`` (those are GT/prediction concepts) -- a
-    verifier ``score`` instead of a detector confidence."""
+def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
+    """13 arm names across ~1100 px were clipped to "weak_graph_rate..." -- an arm
+    name is an identifier, and a clipped one names nothing (real-browser finding 2);
+    a melted table's "value" column names nothing either (finding 3)."""
+    from render import bar_chart
+
+    encoding = bar_chart(
+        _arms(), x="arm", y="delta_night", label_angle=-45,
+        y_title="mAP50-95 gain over baseline", zero_line=False,
+    ).to_dict()["encoding"]
+
+    assert encoding["x"]["axis"]["labelLimit"] == 0
+    assert encoding["x"]["axis"]["labelAngle"] == -45
+    assert encoding["y"]["title"] == "mAP50-95 gain over baseline"
+
+    # no angle asked for -> no labelAngle in the spec at all, but still no truncation
+    plain = bar_chart(_arms(), x="arm", y="delta_night", zero_line=False).to_dict()["encoding"]
+    assert plain["x"]["axis"] == {"labelLimit": 0}
+    assert plain["y"]["title"] == "delta night"
+
+
+# --- Phase 7 (Task 5): the pseudo-box layer ----------------------------------
+
+
+def _pseudo() -> pd.DataFrame:
+    """One verified pseudo box, in weak_labels.parquet's own schema: no ``matched``
+    and no ``status`` (those are GT/prediction concepts), and a ``score`` that is
+    the BASELINE DETECTOR's own confidence in its proposal -- the VLM only
+    corroborated the frame's per-class counts, it never drew the box."""
     return pd.DataFrame({
         "x_min": [600.0], "y_min": [600.0], "x_max": [900.0], "y_max": [800.0],
         "category_group": ["car"], "score": [0.73],
     })
 
 
-def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compatible(
+def test_draw_overlay_pseudo_boxes_drawn_in_pseudo_style_and_signature_backward_compatible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pseudo boxes are a THIRD, independent layer: they render in every mode
@@ -306,7 +357,7 @@ def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compat
     predictions, so "gt" is the mode the page actually uses), and the existing
     two-layer signature is untouched.
     """
-    gt, preds, vlm = _gt(matched=True), _preds("tp"), _vlm()
+    gt, preds, pseudo = _gt(matched=True), _preds("tp"), _pseudo()
     modes = ("gt", "pred", "overlay")
     before = {
         mode: draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6) for mode in modes
@@ -316,12 +367,12 @@ def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compat
     # pre-change two-layer render of the same inputs.
     for mode, baseline in before.items():
         assert (
-            draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=None).tobytes()
+            draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, pseudo_boxes=None).tobytes()
             == baseline.tobytes()
         )
         assert (
             draw_overlay(
-                _blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=vlm.iloc[0:0]
+                _blank(), gt, preds, mode=mode, scale=0.6, pseudo_boxes=pseudo.iloc[0:0]
             ).tobytes()
             == baseline.tobytes()
         )
@@ -329,20 +380,22 @@ def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compat
     # 600..900 x 600..800 scaled by 0.6 -> 360..540 x 360..480; sample the top
     # edge clear of both corners. Solid (no gaps), blue, in every mode.
     for mode, baseline in before.items():
-        out = draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, vlm_boxes=vlm)
+        out = draw_overlay(_blank(), gt, preds, mode=mode, scale=0.6, pseudo_boxes=pseudo)
         edge = {out.getpixel((x, 360)) for x in range(362, 538)}
-        assert edge == {STYLE_VLM.color}, mode
+        assert edge == {STYLE_PSEUDO.color}, mode
         assert out.tobytes() != baseline.tobytes(), mode
 
     # Corrupt coordinates raise the same named ValueError the GT/prediction
     # layers do, rather than half-rendering.
-    with pytest.raises(ValueError, match="inverted VLM box") as exc_info:
+    with pytest.raises(ValueError, match="inverted pseudo box") as exc_info:
         draw_overlay(
-            _blank(), gt, preds, mode="gt", scale=0.6, vlm_boxes=vlm.assign(x_max=[10.0])
+            _blank(), gt, preds, mode="gt", scale=0.6, pseudo_boxes=pseudo.assign(x_max=[10.0])
         )
     assert "car" in str(exc_info.value)
 
-    # The label is the verifier score, not a category: "VLM 0.73".
+    # The label is the DETECTOR's confidence, not a category and not the VLM's:
+    # "pseudo 0.73" (consolidated review C2 -- "VLM 0.73" credited the VLM with a
+    # number it never produced, on a box it never drew).
     #
     # Patched through ``draw_overlay.__globals__`` rather than
     # ``monkeypatch.setattr(render, ...)``: tests/test_demo_app.py's
@@ -359,5 +412,5 @@ def test_draw_overlay_vlm_boxes_drawn_in_vlm_style_and_signature_backward_compat
         "_draw_label",
         lambda draw, xyxy, text, style: calls.append((text, style)),
     )
-    draw_overlay(_blank(), gt, preds, mode="gt", scale=0.6, vlm_boxes=vlm)
-    assert ("VLM 0.73", STYLE_VLM) in calls
+    draw_overlay(_blank(), gt, preds, mode="gt", scale=0.6, pseudo_boxes=pseudo)
+    assert ("pseudo 0.73", STYLE_PSEUDO) in calls

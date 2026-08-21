@@ -22,19 +22,29 @@ Two honesty rules this page is built around:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import altair as alt
 import pandas as pd
 import streamlit as st
-from filters import community_jump, fixed_boxes, model_label, selection_factors
+from filters import (
+    community_jump,
+    fixed_boxes,
+    gt_for_render,
+    model_label,
+    selection_factors,
+    visible_gt,
+)
 from PIL import Image
 from render import bar_chart, draw_overlay, metric_cards, story_arrows
 
 from data import (
+    STALE_PACKAGE_NOTE as _STALE_PACKAGE_NOTE,
+)
+from data import (
     al_explain_available,
     crop_path,
+    frame_image_path,
     load_al_communities,
     load_al_exemplars,
     load_al_explain,
@@ -56,11 +66,14 @@ _EXPLAIN_FRAME_ABSENT_NOTE = (
     "this frame is not in the staged selection facts — re-run `demo al-explain`"
 )
 _TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
-_STALE_PACKAGE_NOTE = "needs demo_data >= 0.6 (the Phase-7 tables) — rerun `demo build`"
 
 # The paired quota chart gets crowded well before all 97 communities fit; the
 # heaviest ones are where the night floor's reallocation is visible anyway.
 _TOP_COMMUNITIES = 12
+
+# How many gallery thumbs render before the "show all" checkbox -- all 78 curated
+# selected frames in one grid is 78 images and 78 buttons (consolidated review M8).
+_GALLERY_PAGE = 24
 
 _ARM_TABLE_COLUMNS = [
     "arm",
@@ -82,34 +95,6 @@ def _models_from_gt(gt: pd.DataFrame) -> list[str]:
     return sorted(col.removeprefix("matched_") for col in gt.columns if col.startswith("matched_"))
 
 
-def _frame_image_path(token: str) -> Path | None:
-    thumb = thumb_path(token)
-    if thumb.is_file():
-        return thumb
-    crop = crop_path(token)
-    return crop if crop.is_file() else None
-
-
-def _visible_gt(gt: pd.DataFrame, token: str) -> pd.DataFrame:
-    """One frame's GT rows, visibility-floor rows dropped -- the Failure Explorer
-    drops them everywhere for the same reason (they were never scored against)."""
-    subset = gt.loc[gt["sample_data_token"] == token]
-    return subset.loc[~subset["below_visibility_min"].fillna(False)]
-
-
-def _gt_for_render(gt_rows: pd.DataFrame, model: str) -> pd.DataFrame:
-    """``matched_<model>`` renamed to the ``matched`` column ``draw_overlay`` reads.
-
-    A train-pool frame's ``matched_*`` values are all NA (no model ever evaluated
-    it), which draw_overlay renders as plain GT rather than as misses -- "not
-    evaluated" is not the same claim as "missed".
-    """
-    column = f"matched_{model}"
-    if column in gt_rows.columns:
-        return gt_rows.rename(columns={column: "matched"})
-    return gt_rows.assign(matched=pd.Series(pd.NA, index=gt_rows.index, dtype="boolean"))
-
-
 def _night_floor(validation: dict[str, Any]) -> int | None:
     floor = (validation.get("config") or {}).get("night_floor")
     return int(floor) if floor is not None else None
@@ -129,8 +114,8 @@ def _render_story(
         acquisition_floor = f"a night floor of **{night_floor}** frames"
 
     mined = int(arm_row["n_train_images"]) - int(base_row["n_train_images"])
-    # val_images is not a column of the shipped table today; if a future export adds
-    # it, the beat names the split's size instead of just naming the split.
+    # val_images ships from package_version 0.6 (6019 on every arm); .get keeps an
+    # older package rendering, with the beat naming the split but not its size.
     val_images = arm_row.get("val_images")
     evaluation = "Both checkpoints are scored on the same held-out validation split"
     if pd.notna(val_images):
@@ -179,17 +164,21 @@ def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
     ordered = arms.sort_values("round_order").reset_index(drop=True)
     order = [str(name) for name in ordered["arm"]]
 
+    # labelAngle=-45 (bar_chart never truncates a label): 13 arms across ~1100 px
+    # clipped the weak arms' names to "weak_graph_rate..." horizontally, and an arm
+    # name is an identifier -- a clipped one names nothing (consolidated review,
+    # real-browser finding 2).
     st.altair_chart(
         bar_chart(
             ordered, x="arm", y="delta_night", highlight=arm, sort=order,
-            title="Night mAP50-95 vs baseline",
+            label_angle=-45, title="Night mAP50-95 vs baseline",
         ),
         width="stretch",
     )
     st.altair_chart(
         bar_chart(
             ordered, x="arm", y="delta_overall", highlight=arm, sort=order,
-            title="Overall mAP50-95 vs baseline",
+            label_angle=-45, title="Overall mAP50-95 vs baseline",
         ),
         width="stretch",
     )
@@ -269,12 +258,17 @@ def _render_community_section(communities: pd.DataFrame, *, arm: str) -> None:
         var_name="allocation", value_name="frames",
     )
     paired["community"] = "#" + paired["community"].astype(str)
+    # grouped=True: the two quotas are ALTERNATIVES (the same budget allocated two
+    # ways), not parts of a total -- stacked, community #10301's 83 and 323 read as
+    # 406 mined frames, a number that never existed (consolidated review,
+    # real-browser finding 1).
     st.altair_chart(
         bar_chart(
             paired, x="community", y="frames", color_field="allocation", zero_line=False,
-            sort=[f"#{community}" for community in top["community"]],
+            grouped=True, sort=[f"#{community}" for community in top["community"]],
             title=f"Quota per community, {before.removeprefix('quota_')} vs "
-            f"{after.removeprefix('quota_')} (top {len(top)} by mass)",
+            f"{after.removeprefix('quota_')} (top {len(top)} by mass, side by side — "
+            "the two arms are alternatives, not parts of a total)",
         ),
         width="stretch",
     )
@@ -306,7 +300,7 @@ def _render_selected_frame(
 ) -> None:
     """(d) One selected frame: its crop with GT, its facts, and why it was picked."""
     token = str(frame_row["sample_data_token"])
-    gt_rows = _visible_gt(gt, token)
+    gt_rows = visible_gt(gt, token)
 
     image_path = crop_path(token)
     scale = 0.6
@@ -316,7 +310,7 @@ def _render_selected_frame(
     if image_path.is_file():
         st.image(
             draw_overlay(
-                Image.open(image_path), _gt_for_render(gt_rows, arm), pd.DataFrame(),
+                Image.open(image_path), gt_for_render(gt_rows, arm), pd.DataFrame(),
                 mode="gt", scale=scale,
             )
         )
@@ -361,19 +355,42 @@ def _render_gallery(
         st.info(f"no `{arm}`-selected frames are curated into this package")
         return
 
+    # Night frames first: this arm is night-TARGETED, so the frames that show what
+    # it was built to find must not sit below the fold behind 40 day frames
+    # (consolidated review M8).
+    ordered = selected.sort_values(
+        ["is_night", "scene_name", "sample_data_token"], ascending=[False, True, True]
+    ).reset_index(drop=True)
+    shown = ordered
+    if len(ordered) > _GALLERY_PAGE:
+        if st.checkbox(f"Show all {len(ordered)} frames", key="al_gallery_show_all"):
+            st.caption(
+                f"All {len(ordered)} of the arm's mined frames curated into this "
+                "package with crops and GT, night frames first."
+            )
+        else:
+            shown = ordered.head(_GALLERY_PAGE)
+            st.caption(
+                f"The first {_GALLERY_PAGE} of {len(ordered)} of the arm's mined frames "
+                "curated into this package with crops and GT, night frames first."
+            )
+    else:
+        st.caption(
+            f"{len(ordered)} of the arm's mined frames are curated into this package "
+            "with crops and GT, night frames first."
+        )
     st.caption(
-        f"{len(selected)} of the arm's mined frames are curated into this package with "
-        "crops and GT. Mining runs over the unlabelled TRAIN pool — every selection "
-        "decision below was made before any of these frames was labelled."
+        "Mining runs over the unlabelled TRAIN pool — every selection decision below "
+        "was made before any of these frames was labelled."
     )
     if not al_explain_available():
         st.info(_EXPLAIN_ABSENT_NOTE)
 
     columns = st.columns(4)
-    for position, row in enumerate(selected.itertuples()):
+    for position, row in enumerate(shown.itertuples()):
         token = str(row.sample_data_token)
         with columns[position % 4]:
-            image_path = _frame_image_path(token)
+            image_path = frame_image_path(token)
             if image_path is not None:
                 st.image(str(image_path))
             st.caption(f"{row.scene_name} · {'night' if row.is_night else 'day'}")
@@ -381,9 +398,12 @@ def _render_gallery(
                 st.session_state["al_frame_token"] = token
 
     chosen = st.session_state.get("al_frame_token")
-    if not chosen or chosen not in set(selected["sample_data_token"]):
+    # Membership is checked against every curated selected frame, not just the page
+    # of them on screen: a viewer who picks a frame and then collapses the gallery
+    # keeps the panel they opened.
+    if not chosen or chosen not in set(ordered["sample_data_token"]):
         return
-    frame_row = selected.loc[selected["sample_data_token"] == chosen].iloc[0]
+    frame_row = ordered.loc[ordered["sample_data_token"] == chosen].iloc[0]
     # n_communities from the community table the chart above draws (not the
     # validation JSON's own count), so the panel's "rank N of M" and that chart can
     # never disagree; the validation record is the fallback when the table is absent.
@@ -408,7 +428,7 @@ def _exemplar_label(
     is_night = bool(rows.iloc[0].get("is_night")) if not rows.empty else False
     n_fixed = len(
         fixed_boxes(
-            _visible_gt(gt, token),
+            visible_gt(gt, token),
             preds.loc[preds["sample_data_token"] == token],
             baseline=baseline,
             arm=arm,
@@ -450,14 +470,14 @@ def _render_before_after(
         format_func=model_label, key="al_model", horizontal=True,
     )
 
-    gt_rows = _visible_gt(gt, token)
+    gt_rows = visible_gt(gt, token)
     frame_preds = preds.loc[preds["sample_data_token"] == token]
     crop = crop_path(token)
     if crop.is_file():
         st.image(
             draw_overlay(
                 Image.open(crop),
-                _gt_for_render(gt_rows, model),
+                gt_for_render(gt_rows, model),
                 frame_preds.loc[frame_preds["model"] == model],
                 mode="overlay",
                 scale=0.6,

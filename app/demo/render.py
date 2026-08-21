@@ -55,7 +55,9 @@ STYLE_LOW_CONF = BoxStyle(color=(255, 220, 0), width=2, dash=2)     # yellow dot
 # -- a colour no GT/prediction style uses, because a pseudo box is neither: it is a
 # baseline-detector proposal that a VLM's per-class counts corroborated (the VLM
 # never draws a box), drawn alongside GT so the two can be compared by eye.
-STYLE_VLM = BoxStyle(color=(0, 116, 217), width=2, dash=None)       # blue solid
+# Named STYLE_PSEUDO, not STYLE_VLM (consolidated review C2): the box and the score
+# on it are the DETECTOR's, and the old name put the VLM's name on both.
+STYLE_PSEUDO = BoxStyle(color=(0, 116, 217), width=2, dash=None)    # blue solid
 
 _PRED_STYLES: dict[str, BoxStyle] = {"tp": STYLE_TP, "fp": STYLE_FP, "low_conf": STYLE_LOW_CONF}
 _VALID_MODES = ("gt", "pred", "overlay")
@@ -174,7 +176,7 @@ def draw_overlay(
     *,
     mode: str,
     scale: float,
-    vlm_boxes: pd.DataFrame | None = None,
+    pseudo_boxes: pd.DataFrame | None = None,
 ) -> Image.Image:
     """Render GT and/or predictions onto a copy of ``image``.
 
@@ -187,13 +189,20 @@ def draw_overlay(
     ``mode``: "gt" | "pred" | "overlay", else raises ValueError. The input image is
     never mutated.
 
-    ``vlm_boxes`` (Phase 7) is a THIRD, independent layer: the weak-supervision
+    ``pseudo_boxes`` (Phase 7) is a THIRD, independent layer: the weak-supervision
     pseudo boxes for the frame (x_min..y_max, category_group, score --
     weak_labels.parquet's own schema), drawn last, in every mode. It is
     mode-independent on purpose: the frames that carry pseudo boxes are train-pool
     frames, which have GT but never predictions, so the page draws them in "gt"
     mode and still needs the blue layer. Left as ``None`` (the default) the render
     is byte-identical to the two-layer one this signature had before.
+
+    A pseudo box is the BASELINE DETECTOR's proposal (conf >= 0.5), kept because a
+    VLM's per-class counts for the frame agreed with the detector's within a
+    tolerance -- the VLM emits counts and never draws a box. The layer, its style
+    and its label all say "pseudo" rather than "VLM" for that reason
+    (consolidated review C2: ``VLM 0.73`` attributed the detector's own confidence
+    to the VLM).
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"draw_overlay: unknown mode {mode!r} — expected one of {_VALID_MODES}")
@@ -228,18 +237,17 @@ def draw_overlay(
             label = f"{row.category_group} {row.conf:.2f}"
             _draw_label(draw, xyxy, label, style)
 
-    if vlm_boxes is not None:
-        for row in vlm_boxes.itertuples(index=False):
+    if pseudo_boxes is not None:
+        for row in pseudo_boxes.itertuples(index=False):
             xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
-            _validate_xyxy(xyxy, kind="VLM", category=str(row.category_group))
-            _draw_rect(draw, xyxy, STYLE_VLM)
+            _validate_xyxy(xyxy, kind="pseudo", category=str(row.category_group))
+            _draw_rect(draw, xyxy, STYLE_PSEUDO)
             # The score, not the category: the category is already on the GT box
             # underneath, and what a viewer needs to judge a pseudo box is how
-            # confident the proposal was. "VLM" names the LAYER -- the VLM-verified
-            # weak-supervision pipeline (spec §4d pins this label) -- while the
-            # number is the baseline detector's own confidence, which the page's
-            # legend caption spells out in words.
-            _draw_label(draw, xyxy, f"VLM {row.score:.2f}", STYLE_VLM)
+            # confident the proposal was. The number is the BASELINE DETECTOR's
+            # confidence, so the label says "pseudo" -- naming the layer for what
+            # the box is, not for the model that merely corroborated it.
+            _draw_label(draw, xyxy, f"pseudo {row.score:.2f}", STYLE_PSEUDO)
 
     return out
 
@@ -287,6 +295,9 @@ def bar_chart(
     title: str = "",
     sort: list[str] | None = None,
     zero_line: bool = True,
+    grouped: bool = False,
+    y_title: str | None = None,
+    label_angle: int | None = None,
 ) -> alt.Chart | alt.LayerChart:
     """A bar chart of ``y`` over the categorical ``x``, ready for
     ``st.altair_chart(chart, width="stretch")``.
@@ -305,19 +316,45 @@ def bar_chart(
     on that field (a stacked/grouped chart, e.g. the weak-sup loss decomposition),
     keeping its legend.
 
+    ``grouped`` (with ``color_field``) puts the categories SIDE BY SIDE within each
+    ``x`` instead of stacking them, via ``xOffset`` plus an explicit ``stack=None``.
+    Stacking claims the parts sum to the whole; two alternative allocations of the
+    same budget (the Active Learning page's graph_rate vs graph_rate_night quotas)
+    are not summable, and a stacked pair of them reads as a total that does not
+    exist (consolidated review, real-browser finding 1).
+
+    ``y_title`` overrides the axis title (default: the ``y`` column name with
+    underscores spaced) -- a melted long table's value column is called "value",
+    which names nothing. ``label_angle`` tilts the x labels; x labels are never
+    truncated (``labelLimit=0``), since a clipped arm name ("weak_graph_rate...")
+    is not an identifier.
+
     ``zero_line`` layers a rule at y = 0 -- delta charts carry negative values, and
     without the rule a regression reads as just a shorter bar. That layering is why
     the return type is a union: an ``alt.LayerChart`` is not an ``alt.Chart``, and
     ``st.altair_chart`` takes either.
     """
     data = frame.copy()
+    axis_kwargs: dict[str, Any] = {"labelLimit": 0}
+    if label_angle is not None:
+        axis_kwargs["labelAngle"] = label_angle
+    axis_title = y.replace("_", " ") if y_title is None else y_title
+    # stack=None only on the grouped path: passing it unconditionally would also
+    # unstack the loss decomposition, whose three components DO sum to the whole.
+    y_encoding = (
+        alt.Y(f"{y}:Q", title=axis_title, stack=None)
+        if grouped
+        else alt.Y(f"{y}:Q", title=axis_title)
+    )
     encode: dict[str, Any] = {
-        "x": alt.X(f"{x}:N", sort=sort, title=None),
-        "y": alt.Y(f"{y}:Q", title=y.replace("_", " ")),
+        "x": alt.X(f"{x}:N", sort=sort, title=None, axis=alt.Axis(**axis_kwargs)),
+        "y": y_encoding,
         "tooltip": [c for c in (x, y, color_field, "family") if c and c in data.columns],
     }
     if color_field is not None:
         encode["color"] = alt.Color(f"{color_field}:N", title=color_field.replace("_", " "))
+        if grouped:
+            encode["xOffset"] = alt.XOffset(f"{color_field}:N")
     else:
         data[_COLOR_COLUMN] = _bar_colors(data, x=x, highlight=highlight)
         # scale=None: the column already holds literal colours, so altair must pass

@@ -29,16 +29,18 @@ Three honesty rules this page is built around:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
-from filters import crowding_long, loss_long, weak_frame_summary
+from filters import crowding_long, gt_for_render, loss_long, visible_gt, weak_frame_summary
 from PIL import Image
 from render import bar_chart, draw_overlay, metric_cards, story_arrows
 
 from data import (
+    STALE_PACKAGE_NOTE as _STALE_PACKAGE_NOTE,
+)
+from data import (
     crop_path,
+    frame_image_path,
     load_al_results,
     load_frame_manifest,
     load_gt_boxes,
@@ -50,7 +52,9 @@ from data import (
     thumb_path,
 )
 
-_STALE_PACKAGE_NOTE = "needs demo_data >= 0.6 (the Phase-7 tables) — rerun `demo build`"
+# How many gallery thumbs render before the "show all" checkbox -- 47 accepted +
+# 31 rejected frames in one grid is a wall of images (consolidated review M8).
+_GALLERY_PAGE = 24
 
 # The exact claim the spec pins for a rejected frame (§4d): the comparison that
 # rejected it was against the DETECTOR's counts, which this package does not carry
@@ -75,12 +79,10 @@ _CROWDING_COLUMNS = frozenset({
 })
 
 _LEGEND = (
-    "Green = ground truth. Blue = a pseudo label kept by the VLM-verified pipeline "
-    "(`VLM 0.73`): a box the BASELINE DETECTOR proposed on a frame whose VLM counts "
-    "corroborated it — the VLM emits per-class counts, never boxes, so the score on "
-    "the label is the detector's confidence. There is no prediction layer: these are "
-    "train-pool frames, and the detector that proposed the boxes was never evaluated "
-    "on them."
+    "Green = ground truth. Blue = a pseudo-label box: a BASELINE-DETECTOR proposal "
+    "(conf ≥ 0.5) kept because the VLM's per-class counts agreed within ±1 — the VLM "
+    "emits counts, never boxes, so the number on the label is the detector's "
+    "confidence. Train-pool frames carry no model predictions."
 )
 
 
@@ -90,28 +92,6 @@ def _ordered_pairs(loss: pd.DataFrame) -> pd.DataFrame:
     if loss.empty:
         return loss
     return loss.sort_values("headline", ascending=False, kind="stable").reset_index(drop=True)
-
-
-def _frame_image_path(token: str) -> Path | None:
-    thumb = thumb_path(token)
-    if thumb.is_file():
-        return thumb
-    crop = crop_path(token)
-    return crop if crop.is_file() else None
-
-
-def _visible_gt(gt: pd.DataFrame, token: str) -> pd.DataFrame:
-    """One frame's GT rows, visibility-floor rows dropped, with a ``matched`` column
-    of NA.
-
-    NA, never a model's ``matched_<model>``: these are train-pool frames that no
-    model was ever evaluated on, and draw_overlay renders NA as plain GT rather than
-    as a miss. The comparison this page draws is GT vs the VLM, not GT vs a detector.
-    """
-    subset = gt.loc[gt["sample_data_token"] == token]
-    if "below_visibility_min" in subset.columns:
-        subset = subset.loc[~subset["below_visibility_min"].fillna(False)]
-    return subset.assign(matched=pd.Series(pd.NA, index=subset.index, dtype="boolean"))
 
 
 def _text(value: object) -> str:
@@ -176,17 +156,21 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
     for row in _ordered_pairs(loss).itertuples(index=False):
         # The headline attribution comes from the table's own `headline` column, not
         # from an arm name written into this file.
-        suffix = " (documented headline)" if bool(row.headline) else ""
+        # Short labels, and no backticks: st.metric renders its label in a narrow
+        # column and breaks mid-TOKEN, so "`graph_rate_night`" came out as
+        # "graph_ra te_night" (consolidated review, real-browser finding 4). The arm
+        # pair the night card follows moves to a caption below for the same reason.
+        suffix = " (headline)" if bool(row.headline) else ""
         cards.append((
-            f"Share of GT gain retained — `{row.base_arm}` pair{suffix}",
-            f"{float(row.retention):.1%}",
+            f"GT gain retained — {row.base_arm}{suffix}", f"{float(row.retention):.1%}",
         ))
     for row in weaksup.itertuples(index=False):
         cards.append((
-            f"Verifier retention — `{row.arm}`", f"{float(row.verifier_retention):.0%}"
+            f"Verifier retention — {row.arm}", f"{float(row.verifier_retention):.0%}"
         ))
 
     pair = _night_pedestrian_pair(loss, arms)
+    night_pedestrian_caption = None
     if pair is None:
         cards.append(("Night pedestrian mAP50-95", "n/a"))
     else:
@@ -194,13 +178,19 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
         base_value = _map_value(arms, base_arm, "night_ped_map5095")
         weak_value = _map_value(arms, weak_arm, "night_ped_map5095")
         cards.append((
-            f"Night pedestrian mAP50-95 (`{base_arm}` → `{weak_arm}`)",
+            "Night pedestrian mAP50-95",
             "n/a"
             if base_value is None or weak_value is None
             else f"{base_value:.3f} → {weak_value:.3f}",
         ))
+        night_pedestrian_caption = (
+            f"Night pedestrian mAP50-95 follows the `{base_arm}` → `{weak_arm}` pair — "
+            "the weak arm with the worst night result in this package."
+        )
     metric_cards(cards)
 
+    if night_pedestrian_caption is not None:
+        st.caption(night_pedestrian_caption)
     st.caption(
         "Two different quantities called retention: the VERIFIER's retention is the "
         "share of candidate frames it accepted; the pair's retention is the share of "
@@ -223,6 +213,7 @@ def _render_decomposition(loss: pd.DataFrame) -> None:
         bar_chart(
             long, x="base_arm", y="value", color_field="component", zero_line=False,
             sort=[str(arm) for arm in ordered["base_arm"]],
+            y_title="mAP50-95 gain over baseline",
             title="Overall mAP50-95 gain over baseline, split by what weak supervision "
             "kept and how it lost the rest",
         ),
@@ -294,8 +285,9 @@ def _render_frame(
     token: str, frames: pd.DataFrame, *, gt: pd.DataFrame, labels: pd.DataFrame,
     counts: pd.DataFrame,
 ) -> None:
-    """(d) One curated weak frame: its crop with GT + pseudo boxes, its verdict badge,
-    and the VLM-vs-GT counts the verifier actually compared."""
+    """(d) One curated weak frame: its crop with GT + pseudo boxes (the DETECTOR's
+    proposals the VLM's counts corroborated), its verdict badge, and the VLM-vs-GT
+    counts the verifier actually compared."""
     row = frames.loc[frames["sample_data_token"] == token].iloc[0]
     vlm_rows = labels.loc[labels["sample_data_token"] == token]
     counts_rows = counts.loc[counts["sample_data_token"] == token]
@@ -308,8 +300,8 @@ def _render_frame(
     if image_path.is_file():
         st.image(
             draw_overlay(
-                Image.open(image_path), _visible_gt(gt, token), pd.DataFrame(),
-                mode="gt", scale=scale, vlm_boxes=vlm_rows,
+                Image.open(image_path), gt_for_render(visible_gt(gt, token)), pd.DataFrame(),
+                mode="gt", scale=scale, pseudo_boxes=vlm_rows,
             )
         )
         st.caption(_LEGEND)
@@ -333,10 +325,12 @@ def _render_frame(
             "n/a rather than zero"
         )
     else:
-        confidence = counts_row["label_confidence"]
+        # label_confidence is a STRING enum the VLM emits ("high"/"low"), not a
+        # number: formatting it as a float raised ValueError on every frame the VLM
+        # actually labelled (consolidated review C1).
         st.caption(
             f"VLM parse: {_text(counts_row['parse_status'])} · label confidence "
-            f"{'n/a' if pd.isna(confidence) else format(float(confidence), '.2f')} · "
+            f"{_text(counts_row['label_confidence'])} · "
             f"it called the scene {_text(counts_row['vlm_time_of_day'])} / "
             f"{_text(counts_row['vlm_weather'])}."
         )
@@ -351,15 +345,32 @@ def _render_gallery(
         st.info(f"no {verdict} weak-supervision frames are curated into this package")
         return
 
-    st.caption(
-        f"{len(frames)} curated frames the verifier {verdict}. These are TRAIN-POOL "
-        "frames: they were never test images, and no model ever ran on them."
-    )
+    shown = frames
+    if len(frames) > _GALLERY_PAGE:
+        if st.checkbox(f"Show all {len(frames)} frames", key=f"ws_{verdict}_show_all"):
+            st.caption(
+                f"All {len(frames)} curated frames the verifier {verdict}. These are "
+                "TRAIN-POOL frames: they were never test images, and no model ever ran "
+                "on them."
+            )
+        else:
+            shown = frames.head(_GALLERY_PAGE)
+            st.caption(
+                f"The first {_GALLERY_PAGE} of {len(frames)} curated frames the "
+                f"verifier {verdict}, in package order. These are TRAIN-POOL frames: "
+                "they were never test images, and no model ever ran on them."
+            )
+    else:
+        st.caption(
+            f"{len(frames)} curated frames the verifier {verdict}. These are TRAIN-POOL "
+            "frames: they were never test images, and no model ever ran on them."
+        )
+
     columns = st.columns(4)
-    for position, row in enumerate(frames.itertuples()):
+    for position, row in enumerate(shown.itertuples()):
         token = str(row.sample_data_token)
         with columns[position % 4]:
-            image_path = _frame_image_path(token)
+            image_path = frame_image_path(token)
             if image_path is not None:
                 st.image(str(image_path))
             st.caption(f"{row.scene_name} · {'night' if row.is_night else 'day'}")

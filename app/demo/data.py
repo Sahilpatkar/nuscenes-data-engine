@@ -16,6 +16,12 @@ _DEFAULT_DEMO_DATA = Path(__file__).resolve().parents[2] / "demo_data"
 DEMO_DATA = Path(os.environ.get("DEMO_DATA_DIR", str(_DEFAULT_DEMO_DATA)))
 
 
+# The one note every Phase-7 section shows when the committed package predates the
+# tables it reads (consolidated review M6 -- it was a private constant duplicated
+# verbatim in both Phase-7 views).
+STALE_PACKAGE_NOTE = "needs demo_data >= 0.6 (the Phase-7 tables) — rerun `demo build`"
+
+
 def package_missing() -> bool:
     return not (DEMO_DATA / "manifest.json").is_file()
 
@@ -255,7 +261,8 @@ def load_weak_labels() -> pd.DataFrame:
     """The curated accepted frames' verified pseudo boxes (native 1600x900 coords).
 
     An accepted frame with no rows here is the mutual-zero case (the verifier
-    accepted zero VLM boxes against zero detector boxes), not missing data --
+    accepted zero VLM-counted objects against zero detector boxes -- the VLM emits
+    per-class counts, never boxes), not missing data --
     ``filters.weak_frame_summary`` is what turns that absence into a label.
     """
     path = DEMO_DATA / "weak_labels.parquet"
@@ -266,7 +273,14 @@ def load_weak_labels() -> pd.DataFrame:
 
 @st.cache_data
 def load_vlm_counts() -> pd.DataFrame:
-    """One row per curated weak frame: the VLM's per-class counts next to GT's."""
+    """One row per curated frame carrying a weak verdict: the VLM's per-class counts
+    next to GT's.
+
+    Scoped to ``frame_manifest.weak_verdict`` (78 frames in the shipped package),
+    which is exactly what the page's accepted/rejected tabs render -- consolidated
+    review I1; it used to be scoped to the two curation buckets (40), leaving 38
+    rendered frames without a row.
+    """
     path = DEMO_DATA / "vlm_counts.parquet"
     if not path.is_file():
         return pd.DataFrame(columns=_EMPTY_VLM_COUNTS_COLUMNS)
@@ -279,6 +293,21 @@ def hero_path() -> Path:
 
 def crop_path(token: str) -> Path:
     return DEMO_DATA / "sample_frames" / "crops" / f"{token}.jpg"
+
+
+def frame_image_path(token: str) -> Path | None:
+    """The best available gallery image for a token -- thumb first (galleries are
+    grids of small images), crop as the fallback, ``None`` when the package carries
+    neither.
+
+    Shared by the Active Learning and Weak Supervision galleries (consolidated
+    review M6 -- it was duplicated verbatim in both views).
+    """
+    thumb = thumb_path(token)
+    if thumb.is_file():
+        return thumb
+    crop = crop_path(token)
+    return crop if crop.is_file() else None
 
 
 def thumb_path(token: str) -> Path:

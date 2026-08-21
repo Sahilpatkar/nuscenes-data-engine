@@ -774,6 +774,74 @@ def test_selection_factors_from_explain_row() -> None:
     ]
 
 
+def test_selection_factors_zero_mass_community_names_the_floor() -> None:
+    """A community with no routed failure mass still mines one frame -- that quota
+    came from select_by_mass's per-community FLOOR, not from mass. Printed as a
+    bare "1 frame" under "Community failure mass: 0.00 (rank 81 of 97)" it reads as
+    a quota the mass bought (consolidated review I3: 6 of the 78 gallery frames sit
+    in zero-mass communities).
+    """
+    row = {
+        **_explain_row(),
+        "community_mass": 0.0,
+        "community_mass_rank": 81,
+        "community_quota": 1,
+        "pick_pass": "main",
+    }
+    factors = dict((label, value) for label, value, _flag in selection_factors(row, n_communities=97))
+
+    assert factors["Community failure mass"] == "0.00 (rank 81 of 97)"
+    assert factors["Community quota"] == (
+        "1 frame (per-community floor — this community drew no routed failure mass)"
+    )
+    # a community that DID draw mass still just states its quota
+    assert dict(
+        (label, value) for label, value, _flag in selection_factors(
+            {**row, "community_mass": 12.5}, n_communities=97
+        )
+    )["Community quota"] == "1 frame"
+
+
+def test_ordinal_suffixes_including_the_teens() -> None:
+    """1st/2nd/3rd/4th, the 11-13 exception, and the same exception a century up."""
+    from filters import _ordinal
+
+    assert [_ordinal(n) for n in (1, 2, 3, 4)] == ["1st", "2nd", "3rd", "4th"]
+    assert [_ordinal(n) for n in (11, 12, 13)] == ["11th", "12th", "13th"]
+    assert [_ordinal(n) for n in (21, 101, 111)] == ["21st", "101st", "111th"]
+
+
+def test_visible_gt_and_gt_for_render_are_shared_by_both_phase_7_pages() -> None:
+    """One frame's GT rows, visibility-floor rows dropped, and the ``matched``
+    column draw_overlay reads -- shared helpers now, not a copy per page
+    (consolidated review M6).
+
+    ``model=None`` (the Weak Supervision page: train-pool frames nothing evaluated)
+    yields an all-NA ``matched``, which draw_overlay renders as plain GT rather than
+    as misses.
+    """
+    from filters import gt_for_render, visible_gt
+
+    gt = pd.DataFrame({
+        "sample_data_token": ["v0", "v0", "v1"],
+        "annotation_token": ["a1", "a2", "a3"],
+        "below_visibility_min": [False, True, False],
+        "matched_baseline": pd.array([True, False, True], dtype="boolean"),
+    })
+
+    rows = visible_gt(gt, "v0")
+    assert list(rows["annotation_token"]) == ["a1"]        # a2 is under the floor
+    # an older package without the column keeps every row rather than raising
+    assert len(visible_gt(gt.drop(columns=["below_visibility_min"]), "v0")) == 2
+
+    assert list(gt_for_render(rows, "baseline")["matched"]) == [True]
+    unevaluated = gt_for_render(rows)
+    assert unevaluated["matched"].dtype == "boolean"
+    assert unevaluated["matched"].isna().all()
+    # a model this package has no column for is "not evaluated", not "missed"
+    assert gt_for_render(rows, "champion")["matched"].isna().all()
+
+
 def test_selection_factors_main_pass_day_frame_with_routed_mass() -> None:
     """The other side of every branch: a day frame taken by the main pass, with
     failure mass actually routed to it (the sparse case -- 251 of the 1500 selected
@@ -848,7 +916,9 @@ def _vlm_rows(n: int) -> pd.DataFrame:
 def _counts_row() -> dict[str, object]:
     """One vlm_counts.parquet row (exporters.export_vlm_counts' own columns)."""
     return {
-        "sample_data_token": "wA", "parse_status": "ok", "label_confidence": 0.8,
+        # label_confidence is the VLM's own STRING enum ("high"/"low"), never a
+        # float (consolidated review C1).
+        "sample_data_token": "wA", "parse_status": "ok", "label_confidence": "high",
         "vlm_time_of_day": "night", "vlm_weather": "clear",
         "vlm_car": 2.0, "vlm_truck": 0.0, "vlm_bus": 0.0,
         "vlm_pedestrian": 1.0, "vlm_bicycle": 0.0,
