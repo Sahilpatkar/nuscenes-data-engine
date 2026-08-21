@@ -42,6 +42,11 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # parquet (always) and al_exemplars.json (validated, curation-gated) join the
 # package; frame_manifest.parquet gains weak_verdict/al_selected_by when curation
 # is included.
+# 0.6 (Phase 7, Task 2, same version): weak_supervision_results.parquet gains
+# n_rejected/tolerance/conf/n_unparsed/gt_boxes_per_candidate_frame/gt_boxes_per_
+# rejected_frame; weak_loss_decomposition.parquet and weak_verifier_by_class.
+# parquet join the package unconditionally; weak_labels.parquet and vlm_counts.
+# parquet join it when curation is included.
 _PACKAGE_VERSION = "0.6"
 
 # Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
@@ -603,7 +608,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
         },
     )
     al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir, processed_dir=processed)
-    weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir)
+    weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir, processed_dir=processed)
     curation_status = _include_curation(config, out_dir)
 
     # Phase 7 (Task 1): weak_verdict/al_selected_by are derived from the local AL
@@ -642,6 +647,54 @@ def run_build(config_path: Path) -> dict[str, Any]:
         config=config, manifest=manifest_df, predictions=predictions_df, out_dir=out_dir,
         curation_present=(curation_status == "included"),
     )
+
+    # Phase 7 (Task 2): the loss decomposition and by-class verifier tables are
+    # curation-INDEPENDENT (pure results.json / *_pseudo_summary.json reads, same
+    # as export_weaksup above) -- they run unconditionally. weak_labels/vlm_counts
+    # need a real curated frame_manifest (their token lists come straight off it)
+    # and are simply not written when curation is absent, same rationale as every
+    # other curated-frames-dependent step above.
+    weak_loss_df = exporters.export_weak_loss_decomposition(al_dir=al_dir, out_dir=out_dir)
+    exporters.export_weak_verifier_by_class(al_dir=al_dir, out_dir=out_dir)
+
+    # weak_loss_decomposition's retention is computed independently of (but from
+    # the same results.json numbers as) export_overview's own by_base_arm ratio --
+    # the two must never be allowed to silently drift apart. A base arm overview
+    # excludes (non-positive gt_gain) has nothing to check against and is skipped,
+    # not treated as a mismatch.
+    weak_retention_by_arm = metrics["results"]["weak_retention"]["by_base_arm"]
+    for _, row in weak_loss_df.iterrows():
+        base_arm = row["base_arm"]
+        overview_retention = weak_retention_by_arm.get(base_arm)
+        if overview_retention is not None and abs(row["retention"] - overview_retention) > 1e-9:
+            raise ValueError(
+                "demo build: weak_loss_decomposition retention for base arm "
+                f"{base_arm!r} ({row['retention']!r}) != overview_metrics.json's "
+                f"results.weak_retention.by_base_arm[{base_arm!r}] "
+                f"({overview_retention!r}) — the two recipes have drifted"
+            )
+
+    n_weak_labels = 0
+    n_vlm_counts = 0
+    if curation_status == "included":
+        weak_arm = config["curation"]["weak_arm"]
+        curated_tokens = list(manifest_df["sample_data_token"])
+        weak_labels_df = exporters.export_weak_labels(
+            al_dir=al_dir, arm=weak_arm, tokens=curated_tokens, out_dir=out_dir,
+        )
+        n_weak_labels = len(weak_labels_df)
+
+        vlm_tokens = [
+            token
+            for token, buckets in zip(
+                manifest_df["sample_data_token"], manifest_df["curation_buckets"], strict=True
+            )
+            if "weak_accepted" in buckets or "weak_rejected" in buckets
+        ]
+        vlm_counts_df = exporters.export_vlm_counts(
+            al_dir=al_dir, processed_dir=processed, tokens=vlm_tokens, out_dir=out_dir,
+        )
+        n_vlm_counts = len(vlm_counts_df)
 
     # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group
     # (configs/demo.yaml `hero.token`), not an mlruns mosaic — see the dated
@@ -762,6 +815,14 @@ def run_build(config_path: Path) -> dict[str, Any]:
         inputs[str(path)] = _sha256(path)
     for path in sorted(al_dir.glob("*_pseudo_summary.json")):
         inputs[str(path)] = _sha256(path)
+    # Phase 7 (Task 2): export_weaksup's own per-arm inputs -- every arm with a
+    # *_pseudo_summary.json (weak_df's own "arm" column) needs its candidate/
+    # accepted token-list parquets for the rejected-side recipe. Unconditional,
+    # like export_weaksup itself (not gated on curation_status).
+    for arm in weak_df["arm"]:
+        for name in (f"{arm}.parquet", f"{arm}_accepted.parquet"):
+            path = al_dir / name
+            inputs[str(path)] = _sha256(path)
     # Phase 7 (Task 1): al_communities.parquet's own inputs -- always hashed, since
     # the export itself is unconditional (see the comment above its call site).
     inputs[str(al_config_path)] = _sha256(al_config_path)
@@ -782,6 +843,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
         for name in (f"{weak_arm}.parquet", f"{weak_arm}_accepted.parquet", f"{al_arm}.parquet"):
             path = al_dir / name
             inputs[str(path)] = _sha256(path)
+        # Phase 7 (Task 2): weak_labels/vlm_counts' own inputs -- only read (and
+        # only hashed) once curation is included, same gating as the export calls
+        # above.
+        pseudo_labels_path = al_dir / f"{weak_arm}_pseudo_labels.parquet"
+        inputs[str(pseudo_labels_path)] = _sha256(pseudo_labels_path)
+        vlm_labels_path = al_dir / "autolabel_weak" / "labels.parquet"
+        inputs[str(vlm_labels_path)] = _sha256(vlm_labels_path)
     # Events need no staging input of their own — build_events reads only the
     # already-hashed processed tables (+ the same three curation-staging parquets
     # hashed just above, when present). Semsearch's own staged parquet is a
@@ -808,6 +876,8 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "n_weak_arms": len(weak_df),
             "n_communities": len(communities_df),
             "n_exemplars": len(exemplar_tokens),
+            "n_weak_labels": n_weak_labels,
+            "n_vlm_counts": n_vlm_counts,
             "curation": curation_status,
             "events": events_result["events"],
             "flagship_events": events_result["flagship_events"],

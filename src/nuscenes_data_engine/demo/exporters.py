@@ -413,39 +413,301 @@ def export_al_exemplars(
     return tokens
 
 
-def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
+def export_weaksup(*, al_dir: Path, out_dir: Path, processed_dir: Path) -> pd.DataFrame:
     """Collect every ``*_pseudo_summary.json`` into one weak-supervision table.
 
     Arms without a summary are absent rather than an error — the demo shows what
     was actually run.
 
-    Phase-7 note: the documented 50%/32% loss decomposition (docs/ACTIVE_LEARNING.md)
-    needs a 3-way results.json comparison per base arm (e.g. random vs weak_random_gt
-    vs weak_random) that these per-arm summaries alone don't carry. The rejected-frame
-    GT-box mean (documented 7.61) is also not in the summaries — recompute it from the
-    arm's mined-token list minus its accepted tokens, joined to samples.parquet's
-    n_boxes per frame.
+    Rejected-side crowding recipe (Phase 7, Task 2 — verified to reproduce
+    docs/ACTIVE_LEARNING.md's documented 3.87/7.61 (``random``) and 3.41/6.68
+    (``graph_rate_night``) exactly): read ``processed_dir/annotations.parquet``'s
+    ``[sample_data_token, category_group]``, keep only rows with a non-null
+    ``category_group`` (the five detector classes — everything else, e.g. traffic
+    cones/barriers/animals, is dropped), count per token, then reindex over the
+    arm's FULL candidate token list (``<arm>.parquet`` — a token with no rows in
+    ``annotations.parquet`` counts as 0 GT boxes, not NA) and split by membership
+    in ``<arm>_accepted.parquet``.
+
+    A prior version of this docstring recommended ``samples.parquet``'s ``n_boxes``
+    column instead — that counts EVERY annotation class (not just the five
+    detector ones) and gives 9.94, not the documented 7.61. That recipe was wrong,
+    which is why the accepted-side mean computed here is asserted (abs tol 1e-6)
+    against the summary's own ``mean_gt_boxes_per_accepted_frame`` on every call —
+    the pseudo-labelling run's own number is the oracle; if this recipe ever stops
+    reproducing it, that is a build-time ``ValueError``, not a silently wrong
+    published figure.
     """
+    summary_paths = sorted(al_dir.glob("*_pseudo_summary.json"))
+    if not summary_paths:
+        raise ValueError(f"no *_pseudo_summary.json found under {al_dir}")
+
+    annotations = pd.read_parquet(
+        _require(processed_dir / "annotations.parquet"),
+        columns=["sample_data_token", "category_group"],
+    )
+    detector_counts = (
+        annotations.loc[annotations["category_group"].notna()]
+        .groupby("sample_data_token")
+        .size()
+    )
+
     rows = []
-    for path in sorted(al_dir.glob("*_pseudo_summary.json")):
+    for path in summary_paths:
         summary = json.loads(path.read_text())
+        arm = summary["arm"]
+        candidates = pd.read_parquet(_require(al_dir / f"{arm}.parquet"))["sample_data_token"]
+        accepted = set(
+            pd.read_parquet(_require(al_dir / f"{arm}_accepted.parquet"))["sample_data_token"]
+        )
+        per_token = detector_counts.reindex(candidates.tolist(), fill_value=0)
+        is_accepted = candidates.isin(accepted).to_numpy()
+
+        accepted_mean = float(per_token[is_accepted].mean())
+        rejected_mean = float(per_token[~is_accepted].mean())
+        candidate_mean = float(per_token.mean())
+
+        summary_accepted_mean = summary["mean_gt_boxes_per_accepted_frame"]
+        if abs(accepted_mean - summary_accepted_mean) > 1e-6:
+            raise ValueError(
+                f"export_weaksup: recomputed gt_boxes_per_accepted_frame for arm "
+                f"{arm!r} ({accepted_mean!r}) disagrees with the summary's "
+                f"mean_gt_boxes_per_accepted_frame ({summary_accepted_mean!r}) — "
+                "the recipe and the pseudo-labelling run have drifted"
+            )
+
+        n_candidates = summary["n_candidates"]
+        n_accepted = summary["n_accepted"]
         rows.append(
             {
-                "arm": summary["arm"],
-                "n_candidates": summary["n_candidates"],
-                "n_accepted": summary["n_accepted"],
+                "arm": arm,
+                "n_candidates": n_candidates,
+                "n_accepted": n_accepted,
                 "verifier_retention": summary["retention"],
                 "n_pseudo_boxes": summary["n_boxes"],
                 "boxes_per_accepted_frame": summary["mean_boxes_per_accepted_frame"],
                 "gt_boxes_per_accepted_frame": summary["mean_gt_boxes_per_accepted_frame"],
+                "n_rejected": n_candidates - n_accepted,
+                "tolerance": summary["tolerance"],
+                "conf": summary["conf"],
+                "n_unparsed": summary["n_unparsed"],
+                "gt_boxes_per_candidate_frame": candidate_mean,
+                "gt_boxes_per_rejected_frame": rejected_mean,
             }
         )
-    if not rows:
-        raise ValueError(f"no *_pseudo_summary.json found under {al_dir}")
     df = pd.DataFrame(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "weak_supervision_results.parquet", index=False)
     return df
+
+
+def export_weak_loss_decomposition(
+    *, al_dir: Path, out_dir: Path, headline_base_arm: str = "random"
+) -> pd.DataFrame:
+    """Split each base arm's GT-training gain into "retained by weak supervision"
+    vs "lost to dropped frames" vs "lost to label noise", from ``results.json``
+    alone — one row per base arm ``b`` with BOTH ``weak_<b>`` and ``weak_<b>_gt``
+    present (a base arm missing its GT twin, e.g. only ever pseudo-labelled, is
+    skipped rather than guessed at).
+
+    All four ``overall.mAP50-95`` numbers (``baseline``, ``b``, ``weak_<b>_gt``,
+    ``weak_<b>``) come from the same results.json this build already trusts.
+    ``gt_gain``/``weak_gt_gain``/``weak_gain``/``dropped_frame_cost``/
+    ``dropped_frame_share``/``label_cost``/``label_share`` are kept at full
+    float precision (they are already small differences of two ~0.2 numbers, and
+    rounding them independently would let ``dropped_frame_share + label_share +
+    (weak_gain / gt_gain)`` drift off of exactly 1.0). ``retention`` is the one
+    exception — it is rounded to 4 dp so ``run_build`` can assert it against
+    ``overview_metrics.json``'s own (identically-rounded) ``by_base_arm[b]``
+    exactly, which means the STORED ``retention`` column is not itself expected to
+    satisfy the shares-sum-to-1 identity to float precision — only the raw
+    ``weak_gain / gt_gain`` ratio is. ``headline`` is True only for
+    ``headline_base_arm`` (default ``"random"``, the same documented pair
+    ``export_overview`` treats as the Overview headline).
+    """
+    results = json.loads(_require(al_dir / "results.json").read_text())
+    baseline = results["baseline"]["overall"]["mAP50-95"]
+    columns = [
+        "base_arm", "gt_gain", "weak_gt_gain", "weak_gain", "retention",
+        "dropped_frame_cost", "dropped_frame_share", "label_cost", "label_share",
+        "headline",
+    ]
+    rows = []
+    for arm, entry in results.items():
+        if arm == "baseline" or arm.startswith("weak_"):
+            continue
+        weak_key = f"weak_{arm}"
+        weak_gt_key = f"weak_{arm}_gt"
+        if weak_key not in results or weak_gt_key not in results:
+            continue
+        gt_gain = entry["overall"]["mAP50-95"] - baseline
+        weak_gt_gain = results[weak_gt_key]["overall"]["mAP50-95"] - baseline
+        weak_gain = results[weak_key]["overall"]["mAP50-95"] - baseline
+        rows.append(
+            {
+                "base_arm": arm,
+                "gt_gain": gt_gain,
+                "weak_gt_gain": weak_gt_gain,
+                "weak_gain": weak_gain,
+                "retention": round(weak_gain / gt_gain, 4),
+                "dropped_frame_cost": gt_gain - weak_gt_gain,
+                "dropped_frame_share": (gt_gain - weak_gt_gain) / gt_gain,
+                "label_cost": weak_gt_gain - weak_gain,
+                "label_share": (weak_gt_gain - weak_gain) / gt_gain,
+                "headline": arm == headline_base_arm,
+            }
+        )
+    df = pd.DataFrame(sorted(rows, key=lambda row: row["base_arm"]), columns=columns)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / "weak_loss_decomposition.parquet", index=False)
+    return df
+
+
+def export_weak_verifier_by_class(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
+    """Long (arm, category_group) table of the verifier's per-class disagreement
+    counts, from every ``*_pseudo_summary.json``'s ``rejected_by_class``/
+    ``accepted_mutual_zero_by_class`` dicts (one row per class in the UNION of the
+    two dicts — a class present in only one dict gets 0 for the other count, not a
+    dropped row). ``mutual_zero_share`` is ``n_accepted_mutual_zero /
+    n_accepted`` (the summary's own accepted-frame count for that arm).
+    """
+    columns = [
+        "arm", "category_group", "n_rejected_disagreements",
+        "n_accepted_mutual_zero", "mutual_zero_share",
+    ]
+    rows = []
+    for path in sorted(al_dir.glob("*_pseudo_summary.json")):
+        summary = json.loads(path.read_text())
+        arm = summary["arm"]
+        rejected_by_class = summary.get("rejected_by_class") or {}
+        mutual_zero_by_class = summary.get("accepted_mutual_zero_by_class") or {}
+        n_accepted = summary["n_accepted"]
+        for category in sorted(set(rejected_by_class) | set(mutual_zero_by_class)):
+            n_mutual_zero = mutual_zero_by_class.get(category, 0)
+            rows.append(
+                {
+                    "arm": arm,
+                    "category_group": category,
+                    "n_rejected_disagreements": rejected_by_class.get(category, 0),
+                    "n_accepted_mutual_zero": n_mutual_zero,
+                    "mutual_zero_share": (
+                        n_mutual_zero / n_accepted if n_accepted else float("nan")
+                    ),
+                }
+            )
+    df = pd.DataFrame(sorted(rows, key=lambda row: (row["arm"], row["category_group"])),
+                       columns=columns)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / "weak_verifier_by_class.parquet", index=False)
+    return df
+
+
+_WEAK_LABELS_COLUMNS = (
+    "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+)
+
+
+def export_weak_labels(
+    *, al_dir: Path, arm: str, tokens: list[str], out_dir: Path
+) -> pd.DataFrame:
+    """The weak arm's verified pseudo boxes for curated ``tokens`` only, native
+    (1600x900) coordinates untouched — ``draw_overlay``-ready. Accepted frames with
+    no rows here are the "mutual zero" case (the verifier accepted zero VLM boxes
+    against zero detector boxes) and are simply absent, same as any other arm
+    without a matching row.
+    """
+    labels = pd.read_parquet(_require(al_dir / f"{arm}_pseudo_labels.parquet"))
+    token_set = set(tokens)
+    filtered = labels.loc[labels["sample_data_token"].isin(token_set), list(_WEAK_LABELS_COLUMNS)]
+    filtered = filtered.sort_values(
+        ["sample_data_token", "category_group", "x_min", "y_min"]
+    ).reset_index(drop=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filtered.to_parquet(out_dir / "weak_labels.parquet", index=False)
+    return filtered
+
+
+# category_group -> its VLM count column in autolabel_weak/labels.parquet.
+_VLM_CLASS_COLUMNS = {
+    "car": "cars", "truck": "trucks", "bus": "buses",
+    "pedestrian": "pedestrians", "bicycle": "bicycles",
+}
+
+_VLM_COUNTS_COLUMNS = (
+    "sample_data_token", "parse_status", "label_confidence", "vlm_time_of_day", "vlm_weather",
+    "vlm_car", "vlm_truck", "vlm_bus", "vlm_pedestrian", "vlm_bicycle",
+    "gt_car", "gt_truck", "gt_bus", "gt_pedestrian", "gt_bicycle",
+)
+
+
+def export_vlm_counts(
+    *, al_dir: Path, processed_dir: Path, tokens: list[str], out_dir: Path
+) -> pd.DataFrame:
+    """One row per curated ``weak_accepted``/``weak_rejected`` token: the VLM's
+    raw counts/parse metadata (``autolabel_weak/labels.parquet``) alongside the
+    GT detector-class counts (``annotations.parquet``) for the same token, so the
+    page can put them side by side.
+
+    Every token in ``tokens`` gets a row even with no VLM label at all (``vlm_*``/
+    ``parse_status`` NA) — but GT counts always fill 0 rather than NA, since "zero
+    boxes of this class" is a real, known fact from ``annotations.parquet``, not a
+    missing one. When ``labels.parquet`` carries more than one row for a token,
+    the first ``parse_status == "ok"`` row (in file order) wins; if none of a
+    token's rows parsed ok, the first row (in file order) is kept instead —
+    uniqueness is asserted afterwards.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not tokens:
+        empty = pd.DataFrame(columns=list(_VLM_COUNTS_COLUMNS))
+        empty.to_parquet(out_dir / "vlm_counts.parquet", index=False)
+        return empty
+
+    token_index = pd.Index(sorted(set(tokens)), name="sample_data_token")
+
+    labels = pd.read_parquet(_require(al_dir / "autolabel_weak" / "labels.parquet"))
+    labels = labels.loc[labels["sample_data_token"].isin(set(tokens))].copy()
+    # Stable sort by (token, "is this row NOT ok") -- ties (same token, same
+    # ok-ness) keep their original file-order relative position, so the first row
+    # after sorting is exactly "first ok row in file order, else first row".
+    labels["_not_ok"] = (labels["parse_status"] != "ok").astype(int)
+    labels = labels.sort_values(["sample_data_token", "_not_ok"], kind="stable")
+    deduped = (
+        labels.drop_duplicates(subset="sample_data_token", keep="first")
+        .drop(columns="_not_ok")
+        .set_index("sample_data_token")
+    )
+    if deduped.index.duplicated().any():
+        raise ValueError("export_vlm_counts: duplicate sample_data_token after dedup")
+
+    annotations = pd.read_parquet(
+        _require(processed_dir / "annotations.parquet"),
+        columns=["sample_data_token", "category_group"],
+    )
+    annotations = annotations.loc[
+        annotations["sample_data_token"].isin(set(tokens))
+        & annotations["category_group"].isin(_VLM_CLASS_COLUMNS)
+    ]
+    gt_pivot = (
+        annotations.groupby(["sample_data_token", "category_group"])
+        .size()
+        .unstack("category_group")
+        .reindex(index=token_index, columns=list(_VLM_CLASS_COLUMNS), fill_value=0)
+        .fillna(0)
+        .astype("int64")
+    )
+
+    result = pd.DataFrame(index=token_index)
+    result["parse_status"] = deduped["parse_status"].reindex(token_index)
+    result["label_confidence"] = deduped["label_confidence"].reindex(token_index)
+    result["vlm_time_of_day"] = deduped["time_of_day"].reindex(token_index)
+    result["vlm_weather"] = deduped["weather"].reindex(token_index)
+    for category, count_col in _VLM_CLASS_COLUMNS.items():
+        result[f"vlm_{category}"] = deduped[count_col].reindex(token_index)
+        result[f"gt_{category}"] = gt_pivot[category]
+
+    result = result.reset_index()[list(_VLM_COUNTS_COLUMNS)]
+    result.to_parquet(out_dir / "vlm_counts.parquet", index=False)
+    return result
 
 
 def export_semsearch(

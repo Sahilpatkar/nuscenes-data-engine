@@ -43,7 +43,19 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
             "is_rain": [False, False, False],
         }
     ).to_parquet(processed / "samples.parquet")
-    pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
+    # Phase 7 (Task 2): sample_data_token/category_group -- export_weaksup's
+    # rejected-side recipe reads exactly these two columns. All 4 rows are s1's;
+    # 3 carry a detector category_group (pedestrian/car/pedestrian) and the 4th is
+    # None (a non-detector class, e.g. a traffic cone) -- ignored by the recipe, so
+    # s1's detector count is 3, matching _write_demo_config's random_pseudo_
+    # summary.json mean_gt_boxes_per_accepted_frame=3.0 below (accepted=["s1"]).
+    pd.DataFrame(
+        {
+            "sample_token": ["s1"] * 4,
+            "sample_data_token": ["s1"] * 4,
+            "category_group": ["pedestrian", "car", "pedestrian", None],
+        }
+    ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
             # annotation_token: Task 1 (Phase 3) needs a joinable token on every
@@ -174,6 +186,40 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
     pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(
         al / "graph_rate_night_accepted.parquet"
     )
+    # Phase 7 (Task 2): export_weaksup now reads <arm>.parquet/<arm>_accepted.
+    # parquet for EVERY *_pseudo_summary.json arm -- _write_demo_config below
+    # always writes a "random" summary, so every build_config-based test needs
+    # these two files. candidates = s1 (accepted) + s2 (rejected, no annotations
+    # rows at all -> 0 detector GT boxes by the reindex-fill-0 rule).
+    pd.DataFrame({"sample_data_token": ["s1", "s2"]}).to_parquet(al / "random.parquet")
+    pd.DataFrame({"sample_data_token": ["s1"]}).to_parquet(al / "random_accepted.parquet")
+    # Phase 7 (Task 2): weak_labels/vlm_counts' own inputs -- present for every
+    # curation-included build_config test (weak_arm == "graph_rate_night" in every
+    # such fixture), one row each so the two exports have something to filter.
+    pd.DataFrame(
+        {
+            "sample_data_token": ["v0"],
+            "category_group": ["car"],
+            "x_min": [100.0], "y_min": [100.0], "x_max": [200.0], "y_max": [200.0],
+            "score": [0.75],
+        }
+    ).to_parquet(al / "graph_rate_night_pseudo_labels.parquet")
+    (al / "autolabel_weak").mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["v0"],
+            "model": ["qwen2.5-vl"],
+            "parse_status": ["ok"],
+            "time_of_day": ["night"],
+            "weather": ["clear"],
+            "hazards": ["[]"],
+            "notable_conditions": ["[]"],
+            "label_confidence": [0.8],
+            "cars": [1.0], "trucks": [0.0], "buses": [0.0], "trailers": [0.0],
+            "construction_vehicles": [0.0], "motorcycles": [0.0], "bicycles": [0.0],
+            "pedestrians": [1.0], "traffic_cones": [0.0], "barriers": [0.0],
+        }
+    ).to_parquet(al / "autolabel_weak" / "labels.parquet")
     return {"processed": processed, "al": al, "al_config": al_config}
 
 
@@ -530,26 +576,336 @@ def test_export_weaksup_empty_dir_raises(tmp_path: Path) -> None:
     al = tmp_path / "active_learning"
     al.mkdir()
     with pytest.raises(ValueError, match=r"no \*_pseudo_summary\.json"):
-        export_weaksup(al_dir=al, out_dir=tmp_path / "demo_data")
+        export_weaksup(
+            al_dir=al, out_dir=tmp_path / "demo_data", processed_dir=tmp_path / "processed"
+        )
 
 
 def test_export_weaksup_reads_summaries(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
     from nuscenes_data_engine.demo.exporters import export_weaksup
 
     al = tiny_inputs["al"]
+    # mean_gt_boxes_per_accepted_frame=3.0 matches tiny_inputs' own fixture data
+    # (random.parquet=["s1","s2"], random_accepted.parquet=["s1"], s1 has 3
+    # detector-class annotations.parquet rows) -- export_weaksup pins the two
+    # together, so this can't be an arbitrary number any more (see
+    # test_weaksup_rejected_side_uses_detector_classes_only for the recipe itself).
     (al / "random_pseudo_summary.json").write_text(json.dumps({
         "arm": "random", "n_candidates": 1500, "n_accepted": 958, "retention": 0.639,
         "n_boxes": 1942, "mean_boxes_per_accepted_frame": 2.0,
-        "mean_gt_boxes_per_accepted_frame": 3.9,
+        "mean_gt_boxes_per_accepted_frame": 3.0,
+        "conf": 0.5, "tolerance": 1, "n_no_label": 10, "n_unparsed": 3,
+        "rejected_by_class": {}, "accepted_mutual_zero_by_class": {},
     }))
     out = tmp_path / "demo_data"
-    df = export_weaksup(al_dir=al, out_dir=out)
+    df = export_weaksup(al_dir=al, out_dir=out, processed_dir=tiny_inputs["processed"])
     assert (out / "weak_supervision_results.parquet").is_file()
     row = df.set_index("arm").loc["random"]
     assert row["n_accepted"] == 958
     assert row["verifier_retention"] == pytest.approx(0.639)
+    assert row["n_rejected"] == 1500 - 958
+    assert row["tolerance"] == 1
+    assert row["conf"] == pytest.approx(0.5)
+    assert row["n_unparsed"] == 3
     # arms without a summary file are simply absent, not an error
     assert "graph_rate_night" not in set(df["arm"])
+
+
+def _write_weaksup_rejected_side_fixture(tmp_path: Path) -> dict[str, Path]:
+    """5 candidate tokens (c1..c5) for arm "weakarm": c1/c2 accepted, c3/c4/c5
+    rejected. Detector-class GT boxes per token: c1=2, c2=4 (accepted mean=3.0,
+    matching the summary below), c3=1 (+1 non-detector row that must be ignored),
+    c4=3, c5=0 (no annotations.parquet rows at all -> reindex fill 0)."""
+    processed = tmp_path / "processed"
+    al = tmp_path / "active_learning"
+    processed.mkdir()
+    al.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": [
+                "c1", "c1",
+                "c2", "c2", "c2", "c2",
+                "c3", "c3",
+                "c4", "c4", "c4",
+            ],
+            "category_group": [
+                "car", "pedestrian",
+                "car", "car", "pedestrian", "bicycle",
+                "car", None,
+                "truck", "bus", "car",
+            ],
+        }
+    ).to_parquet(processed / "annotations.parquet")
+    pd.DataFrame({"sample_data_token": ["c1", "c2", "c3", "c4", "c5"]}).to_parquet(
+        al / "weakarm.parquet"
+    )
+    pd.DataFrame({"sample_data_token": ["c1", "c2"]}).to_parquet(al / "weakarm_accepted.parquet")
+    (al / "weakarm_pseudo_summary.json").write_text(json.dumps({
+        "arm": "weakarm", "n_candidates": 5, "n_accepted": 2, "retention": 0.4,
+        "n_boxes": 10, "mean_boxes_per_accepted_frame": 2.5,
+        "mean_gt_boxes_per_accepted_frame": 3.0,   # (2 + 4) / 2
+        "conf": 0.5, "tolerance": 1, "n_no_label": 0, "n_unparsed": 0,
+        "rejected_by_class": {}, "accepted_mutual_zero_by_class": {},
+    }))
+    return {"processed": processed, "al": al}
+
+
+def test_weaksup_rejected_side_uses_detector_classes_only(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_weaksup
+
+    fixture = _write_weaksup_rejected_side_fixture(tmp_path)
+    out = tmp_path / "demo_data"
+    df = export_weaksup(al_dir=fixture["al"], out_dir=out, processed_dir=fixture["processed"])
+    row = df.set_index("arm").loc["weakarm"]
+
+    assert row["n_rejected"] == 3   # n_candidates(5) - n_accepted(2)
+    # rejected = c3(1, non-detector ignored) + c4(3) + c5(0, missing token) -> 4/3
+    assert row["gt_boxes_per_rejected_frame"] == pytest.approx(4 / 3, abs=1e-9)
+    # candidate mean over all 5: c1=2, c2=4, c3=1, c4=3, c5=0 -> 10/5 = 2.0
+    assert row["gt_boxes_per_candidate_frame"] == pytest.approx(2.0, abs=1e-9)
+    # the accepted-side mean recomputed by the same recipe pins the summary's own
+    # mean_gt_boxes_per_accepted_frame (both are 3.0 here by construction).
+    assert row["gt_boxes_per_accepted_frame"] == pytest.approx(3.0, abs=1e-9)
+
+
+def test_weaksup_accepted_mean_mismatch_raises(tmp_path: Path) -> None:
+    """A summary whose mean_gt_boxes_per_accepted_frame disagrees with the
+    recomputed recipe is a drifted pseudo-labelling run, not a silently-wrong
+    published number."""
+    from nuscenes_data_engine.demo.exporters import export_weaksup
+
+    fixture = _write_weaksup_rejected_side_fixture(tmp_path)
+    summary_path = fixture["al"] / "weakarm_pseudo_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["mean_gt_boxes_per_accepted_frame"] = 9.99
+    summary_path.write_text(json.dumps(summary))
+
+    with pytest.raises(ValueError, match="drifted"):
+        export_weaksup(al_dir=fixture["al"], out_dir=tmp_path / "demo_data",
+                        processed_dir=fixture["processed"])
+
+
+def test_weak_loss_decomposition_reproduces_documented_shares(tmp_path: Path) -> None:
+    """docs/ACTIVE_LEARNING.md's documented random (49.7%/32.1%/18.2%) and
+    graph_rate_night (42.1%/18.5%/39.4%) loss splits, reproduced from a miniature
+    results.json carrying only the mAP50-95 deltas the plan documents. A third base
+    arm ("strat") has a weak_strat entry but no weak_strat_gt twin and must be
+    skipped rather than error."""
+    from nuscenes_data_engine.demo.exporters import export_weak_loss_decomposition
+
+    al = tmp_path / "active_learning"
+    al.mkdir()
+    base = 0.10
+    (al / "results.json").write_text(json.dumps({
+        "baseline": {"overall": {"mAP50-95": base}},
+        "random": {"overall": {"mAP50-95": base + 0.0340}},
+        "weak_random_gt": {"overall": {"mAP50-95": base + 0.0171}},
+        "weak_random": {"overall": {"mAP50-95": base + 0.0062}},
+        "graph_rate_night": {"overall": {"mAP50-95": base + 0.0254}},
+        "weak_graph_rate_night_gt": {"overall": {"mAP50-95": base + 0.0147}},
+        "weak_graph_rate_night": {"overall": {"mAP50-95": base + 0.0100}},
+        "strat": {"overall": {"mAP50-95": base + 0.02}},
+        "weak_strat": {"overall": {"mAP50-95": base + 0.01}},
+    }))
+
+    df = export_weak_loss_decomposition(al_dir=al, out_dir=tmp_path / "demo_data").set_index(
+        "base_arm"
+    )
+    assert list(df.index) == ["graph_rate_night", "random"]   # sorted; "strat" skipped
+
+    random_row = df.loc["random"]
+    assert random_row["gt_gain"] == pytest.approx(0.0340, abs=1e-9)
+    assert random_row["weak_gt_gain"] == pytest.approx(0.0171, abs=1e-9)
+    assert random_row["weak_gain"] == pytest.approx(0.0062, abs=1e-9)
+    assert random_row["dropped_frame_cost"] == pytest.approx(0.0169, abs=1e-9)
+    assert random_row["dropped_frame_share"] == pytest.approx(0.497, abs=1e-3)
+    assert random_row["label_cost"] == pytest.approx(0.0109, abs=1e-9)
+    assert random_row["label_share"] == pytest.approx(0.321, abs=1e-3)
+    assert random_row["retention"] == pytest.approx(0.1824, abs=1e-6)
+    assert bool(random_row["headline"]) is True
+    # shares + the raw (unrounded) ratio sum to exactly 1 -- the stored "retention"
+    # column is deliberately rounded to 4dp (to compare against overview's own
+    # rounded number) and is NOT expected to satisfy this to 1e-9 itself.
+    raw_retention = random_row["weak_gain"] / random_row["gt_gain"]
+    assert (
+        random_row["dropped_frame_share"] + random_row["label_share"] + raw_retention
+    ) == pytest.approx(1.0, abs=1e-9)
+
+    night_row = df.loc["graph_rate_night"]
+    assert night_row["dropped_frame_share"] == pytest.approx(0.421, abs=1e-3)
+    assert night_row["label_share"] == pytest.approx(0.185, abs=1e-3)
+    assert night_row["retention"] == pytest.approx(0.3937, abs=1e-6)
+    assert bool(night_row["headline"]) is False   # headline is random-only
+
+
+def test_weak_verifier_by_class_long_table(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_weak_verifier_by_class
+
+    al = tmp_path / "active_learning"
+    al.mkdir()
+    (al / "random_pseudo_summary.json").write_text(json.dumps({
+        "arm": "random", "n_candidates": 1500, "n_accepted": 1000, "retention": 0.67,
+        "n_boxes": 1, "mean_boxes_per_accepted_frame": 1.0,
+        "mean_gt_boxes_per_accepted_frame": 1.0, "conf": 0.5, "tolerance": 1,
+        "n_no_label": 0, "n_unparsed": 0,
+        # "truck" only appears in rejected_by_class -> its accepted-mutual-zero
+        # count must default to 0, not be dropped from the union.
+        "rejected_by_class": {"pedestrian": 5, "car": 3, "truck": 2},
+        "accepted_mutual_zero_by_class": {"pedestrian": 100, "car": 50},
+    }))
+    (al / "graph_rate_night_pseudo_summary.json").write_text(json.dumps({
+        "arm": "graph_rate_night", "n_candidates": 1500, "n_accepted": 1101,
+        "retention": 0.734, "n_boxes": 1, "mean_boxes_per_accepted_frame": 1.0,
+        "mean_gt_boxes_per_accepted_frame": 1.0, "conf": 0.5, "tolerance": 1,
+        "n_no_label": 0, "n_unparsed": 0,
+        "rejected_by_class": {"pedestrian": 10},
+        "accepted_mutual_zero_by_class": {"pedestrian": 870},
+    }))
+
+    df = export_weak_verifier_by_class(al_dir=al, out_dir=tmp_path / "demo_data")
+
+    assert list(df.columns) == [
+        "arm", "category_group", "n_rejected_disagreements", "n_accepted_mutual_zero",
+        "mutual_zero_share",
+    ]
+    # sorted by (arm, category_group)
+    assert list(zip(df["arm"], df["category_group"], strict=True)) == [
+        ("graph_rate_night", "pedestrian"),
+        ("random", "car"),
+        ("random", "pedestrian"),
+        ("random", "truck"),
+    ]
+    truck = df.set_index(["arm", "category_group"]).loc[("random", "truck")]
+    assert truck["n_rejected_disagreements"] == 2
+    assert truck["n_accepted_mutual_zero"] == 0
+    assert truck["mutual_zero_share"] == pytest.approx(0.0)
+
+    night_ped = df.set_index(["arm", "category_group"]).loc[("graph_rate_night", "pedestrian")]
+    assert night_ped["mutual_zero_share"] == pytest.approx(870 / 1101, abs=1e-9)
+
+
+def test_weak_labels_filtered_to_curated_tokens_native_coords(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_weak_labels
+
+    al = tmp_path / "active_learning"
+    al.mkdir()
+    pd.DataFrame(
+        {
+            "sample_data_token": ["t2", "t1", "t1", "t3"],
+            "category_group": ["car", "pedestrian", "car", "car"],
+            "x_min": [500.0, 10.0, 300.0, 1.0],
+            "y_min": [500.0, 20.0, 5.0, 1.0],
+            "x_max": [600.0, 40.0, 320.0, 2.0],
+            "y_max": [600.0, 60.0, 45.0, 2.0],
+            "score": [0.5, 0.9, 0.6, 0.99],
+        }
+    ).to_parquet(al / "weakarm_pseudo_labels.parquet")
+
+    out = tmp_path / "demo_data"
+    df = export_weak_labels(al_dir=al, arm="weakarm", tokens=["t1", "t2"], out_dir=out)
+
+    assert (out / "weak_labels.parquet").is_file()
+    assert list(df.columns) == [
+        "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+    ]
+    assert set(df["sample_data_token"]) == {"t1", "t2"}   # t3 dropped (not curated)
+    # sorted by (sample_data_token, category_group, x_min, y_min)
+    assert list(zip(df["sample_data_token"], df["category_group"], df["x_min"], strict=True)) == [
+        ("t1", "car", 300.0), ("t1", "pedestrian", 10.0), ("t2", "car", 500.0),
+    ]
+    # native (1600x900) coords untouched -- no scaling applied.
+    row = df.set_index(["sample_data_token", "category_group"]).loc[("t2", "car")]
+    assert row["x_min"] == 500.0 and row["y_max"] == 600.0
+
+
+def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
+    tmp_path: Path,
+) -> None:
+    from nuscenes_data_engine.demo.exporters import export_vlm_counts
+
+    al = tmp_path / "active_learning"
+    processed = tmp_path / "processed"
+    (al / "autolabel_weak").mkdir(parents=True)
+    processed.mkdir()
+
+    def _count_cols(n: int) -> dict[str, list[float | None]]:
+        names = [
+            "cars", "trucks", "buses", "trailers", "construction_vehicles",
+            "motorcycles", "bicycles", "pedestrians", "traffic_cones", "barriers",
+        ]
+        return {name: [None] * n for name in names}
+
+    rows: dict[str, Any] = {
+        "sample_data_token": ["wA", "wA", "wR", "wBothBad", "wBothBad"],
+        "model": ["qwen2.5-vl"] * 5,
+        # wA: first row truncated (must be skipped), second is "ok" -> kept.
+        # wR: single ok row.
+        # wBothBad: neither row is "ok" -> falls back to the first row in file order.
+        "parse_status": ["truncated", "ok", "ok", "truncated", "truncated"],
+        "time_of_day": [None, "night", "day", "dusk", "dusk2"],
+        "weather": [None, "clear", "rain", "fog", "fog2"],
+        "hazards": ["[]"] * 5,
+        "notable_conditions": ["[]"] * 5,
+        "label_confidence": [None, 0.9, 0.7, None, None],
+    }
+    for name, values in _count_cols(5).items():
+        rows[name] = values
+    rows["cars"] = [None, 1.0, 0.0, 5.0, 6.0]
+    rows["pedestrians"] = [None, 2.0, 0.0, 0.0, 0.0]
+    pd.DataFrame(rows).to_parquet(al / "autolabel_weak" / "labels.parquet")
+
+    pd.DataFrame({
+        "sample_data_token": ["wA", "wA", "wR", "wBothBad"],
+        "category_group": ["car", "pedestrian", "car", "bus"],
+    }).to_parquet(processed / "annotations.parquet")
+
+    out = tmp_path / "demo_data"
+    df = export_vlm_counts(
+        al_dir=al, processed_dir=processed, tokens=["wA", "wR", "wNoVlm", "wBothBad"],
+        out_dir=out,
+    ).set_index("sample_data_token")
+
+    assert (out / "vlm_counts.parquet").is_file()
+    assert list(df.reset_index().columns) == [
+        "sample_data_token", "parse_status", "label_confidence", "vlm_time_of_day",
+        "vlm_weather", "vlm_car", "vlm_truck", "vlm_bus", "vlm_pedestrian", "vlm_bicycle",
+        "gt_car", "gt_truck", "gt_bus", "gt_pedestrian", "gt_bicycle",
+    ]
+    # wA: the "ok" row wins over the earlier "truncated" duplicate.
+    assert df.loc["wA", "parse_status"] == "ok"
+    assert df.loc["wA", "vlm_time_of_day"] == "night"
+    assert df.loc["wA", "vlm_car"] == 1.0
+    assert df.loc["wA", "vlm_pedestrian"] == 2.0
+    assert df.loc["wA", "gt_car"] == 1
+    assert df.loc["wA", "gt_pedestrian"] == 1
+    assert df.loc["wA", "gt_truck"] == 0
+    # wR: a single ok row, straightforward.
+    assert df.loc["wR", "parse_status"] == "ok"
+    assert df.loc["wR", "gt_car"] == 1
+    # wBothBad: neither dup is "ok" -> falls back to the first row (cars=5.0, dusk).
+    assert df.loc["wBothBad", "parse_status"] == "truncated"
+    assert df.loc["wBothBad", "vlm_car"] == 5.0
+    assert df.loc["wBothBad", "vlm_time_of_day"] == "dusk"
+    assert df.loc["wBothBad", "gt_bus"] == 1
+    # wNoVlm: no row in labels.parquet at all -> vlm_* NA, parse_status NA, but GT
+    # is a real fact (0), not "unknown".
+    assert pd.isna(df.loc["wNoVlm", "parse_status"])
+    assert pd.isna(df.loc["wNoVlm", "vlm_car"])
+    assert df.loc["wNoVlm", "gt_car"] == 0
+
+
+def test_vlm_counts_empty_tokens_writes_empty_table_with_schema(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_vlm_counts
+
+    al = tmp_path / "active_learning"
+    processed = tmp_path / "processed"
+    al.mkdir()
+    processed.mkdir()
+    out = tmp_path / "demo_data"
+    df = export_vlm_counts(al_dir=al, processed_dir=processed, tokens=[], out_dir=out)
+    assert df.empty
+    assert (out / "vlm_counts.parquet").is_file()
+    assert "gt_car" in df.columns
 
 
 def test_export_thumbs_writes_one_jpeg_per_token(tmp_path: Path) -> None:
@@ -699,10 +1055,16 @@ def _write_demo_config(
     path/budget/flagship field.
     """
     al = tiny_inputs["al"]
+    # Phase 7 (Task 2): mean_gt_boxes_per_accepted_frame=3.0 is pinned against
+    # tiny_inputs' own annotations.parquet + random.parquet/random_accepted.parquet
+    # (accepted=["s1"], 3 detector-class GT boxes) -- export_weaksup asserts the two
+    # agree, so this can't drift from that fixture without both changing together.
     (al / "random_pseudo_summary.json").write_text(json.dumps({
         "arm": "random", "n_candidates": 10, "n_accepted": 6, "retention": 0.6,
         "n_boxes": 12, "mean_boxes_per_accepted_frame": 2.0,
         "mean_gt_boxes_per_accepted_frame": 3.0,
+        "conf": 0.5, "tolerance": 1, "n_no_label": 1, "n_unparsed": 0,
+        "rejected_by_class": {"pedestrian": 2}, "accepted_mutual_zero_by_class": {"car": 1},
     }))
     config = {
         "paths": {
@@ -1022,13 +1384,91 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
     (paths.active_learning_config) + 2 (communities_graph_rate[_night].json,
     always hashed) + 2 (weak_arm.parquet/weak_arm_accepted.parquet -- weak_arm ==
     al_arm == "graph_rate_night" here, so al_arm.parquet is the same file as
-    weak_arm.parquet and dedupes under one dict key) = 15."""
+    weak_arm.parquet and dedupes under one dict key) = 15. Phase 7 (Task 2) adds 4
+    more: random.parquet/random_accepted.parquet (export_weaksup's rejected-side
+    recipe, for the "random" *_pseudo_summary.json arm -- a distinct pair from the
+    weak_arm/al_arm ones above, since "random" != "graph_rate_night") + graph_
+    rate_night_pseudo_labels.parquet (export_weak_labels' input, curation included)
+    + autolabel_weak/labels.parquet (export_vlm_counts' input, curation included)
+    = 19."""
     from nuscenes_data_engine.demo.build import run_build
 
     _stage_and_pick_hero(build_config)
     manifest = run_build(build_config)
-    assert len(manifest["inputs"]) == 15
+    assert len(manifest["inputs"]) == 19
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
+    assert any(key.endswith("graph_rate_night_pseudo_labels.parquet") for key in manifest["inputs"])
+    assert any(key.endswith("autolabel_weak/labels.parquet") for key in manifest["inputs"])
+    assert any(
+        key.endswith("random.parquet") and not key.endswith("random_accepted.parquet")
+        for key in manifest["inputs"]
+    )
+    assert any(key.endswith("random_accepted.parquet") for key in manifest["inputs"])
+
+
+def test_build_wires_weak_tables_and_checks_retention_against_overview(
+    build_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nuscenes_data_engine.demo import build as build_module
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    al_dir = Path(config["paths"]["active_learning_dir"])
+    out = Path(config["paths"]["out_dir"])
+
+    # weak_random_gt gives the "random" base arm both twins it needs for a
+    # weak_loss_decomposition row (tiny_inputs only carries weak_random by
+    # default) -- mutated here, not in the shared fixture, so every OTHER
+    # build_config test keeps getting an (empty, still-valid) decomposition table.
+    results_path = al_dir / "results.json"
+    results = json.loads(results_path.read_text())
+    results["weak_random_gt"] = {
+        "n_train_images": 112,
+        "overall": {"mAP50-95": 0.205, "mAP50": 0.35},
+        "night": {"mAP50-95": 0.092, "mAP50": 0.16, "precision": 0.5, "recall": 0.4,
+                   "per_class": {"pedestrian": 0.07}},
+        "slices": {
+            "time_of_day/day": {"mAP50-95": 0.21},
+            "weather/rain": {"mAP50-95": 0.14},
+            "weather/clear": {"mAP50-95": 0.20},
+        },
+    }
+    results_path.write_text(json.dumps(results))
+
+    manifest = run_build(build_config)
+    for name in (
+        "weak_loss_decomposition.parquet", "weak_verifier_by_class.parquet",
+        "weak_labels.parquet", "vlm_counts.parquet",
+    ):
+        assert (out / name).is_file()
+        assert name in manifest["outputs"]
+
+    input_names = {Path(p).name for p in manifest["inputs"]}
+    assert "annotations.parquet" in input_names
+    assert "graph_rate_night_pseudo_labels.parquet" in input_names
+    assert "labels.parquet" in input_names
+    assert "random.parquet" in input_names
+    assert "random_accepted.parquet" in input_names
+
+    decomposition = pd.read_parquet(out / "weak_loss_decomposition.parquet")
+    assert "random" in set(decomposition["base_arm"])
+    assert manifest["validation"]["n_weak_labels"] >= 0
+    assert manifest["validation"]["n_vlm_counts"] >= 0
+
+    # Corrupt export_overview's weak_retention.by_base_arm so it disagrees with
+    # weak_loss_decomposition's own (independently computed) retention for
+    # "random" -- the build must fail loudly, not publish a silently-wrong pair.
+    real_export_overview = build_module.exporters.export_overview
+
+    def _corrupted_overview(**kwargs: Any) -> dict[str, Any]:
+        metrics = real_export_overview(**kwargs)
+        metrics["results"]["weak_retention"]["by_base_arm"]["random"] = 0.999
+        build_module.write_json(kwargs["out_dir"] / "overview_metrics.json", metrics)
+        return metrics
+
+    monkeypatch.setattr(build_module.exporters, "export_overview", _corrupted_overview)
+    with pytest.raises(ValueError, match="retention"):
+        run_build(build_config)
 
 
 def test_build_skips_absent_curation_with_manifest_note(build_config: Path) -> None:

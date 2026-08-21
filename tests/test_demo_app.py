@@ -271,7 +271,18 @@ def built_demo_data(tmp_path: Path) -> Path:
             "is_rain": [False, False, False],
         }
     ).to_parquet(processed / "samples.parquet")
-    pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
+    # Phase 7 (Task 2): sample_data_token/category_group -- export_weaksup's
+    # rejected-side recipe reads exactly these two columns. All 4 rows are s1's; 3
+    # carry a detector category_group (pedestrian/car/pedestrian) and the 4th is
+    # None (ignored) -- s1's detector count is 3, matching random_pseudo_summary.
+    # json's mean_gt_boxes_per_accepted_frame=3.0 below (random_accepted=["s1"]).
+    pd.DataFrame(
+        {
+            "sample_token": ["s1"] * 4,
+            "sample_data_token": ["s1"] * 4,
+            "category_group": ["pedestrian", "car", "pedestrian", None],
+        }
+    ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
             # annotation_token: required since Task 1 (Phase 3) -- gt_boxes.parquet
@@ -325,6 +336,16 @@ def built_demo_data(tmp_path: Path) -> Path:
                     "overall": {"mAP50-95": 0.2018},
                     "night": {"mAP50-95": 0.105},
                 },
+                # Phase 7 (Task 2): weak_random's GT-trained twin -- gives
+                # export_weak_loss_decomposition a "random" row (gt_gain=0.01,
+                # weak_gt_gain=0.005, weak_gain=0.0018), which run_build asserts
+                # against overview_metrics.json's own (independently, but
+                # identically, computed) weak_retention.by_base_arm["random"].
+                "weak_random_gt": {
+                    "n_train_images": 112,
+                    "overall": {"mAP50-95": 0.205},
+                    "night": {"mAP50-95": 0.103},
+                },
             }
         )
     )
@@ -334,9 +355,16 @@ def built_demo_data(tmp_path: Path) -> Path:
                 "arm": "random", "n_candidates": 10, "n_accepted": 6, "retention": 0.6,
                 "n_boxes": 12, "mean_boxes_per_accepted_frame": 2.0,
                 "mean_gt_boxes_per_accepted_frame": 3.0,
+                "conf": 0.5, "tolerance": 1, "n_no_label": 1, "n_unparsed": 0,
+                "rejected_by_class": {"pedestrian": 1}, "accepted_mutual_zero_by_class": {"car": 1},
             }
         )
     )
+    # Phase 7 (Task 2): export_weaksup's own per-arm inputs -- "random" candidates
+    # (s1 accepted, s3 rejected -- s3 has no annotations.parquet rows at all -> 0
+    # detector GT boxes by the reindex-fill-0 rule).
+    pd.DataFrame({"sample_data_token": ["s1", "s3"]}).to_parquet(al / "random.parquet")
+    pd.DataFrame({"sample_data_token": ["s1"]}).to_parquet(al / "random_accepted.parquet")
     # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group,
     # not an mlruns mosaic -- stage a minimal two-token curation group so
     # run_build's now-mandatory hero-token resolution has a real crop to copy. A
@@ -356,31 +384,45 @@ def built_demo_data(tmp_path: Path) -> Path:
     staging = tmp_path / "curation_staging"
     (staging / "crops").mkdir(parents=True)
     pd.DataFrame({
-        "sample_data_token": ["v0", "v1"],
-        "split": ["val", "val"],
-        "filename": ["images/v0.jpg", "images/v1.jpg"],
+        # Phase 7 (Task 2): "wA"/"wR" are train_pool weak-supervision frames (no
+        # predictions, so they're excluded from the val-coverage check below) --
+        # "wA" carries curation_buckets=["weak_accepted"] and gets one pseudo box
+        # in graph_rate_night_pseudo_labels.parquet; "wR" carries
+        # ["weak_rejected"] and gets none (rejected frames have no pseudo boxes by
+        # construction). Task 5's Weak Supervision page tests can render off
+        # these two tokens directly.
+        "sample_data_token": ["v0", "v1", "wA", "wR"],
+        "split": ["val", "val", "train_pool", "train_pool"],
+        "filename": ["images/v0.jpg", "images/v1.jpg", "images/wA.jpg", "images/wR.jpg"],
         # scene_name: the grid loop's caption reads this straight off each row
         # (row.scene_name) -- absent here, that line never ran in any test before
         # this review round, because bug #2 (the distance-slider default) also
         # happened to filter v0 itself out of every prior single-model fixture
         # (its only GT row had a NaN distance), leaving `frames` empty and the
         # grid loop body dead code from the page's very first test.
-        "scene_name": ["scene-v0", "scene-v1"],
+        "scene_name": ["scene-v0", "scene-v1", "scene-wA", "scene-wR"],
         # Two buckets on v0, not one: curation_buckets round-trips through parquet
         # as a numpy array (pyarrow's list dtype) -- a single-element array is
         # falsy-safe by accident (`bool()` of a length-1 array just returns that
         # element's truthiness), so this needs >= 2 entries to actually exercise
         # `array or []`-style bugs in the page (`ValueError: truth value of an
         # array with more than one element is ambiguous`).
-        "curation_buckets": [["night_failure", "al_selected"], ["hard_braking"]],
+        "curation_buckets": [
+            ["night_failure", "al_selected"], ["hard_braking"],
+            ["weak_accepted"], ["weak_rejected"],
+        ],
         # is_night/is_rain: the Failure Explorer sidebar builds its lighting/rain
         # filter options straight off these columns' actual values -- absent here,
         # the page would KeyError before an AppTest ever gets to render.
-        "is_night": [True, False], "is_rain": [False, False],
-        "n_preds_baseline": pd.array([1, 2], dtype="Int64"),
-        "n_preds_graph_rate_night": pd.array([2, 2], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True, False], dtype="boolean"),
-        "fixes_fn_vs_graph_rate_night_baseline": pd.array([False, False], dtype="boolean"),
+        "is_night": [True, False, True, False], "is_rain": [False, False, False, False],
+        "n_preds_baseline": pd.array([1, 2, pd.NA, pd.NA], dtype="Int64"),
+        "n_preds_graph_rate_night": pd.array([2, 2, pd.NA, pd.NA], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array(
+            [True, False, pd.NA, pd.NA], dtype="boolean"
+        ),
+        "fixes_fn_vs_graph_rate_night_baseline": pd.array(
+            [False, False, pd.NA, pd.NA], dtype="boolean"
+        ),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
@@ -420,6 +462,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     v1_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(60, 60, 60)).save(v1_bytes, format="JPEG")
     (staging / "crops" / "v1.jpg").write_bytes(v1_bytes.getvalue())
+    for token, color in (("wA", (90, 90, 90)), ("wR", (30, 30, 30))):
+        buf = io.BytesIO()
+        Image.new("RGB", (2, 2), color=color).save(buf, format="JPEG")
+        (staging / "crops" / f"{token}.jpg").write_bytes(buf.getvalue())
 
     # Task 3 (Scenario Search page): a tiny staged semantic-search result so
     # build.py::_include_semsearch has something to copy (`demo semsearch` itself
@@ -450,13 +496,41 @@ def built_demo_data(tmp_path: Path) -> Path:
         (al / f"communities_{arm}.json").write_text(json.dumps(records))
     al_config_path = tmp_path / "active_learning.yaml"
     al_config_path.write_text(yaml.safe_dump({"mining": {"n_mine": 3}}))
-    # weak_verdict/al_selected_by's arm parquets: v0 is both a weak-arm candidate
-    # AND accepted ("accepted"); v1 is a candidate but not accepted ("rejected").
-    # Both are in the al_arm's selected set (same file, weak_arm == al_arm here).
-    pd.DataFrame({"sample_data_token": ["v0", "v1"]}).to_parquet(al / "graph_rate_night.parquet")
-    pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(
+    # weak_verdict/al_selected_by's arm parquets: v0/wA are weak-arm candidates
+    # AND accepted ("accepted"); v1/wR are candidates but not accepted
+    # ("rejected"). Both are in the al_arm's selected set (same file, weak_arm ==
+    # al_arm here) -- matches wA/wR's own curation_buckets above.
+    pd.DataFrame({"sample_data_token": ["v0", "v1", "wA", "wR"]}).to_parquet(
+        al / "graph_rate_night.parquet"
+    )
+    pd.DataFrame({"sample_data_token": ["v0", "wA"]}).to_parquet(
         al / "graph_rate_night_accepted.parquet"
     )
+    # Phase 7 (Task 2): weak_labels/vlm_counts' own inputs. wA gets one pseudo box
+    # (its curation_buckets=["weak_accepted"]); wR gets none (rejected frames have
+    # no pseudo boxes by construction) -- both get a VLM row so vlm_counts can
+    # compare its counts to GT for both tabs.
+    pd.DataFrame({
+        "sample_data_token": ["wA"],
+        "category_group": ["car"],
+        "x_min": [50.0], "y_min": [50.0], "x_max": [150.0], "y_max": [150.0],
+        "score": [0.73],
+    }).to_parquet(al / "graph_rate_night_pseudo_labels.parquet")
+    (al / "autolabel_weak").mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["wA", "wR"],
+        "model": ["qwen2.5-vl", "qwen2.5-vl"],
+        "parse_status": ["ok", "ok"],
+        "time_of_day": ["night", "day"],
+        "weather": ["clear", "rain"],
+        "hazards": ["[]", "[]"],
+        "notable_conditions": ["[]", "[]"],
+        "label_confidence": [0.8, 0.6],
+        "cars": [1.0, 0.0], "trucks": [0.0, 0.0], "buses": [0.0, 0.0],
+        "trailers": [0.0, 0.0], "construction_vehicles": [0.0, 0.0],
+        "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
+        "pedestrians": [0.0, 1.0], "traffic_cones": [0.0, 0.0], "barriers": [0.0, 0.0],
+    }).to_parquet(al / "autolabel_weak" / "labels.parquet")
 
     out = tmp_path / "demo_data"
     config = {
