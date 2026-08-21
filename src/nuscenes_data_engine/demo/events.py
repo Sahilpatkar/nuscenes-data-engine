@@ -395,6 +395,49 @@ def _cap_preset(
     return kept_mask, rank
 
 
+def _vru_dist(df: pd.DataFrame) -> pd.Series:
+    """Per-row nearest VULNERABLE road user (pedestrian OR cyclist), NA-skipping --
+    ``rain_vru``'s predicate AND its severity/ranking key."""
+    return pd.concat([df["min_dist_pedestrian_m"], df["min_dist_cyclist_m"]], axis=1).min(
+        axis=1, skipna=True
+    )
+
+
+def _preset_tag_predicates(
+    df: pd.DataFrame,
+    *,
+    near_dist_m: float,
+    high_speed_mps: float,
+    fn_pedestrians_night: pd.Series,
+    low_conf_braking: pd.Series,
+) -> dict[str, pd.Series]:
+    """The six preset predicates as boolean Series over ``df``'s index.
+
+    ONE definition, shared by ``build_events`` (which then ranks/caps them) and
+    ``preset_counts`` (which only sums them). The two used to carry byte-identical
+    copies of this dict kept "in lockstep" by comment alone -- and ``preset_counts``
+    is the SQL side of Phase 6's published Cypher/SQL parity line, so a predicate
+    changed in only one place would publish a parity claim computed from different
+    predicates than the events the page actually shows.
+
+    The two model-result predicates are passed IN rather than computed here: they
+    come from ``_model_preset_tags``' curated-val staging join, which both callers
+    already run (and which returns several other columns they each use differently).
+    """
+    return {
+        "hard_braking_near_pedestrians": (
+            df["is_hard_braking"] & (df["min_dist_pedestrian_m"] < near_dist_m)
+        ),
+        "night_pedestrians": df["is_night"] & (df["min_dist_pedestrian_m"] < near_dist_m),
+        "fast_cyclists": (
+            (df["speed_mps"] >= high_speed_mps) & (df["min_dist_cyclist_m"] < near_dist_m)
+        ),
+        "rain_vru": df["is_rain"] & (_vru_dist(df) < near_dist_m),
+        "fn_pedestrians_night": fn_pedestrians_night,
+        "low_conf_braking": low_conf_braking,
+    }
+
+
 def build_events(
     *,
     processed_dir: Path,
@@ -458,22 +501,15 @@ def build_events(
     df["fn_ped_min_dist_m"] = fn_ped_min_dist
     df["low_conf_min_conf"] = low_conf_min_conf
 
-    vru_dist = pd.concat([df["min_dist_pedestrian_m"], df["min_dist_cyclist_m"]], axis=1).min(
-        axis=1, skipna=True
-    )
+    vru_dist = _vru_dist(df)
 
-    tags = {
-        "hard_braking_near_pedestrians": (
-            df["is_hard_braking"] & (df["min_dist_pedestrian_m"] < near_dist_m)
-        ),
-        "night_pedestrians": df["is_night"] & (df["min_dist_pedestrian_m"] < near_dist_m),
-        "fast_cyclists": (
-            (df["speed_mps"] >= high_speed_mps) & (df["min_dist_cyclist_m"] < near_dist_m)
-        ),
-        "rain_vru": df["is_rain"] & (vru_dist < near_dist_m),
-        "fn_pedestrians_night": fn_pedestrians_night,
-        "low_conf_braking": low_conf_braking,
-    }
+    tags = _preset_tag_predicates(
+        df,
+        near_dist_m=near_dist_m,
+        high_speed_mps=high_speed_mps,
+        fn_pedestrians_night=fn_pedestrians_night,
+        low_conf_braking=low_conf_braking,
+    )
     tag_matrix = pd.DataFrame({name: tags[name] for name in _ALL_PRESETS}, index=df.index)
 
     flagship_precap = int(tag_matrix["hard_braking_near_pedestrians"].sum())
@@ -535,3 +571,63 @@ def build_events(
         len(df),
     )
     return result[list(_COLUMN_ORDER)]
+
+
+def preset_counts(
+    *, processed_dir: Path, staging_dir: Path | None, presets_cfg: dict[str, Any]
+) -> dict[str, int]:
+    """Pre-cap per-preset tagged-row counts for all six presets, without capping/neighbors.
+
+    Phase 6 (``demo subgraphs``) needs the SQL-side count for every preset -- not just
+    the flagship's single asserted number (``build_events``'s ``flagship_expected``) -- to
+    compare against the graph's own computed Cypher counts. ``build_events``'s signature
+    is frozen (many callers), so this is a standalone function rather than a second return
+    value; it reuses every one of ``build_events``'s private helpers (``_load_base``,
+    ``_context_features``, ``_load_staging``, ``_load_annotation_distances``,
+    ``_model_preset_tags``) so the expensive/complex parts can't drift, and shares
+    the preset predicates themselves through ``_preset_tag_predicates`` -- there is
+    no second copy of them to keep in lockstep any more (item I1, Phase 6 review).
+    """
+    processed_dir = Path(processed_dir)
+    near_dist_m = float(presets_cfg["near_dist_m"])
+    high_speed_mps = float(presets_cfg["high_speed_mps"])
+    model = str(presets_cfg["model_for_results"])
+
+    # Same invariant build_events enforces (see its own comment): the exported
+    # n_peds_within_10m column name promises exactly 10.0.
+    if near_dist_m != 10.0:
+        raise ValueError(
+            f"demo events: presets.near_dist_m={near_dist_m} but the exported "
+            "n_peds_within_10m column name promises exactly 10.0 — rename the "
+            "column everywhere it's read before changing this threshold"
+        )
+
+    df = _load_base(processed_dir)
+    context = _context_features(processed_dir, near_dist_m)
+    df = df.merge(context, on="sample_token", how="left")
+    df["n_peds_within_10m"] = df["n_peds_within_10m"].fillna(0).astype("int64")
+
+    staging = _load_staging(staging_dir)
+    annotation_distances = (
+        _load_annotation_distances(processed_dir)
+        if staging is not None
+        else pd.DataFrame(columns=["annotation_token", "distance_to_ego_m"])
+    )
+    (
+        _in_curated_set,
+        fn_pedestrians_night,
+        _fn_ped_min_dist,
+        low_conf_braking,
+        _low_conf_min_conf,
+    ) = _model_preset_tags(df, staging, model, annotation_distances)
+
+    # The SAME predicate dict build_events tags with (_preset_tag_predicates) --
+    # only capping/neighbors are skipped, since a plain count needs neither.
+    tags = _preset_tag_predicates(
+        df,
+        near_dist_m=near_dist_m,
+        high_speed_mps=high_speed_mps,
+        fn_pedestrians_night=fn_pedestrians_night,
+        low_conf_braking=low_conf_braking,
+    )
+    return {name: int(tags[name].sum()) for name in _ALL_PRESETS}

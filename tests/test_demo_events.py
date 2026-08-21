@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from nuscenes_data_engine.demo.events import build_events
+from nuscenes_data_engine.demo.events import build_events, preset_counts
 
 PRESETS_CFG = {
     "cap_per_preset": 30,
@@ -24,6 +24,15 @@ PRESETS_CFG = {
     "high_speed_mps": 10.0,
     "model_for_results": "baseline",
 }
+
+_ALL_PRESETS = (
+    "hard_braking_near_pedestrians",
+    "night_pedestrians",
+    "fast_cyclists",
+    "rain_vru",
+    "fn_pedestrians_night",
+    "low_conf_braking",
+)
 
 
 def _write_processed(processed_dir: Path, frames: list[dict[str, Any]]) -> None:
@@ -509,6 +518,48 @@ def test_cap_and_rank_columns(tmp_path: Path) -> None:
     assert c0["preset_tags"] == ["rain_vru"]
     assert pd.isna(c0["preset_rank_fast_cyclists"])
     assert int(c0["preset_rank_rain_vru"]) == 1
+
+
+def test_preset_counts_agrees_with_build_events_tags_for_every_preset(
+    tmp_path: Path,
+) -> None:
+    """``preset_counts`` is the SQL side of Phase 6's Cypher/SQL parity claim, and it
+    used to carry its own byte-identical copy of ``build_events``' predicate dict --
+    a change to one silently diverging from the other would publish a parity line
+    computed from different predicates than the events the page actually shows.
+
+    ``cap_per_preset`` is large enough here (30, vs at most two tagged frames per
+    preset in ``_base_frames``) that nothing is capped away, so ``preset_counts``'
+    PRE-cap counts and ``build_events``' post-cap ``preset_tags`` must agree exactly,
+    for all six presets -- including the two model-result ones, which need the same
+    staging both functions resolve through ``_model_preset_tags``.
+    """
+    processed_dir = tmp_path / "processed"
+    _write_processed(processed_dir, _base_frames())
+    staging_dir = tmp_path / "staging"
+    _write_staging(
+        staging_dir,
+        val_tokens=["a2_sdt", "b0_sdt"],
+        fn_pedestrian_tokens=["a2_sdt"],
+        low_conf_tokens=["b0_sdt"],
+    )
+
+    events = build_events(
+        processed_dir=processed_dir,
+        staging_dir=staging_dir,
+        presets_cfg=PRESETS_CFG,
+        flagship_expected=1,
+    )
+    counts = preset_counts(
+        processed_dir=processed_dir, staging_dir=staging_dir, presets_cfg=PRESETS_CFG
+    )
+
+    assert set(counts) == set(_ALL_PRESETS)
+    for name in _ALL_PRESETS:
+        tagged = int(events["preset_tags"].apply(lambda tags, p=name: p in tags).sum())
+        assert counts[name] == tagged, f"{name}: preset_counts={counts[name]} tags={tagged}"
+    # ...and not vacuously (every preset zero on both sides).
+    assert sum(counts.values()) > 0
 
 
 def test_only_tagged_events_exported_and_deterministic(tmp_path: Path) -> None:

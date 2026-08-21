@@ -40,7 +40,7 @@ budgets:
 
 flagship:
   expected_sql_count: 30
-  cypher_count: 30                 # sourced, not computed, until Phase 6
+  cypher_count: 30                 # fallback, overwritten when subgraphs staged
   cypher_source: docs/GRAPH.md
 
 presets:                          # Phase 5: demo/events.py's six scenario presets

@@ -28,8 +28,11 @@ output, row counts). It **fails loudly** — no manifest is written — if:
 - the flagship hard-braking-near-pedestrians SQL count ≠ 30 (the documented
   SQL/Cypher parity number),
 - the documented weak-retention headline (the `random` pair) is missing from
-  `results.json`, or
-- the package exceeds the size budget (100 MB; currently 22.98 MB).
+  `results.json`,
+- a staged `graph_subgraphs/` group is partial (some of the six presets missing),
+  stale (a preset's event keys differ from the events this build ranks — re-run
+  `demo subgraphs`), or its flagship Cypher count ≠ the flagship SQL count, or
+- the package exceeds the size budget (100 MB; currently 24.90 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -44,8 +47,11 @@ wheel-speed signal (`can_speed_kmh/3.6`) against GT ego-pose speed; weak-supervi
 retention is computed per weak/GT arm pair and published with explicit arm
 attribution (headline = the documented 18% `random` pair; the 39.4%
 `graph_rate_night` pair is carried separately). The flagship *Cypher* twin is
-sourced from [GRAPH.md](GRAPH.md) until Phase 6 computes it against a live graph —
-`overview_metrics.json` labels it as sourced.
+computed against the live Neo4j graph by `demo subgraphs` (the query text is
+asserted verbatim against [GRAPH.md](GRAPH.md)); `overview_metrics.json` records
+`cypher_source: "computed (neo4j, demo subgraphs)"` when the subgraph group is
+included, and falls back to the GRAPH.md value — labelled as sourced — when it is
+absent.
 
 Rebuilds are deterministic: identical inputs produce byte-identical outputs —
 `manifest.json`'s `built_at` and `git_sha` are the only fields that vary run-to-run
@@ -53,7 +59,7 @@ Rebuilds are deterministic: identical inputs produce byte-identical outputs —
 commit: a package can't contain the sha of the commit that adds it, so the committed
 manifest always names the commit it was built from, not the one that carries it.
 
-## Package layout (Phases 1-5)
+## Package layout (Phases 1-6)
 
 | file | contents |
 |---|---|
@@ -69,6 +75,7 @@ manifest always names the commit it was built from, not the one that carries it.
 | `sample_frames/thumbs/` | 617 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch) |
 | `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set` |
 | `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, sample_data_token, score, k — k drives the gallery's "n of k" caption) |
+| `graph_subgraphs/<preset>.json` | 6 presets × per-event subgraphs from the live graph: nodes (`on_path` flag + properties), edges, the matched path (nearest matching object first), off-path observations capped at the nearest 12; plus the preset's count Cypher and `sql_count` / `cypher_count` / `parity` on the full keyframe population (model presets: `cypher_count` null — their verdict comes from predictions, not the graph) |
 
 ## Picking the hero token
 
@@ -100,7 +107,9 @@ contributor guardrail, not a sandbox (a dynamic `importlib` call would slip past
 Strict mypy also covers `app/demo` (see `[tool.mypy] files` in `pyproject.toml`) —
 that's real type-checking of the app code, not an import-policing mechanism. Its full
 dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
-(streamlit, pandas, pyarrow, pillow). Bare-venv smoke check:
+(streamlit, pandas, pyarrow, pillow, streamlit-agraph — the latter imported lazily
+inside the graph panel, so its absence degrades to a warning, not a crash). Bare-venv
+smoke check:
 
 ```bash
 uv venv "$TMPDIR/demo-venv" --python 3.11
@@ -157,20 +166,53 @@ missed.
 
 `app/demo/views/scenarios.py` — six preset scenario queries in two honestly-separated
 families: **dynamics presets** over all 34,149 keyframes from GT alone (hard braking
-near pedestrians — the flagship, asserted at exactly 30 during `demo build` and
-shown with the SQL/Cypher parity badge read from `overview_metrics.json`; night
-pedestrians; fast cyclists; rain VRUs) and **model-result presets** over the 125
-curated val frames only, because that is where predictions exist (false-negative
-pedestrians at night: 4; low-confidence detections during braking: 2 — the
-scope is stated on the page; the N is the card count). Each preset caps at 30 ranked by its own severity (cards show
-that quantity; braking is only called braking when the acceleration is negative).
+near pedestrians — the flagship, asserted at exactly 30 during `demo build`; night
+pedestrians; fast cyclists; rain VRUs — each header carries its own SQL/Cypher
+parity line read from `graph_subgraphs/<preset>.json`, stating the full-population
+count and, only when the 30-card cap actually cuts it down, how many of the 30 are
+shown — the flagship's own 30-of-30 has nothing to cut) and **model-result
+presets** over the 125 curated val frames only, because that is where predictions
+exist (false-negative pedestrians at night: 4; low-confidence detections during
+braking: 2 — the scope is stated on the page; the N is the card count). Each
+preset caps at 30 ranked by its own severity (cards show that quantity; braking
+is only called braking when the acceleration is negative).
 The **event viewer** renders curated events through the Phase-3 overlay renderer and
 non-curated ones as GT-only thumbnails with an explicit "not in the curated
 prediction set" caption; ego/context/model panels; and a t−2…t+2 filmstrip (strip +
 slider + per-step speed/accel readout). The **semantic gallery** is recorded
 (`demo semsearch`, SigLIP offline, `semsearch.oversample: 16` to survive the 5/6
 non-front-camera store) and labelled as such; per-query hit counts are shown.
-The interactive graph traversal slot on this page lands in Phase 6.
+
+## Interactive graph (Phase 6)
+
+One-time per events change, with the Neo4j graph built per [GRAPH.md](GRAPH.md):
+
+```bash
+docker compose up -d neo4j
+uv run nuscenes-data-engine demo subgraphs   # -> data/demo_curation/graph_subgraphs/<preset>.json
+uv run nuscenes-data-engine demo build       # package v0.5 with the graph group
+```
+
+`demo subgraphs` recomputes the six presets' events, runs each preset's **count
+Cypher** against the live graph (the flagship's is the GRAPH.md query verbatim,
+asserted by a test; a flagship mismatch fails the export), records
+`sql_count`/`cypher_count`/`parity` per dynamics preset (shipped run: 30/30,
+786/786, 92/92, 766/766; a mismatch is recorded, not hidden, and the page renders
+it as a warning), and exports one subgraph per ranked event: the matched path
+(Scene → Sample → EgoPose → matching objects → Category), the t±1 `NEXT`
+neighbours, the Location, and the nearest 12 other observations as context. Model-
+result presets get GT-only subgraphs with `cypher_count: null` — their verdict is
+not graph-derivable and the page says so.
+
+The **panel** (event viewer, `app/demo/views/scenarios.py`) renders that subgraph
+with `streamlit-agraph`: orange = the matched path, grey = context, semantic
+labels (`adult 6.2 m`, `ego -4.5 m/s²`, `scene-1084`), force-directed layout;
+clicking a node shows its properties, otherwise a one-line narrative of the path
+(nearest matching object first, so it agrees with the card's caption; a
+model-result preset's path stops at the EgoPose, since its verdict isn't in the
+graph). Without a staged `graph_subgraphs/`, `demo build` records
+`validation.subgraphs: "absent"`, the page shows an honest "not included in this
+package" note, and Overview keeps the sourced Cypher value.
 
 ## Dataset attribution & license
 
@@ -191,8 +233,8 @@ is **not** redistributed by this repository.
 | 1 | builder core, `demo_data/` v0.1, app shell + Overview | **shipped** |
 | 2 | curated frames, TRINITY rsync, local inference, predictions | **shipped** |
 | 3 | Failure Explorer + GT/pred overlays | **shipped** |
-| 4 | chat upgrades (local stack): probe fix, streaming, charts | pending |
+| 4 | chat upgrades (local stack): probe fix, streaming, charts | **shipped** |
 | 5 | scenario search + synchronized event viewer | **shipped** |
-| 6 | interactive graph (subgraph export + agraph) | pending |
+| 6 | interactive graph (subgraph export + agraph) | **shipped** |
 | 7 | active-learning + weak-supervision pages | pending |
 | 8 | chat replay gallery, licensing gate, deployment | pending |

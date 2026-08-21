@@ -1,0 +1,1302 @@
+{
+  "count_cypher": null,
+  "cypher_count": null,
+  "events": {
+    "4d2df4afdb1a446e9f1f2960fe414ff2": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "scene:0dae482684ce4cd69a7258f55bc98d73"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:0dae482684ce4cd69a7258f55bc98d73",
+          "target": "location:singapore-hollandvillage"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "egopose:e76db99044e647668933408593df6cce"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:a633a5ca3bd94f9d99f0251f03e28170",
+          "target": "sample:d6ea9421c9924d3fa98b90563e4a106f"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "sample:a04be2dd20eb493daa336a299f052426"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "object:3bb66d6b6379406b9f6350cd9f832679"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:3bb66d6b6379406b9f6350cd9f832679",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "object:0855df5a7e6e46d5af55b8153bca0150"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:0855df5a7e6e46d5af55b8153bca0150",
+          "target": "category:movable_object.pushable_pullable"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "object:ae10e1d2e0b34cb1ac22a33e834097f5"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:ae10e1d2e0b34cb1ac22a33e834097f5",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "object:247fb7ab27404d02abadb19571985319"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:247fb7ab27404d02abadb19571985319",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "target": "object:bfa6be62fade4b73821be2785f2508cb"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:bfa6be62fade4b73821be2785f2508cb",
+          "target": "category:human.pedestrian.adult"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "category:movable_object.pushable_pullable",
+          "label": "Category",
+          "meta": {
+            "group": null,
+            "name": "movable_object.pushable_pullable"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:e76db99044e647668933408593df6cce",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": 0.47532017336054555,
+            "can_speed_kmh": 26.38,
+            "is_hard_braking": false,
+            "speed_mps": 7.345297194457161
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:singapore-hollandvillage",
+          "label": "Location",
+          "meta": {
+            "name": "singapore-hollandvillage"
+          },
+          "on_path": false
+        },
+        {
+          "group": "unknown",
+          "id": "object:0855df5a7e6e46d5af55b8153bca0150",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "movable_object.pushable_pullable",
+            "distance_to_ego_m": 31.260964531190986,
+            "ego_rel_x": 29.939291824233102,
+            "ego_rel_y": -8.993703824553574,
+            "group": "unknown",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:247fb7ab27404d02abadb19571985319",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 37.15572358834007,
+            "ego_rel_x": 34.911865113600236,
+            "ego_rel_y": -12.716503830177265,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:3bb66d6b6379406b9f6350cd9f832679",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 13.932695372545616,
+            "ego_rel_x": 13.91824863630197,
+            "ego_rel_y": -0.6343147816600121,
+            "group": "car",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:ae10e1d2e0b34cb1ac22a33e834097f5",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 33.4955744559691,
+            "ego_rel_x": 33.21564557624758,
+            "ego_rel_y": -4.32138832882144,
+            "group": "car",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:bfa6be62fade4b73821be2785f2508cb",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 37.639617368075506,
+            "ego_rel_x": 37.52277892080979,
+            "ego_rel_y": 2.963419928927239,
+            "group": "pedestrian",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:a04be2dd20eb493daa336a299f052426",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "a04be2dd20eb493daa336a299f052426"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:a633a5ca3bd94f9d99f0251f03e28170",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "a633a5ca3bd94f9d99f0251f03e28170"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "label": "Sample",
+          "meta": {
+            "is_night": true,
+            "is_rain": false,
+            "scene": "scene-1071",
+            "timestamp": 1542799675654844
+          },
+          "on_path": true
+        },
+        {
+          "group": "scene",
+          "id": "scene:0dae482684ce4cd69a7258f55bc98d73",
+          "label": "Scene",
+          "meta": {
+            "is_night": true,
+            "is_rain": false,
+            "location": "singapore-hollandvillage",
+            "name": "scene-1071"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:0dae482684ce4cd69a7258f55bc98d73",
+          "sample:d6ea9421c9924d3fa98b90563e4a106f",
+          "egopose:e76db99044e647668933408593df6cce"
+        ]
+      ]
+    },
+    "52bd36fd15654246a84d9a021f0abeec": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "scene:16be583c31a2403caa6c158bb55ae616"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:16be583c31a2403caa6c158bb55ae616",
+          "target": "location:singapore-hollandvillage"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "egopose:ac52f19c764949f7a988d47ef84e2936"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:243788e0c44d494cb214f84237ef8a62",
+          "target": "sample:5f816fe155674223a737d717160dc1cc"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "sample:37950315c49b49e5892ad44449401452"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:303b4e9fed3849aab44c03bfc2a8c98a"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:303b4e9fed3849aab44c03bfc2a8c98a",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:8fa78eb3b29d4219b30b653bb468810c"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:8fa78eb3b29d4219b30b653bb468810c",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:4a26e8597ca74367a20ebf84a15899ae"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:4a26e8597ca74367a20ebf84a15899ae",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:a044fa89a82b4f038cc3c7e5dee049cb"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:a044fa89a82b4f038cc3c7e5dee049cb",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:4afa6a50a8824f3aa6cb61d88cd3be48"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:4afa6a50a8824f3aa6cb61d88cd3be48",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:da1f46faab06410aa51ea079d1fcbbf9"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:da1f46faab06410aa51ea079d1fcbbf9",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:ade012fc3f464501b9736b04557fd9c5"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:ade012fc3f464501b9736b04557fd9c5",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:c16bbc80188f431381bd8e4211fd19eb"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:c16bbc80188f431381bd8e4211fd19eb",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:5f816fe155674223a737d717160dc1cc",
+          "target": "object:9d7c6ddf35634cc0bd39784b51187f58"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:9d7c6ddf35634cc0bd39784b51187f58",
+          "target": "category:vehicle.truck"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "category:vehicle.truck",
+          "label": "Category",
+          "meta": {
+            "group": "truck",
+            "name": "vehicle.truck"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:ac52f19c764949f7a988d47ef84e2936",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": -1.3797502702922078,
+            "can_speed_kmh": 24.2,
+            "is_hard_braking": false,
+            "speed_mps": 7.234103178144827
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:singapore-hollandvillage",
+          "label": "Location",
+          "meta": {
+            "name": "singapore-hollandvillage"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:303b4e9fed3849aab44c03bfc2a8c98a",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 3.968121315558945,
+            "ego_rel_x": -3.014354225089214,
+            "ego_rel_y": -2.5806308106120213,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:4a26e8597ca74367a20ebf84a15899ae",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 15.343986026896191,
+            "ego_rel_x": -13.628328055354315,
+            "ego_rel_y": -7.050289469889024,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:4afa6a50a8824f3aa6cb61d88cd3be48",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 22.865013799990756,
+            "ego_rel_x": -22.6865543137406,
+            "ego_rel_y": -2.851159315693435,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:8fa78eb3b29d4219b30b653bb468810c",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 14.766759429177162,
+            "ego_rel_x": 14.765048948912465,
+            "ego_rel_y": -0.22475225340705407,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "object:9d7c6ddf35634cc0bd39784b51187f58",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.truck",
+            "distance_to_ego_m": 61.61074504313173,
+            "ego_rel_x": -61.55127213781588,
+            "ego_rel_y": -2.7064373235513948,
+            "group": "truck",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:a044fa89a82b4f038cc3c7e5dee049cb",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 20.124993675300896,
+            "ego_rel_x": 19.193097706717467,
+            "ego_rel_y": 6.053129013270562,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:ade012fc3f464501b9736b04557fd9c5",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 31.63305973584694,
+            "ego_rel_x": 24.501222941628157,
+            "ego_rel_y": -20.00851175415841,
+            "group": "car",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:c16bbc80188f431381bd8e4211fd19eb",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 43.3191827871818,
+            "ego_rel_x": -43.225121889353716,
+            "ego_rel_y": -2.8531447561914476,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:da1f46faab06410aa51ea079d1fcbbf9",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 29.974899654712576,
+            "ego_rel_x": 29.47255324638852,
+            "ego_rel_y": 5.464724553797881,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:243788e0c44d494cb214f84237ef8a62",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "243788e0c44d494cb214f84237ef8a62"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:37950315c49b49e5892ad44449401452",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "37950315c49b49e5892ad44449401452"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:5f816fe155674223a737d717160dc1cc",
+          "label": "Sample",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "scene": "scene-1067",
+            "timestamp": 1542799584904844
+          },
+          "on_path": true
+        },
+        {
+          "group": "scene",
+          "id": "scene:16be583c31a2403caa6c158bb55ae616",
+          "label": "Scene",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "location": "singapore-hollandvillage",
+            "name": "scene-1067"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:16be583c31a2403caa6c158bb55ae616",
+          "sample:5f816fe155674223a737d717160dc1cc",
+          "egopose:ac52f19c764949f7a988d47ef84e2936"
+        ]
+      ]
+    },
+    "5994f34b836043b3b5be191bceba2e3e": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "scene:16be583c31a2403caa6c158bb55ae616"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:16be583c31a2403caa6c158bb55ae616",
+          "target": "location:singapore-hollandvillage"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "egopose:a26969e0ec4040299e9b531335c0370d"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "sample:205a77495c02441193752562fab8d06e"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "sample:6e1f02cb4e2747c6970b2d9b2e834852"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:8e5b8f11cf6d4da9ab4135eaf8071516"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:8e5b8f11cf6d4da9ab4135eaf8071516",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:5dbd6565f4d54102b531371f2a162b5d"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:5dbd6565f4d54102b531371f2a162b5d",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:a1854e3c39c84736b6f776d0f64aba33"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:a1854e3c39c84736b6f776d0f64aba33",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:328951d33f034350bafff10056ae3d05"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:328951d33f034350bafff10056ae3d05",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:f8511d33483544869a67304f79241303"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:f8511d33483544869a67304f79241303",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:51b815b064614ec195f32b37919be6c0"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:51b815b064614ec195f32b37919be6c0",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:e25609da62ac4e4984d31cf96f3bc2bd"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:e25609da62ac4e4984d31cf96f3bc2bd",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:9770d6005e024aec892c5c373d5642b2"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:9770d6005e024aec892c5c373d5642b2",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:205a77495c02441193752562fab8d06e",
+          "target": "object:ef34a88e14144e26a4f6afb51beb62aa"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:ef34a88e14144e26a4f6afb51beb62aa",
+          "target": "category:vehicle.truck"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "category:vehicle.truck",
+          "label": "Category",
+          "meta": {
+            "group": "truck",
+            "name": "vehicle.truck"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:a26969e0ec4040299e9b531335c0370d",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": -1.9077261067830016,
+            "can_speed_kmh": 17.27,
+            "is_hard_braking": false,
+            "speed_mps": 5.299496302142146
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:singapore-hollandvillage",
+          "label": "Location",
+          "meta": {
+            "name": "singapore-hollandvillage"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:328951d33f034350bafff10056ae3d05",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 23.779649018779676,
+            "ego_rel_x": -22.709093399985193,
+            "ego_rel_y": -7.054699455476337,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:51b815b064614ec195f32b37919be6c0",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 25.235500452011443,
+            "ego_rel_x": 15.480861847387736,
+            "ego_rel_y": -19.929209706497762,
+            "group": "car",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:5dbd6565f4d54102b531371f2a162b5d",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 15.074351579203464,
+            "ego_rel_x": 15.07119234360869,
+            "ego_rel_y": -0.30860472352959345,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:8e5b8f11cf6d4da9ab4135eaf8071516",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 11.130399505096818,
+            "ego_rel_x": 9.702802743107595,
+            "ego_rel_y": 5.453568746371795,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:9770d6005e024aec892c5c373d5642b2",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 63.261792035562706,
+            "ego_rel_x": -63.202279733077205,
+            "ego_rel_y": -2.743386245617767,
+            "group": "car",
+            "visibility": "3"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:a1854e3c39c84736b6f776d0f64aba33",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 21.085735466330014,
+            "ego_rel_x": 20.330949621788687,
+            "ego_rel_y": 5.591129370023381,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:e25609da62ac4e4984d31cf96f3bc2bd",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 42.64008869270809,
+            "ego_rel_x": -42.5518319370272,
+            "ego_rel_y": -2.7420362005276893,
+            "group": "car",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "object:ef34a88e14144e26a4f6afb51beb62aa",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.truck",
+            "distance_to_ego_m": 82.41326044476567,
+            "ego_rel_x": -82.37578612419824,
+            "ego_rel_y": -2.4850266713107345,
+            "group": "truck",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:f8511d33483544869a67304f79241303",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 24.874760205204968,
+            "ego_rel_x": -24.772190242181026,
+            "ego_rel_y": -2.2566093750669243,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:205a77495c02441193752562fab8d06e",
+          "label": "Sample",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "scene": "scene-1067",
+            "timestamp": 1542799586404844
+          },
+          "on_path": true
+        },
+        {
+          "group": "sample",
+          "id": "sample:6e1f02cb4e2747c6970b2d9b2e834852",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "6e1f02cb4e2747c6970b2d9b2e834852"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "a29674e62b0b4cdbb20ae86eca8d3356"
+          },
+          "on_path": false
+        },
+        {
+          "group": "scene",
+          "id": "scene:16be583c31a2403caa6c158bb55ae616",
+          "label": "Scene",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "location": "singapore-hollandvillage",
+            "name": "scene-1067"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:16be583c31a2403caa6c158bb55ae616",
+          "sample:205a77495c02441193752562fab8d06e",
+          "egopose:a26969e0ec4040299e9b531335c0370d"
+        ]
+      ]
+    },
+    "80d63b9f9b3f4063be8731e437389f34": {
+      "edges": [
+        {
+          "label": "IN_SCENE",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "scene:16be583c31a2403caa6c158bb55ae616"
+        },
+        {
+          "label": "IN_LOCATION",
+          "source": "scene:16be583c31a2403caa6c158bb55ae616",
+          "target": "location:singapore-hollandvillage"
+        },
+        {
+          "label": "AT_POSE",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "egopose:8f06f660fb1a472cad746511015f495f"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:37950315c49b49e5892ad44449401452",
+          "target": "sample:a29674e62b0b4cdbb20ae86eca8d3356"
+        },
+        {
+          "label": "NEXT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "sample:205a77495c02441193752562fab8d06e"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:aebacb927a7d481f8fb0244109b7cc81"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:aebacb927a7d481f8fb0244109b7cc81",
+          "target": "category:human.pedestrian.adult"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:12be76fa8e184b179ddf55004270e395"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:12be76fa8e184b179ddf55004270e395",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:d85555b5b7474ed88d80d5de6ae7e2f5"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:d85555b5b7474ed88d80d5de6ae7e2f5",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:1e6f281a30b245e38b94ec5afc8b3afa"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:1e6f281a30b245e38b94ec5afc8b3afa",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:8d4f70ba1c9c4362bd4e0f10dea9e6ec"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:8d4f70ba1c9c4362bd4e0f10dea9e6ec",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:f54cdbed1c62433189396d5582245f34"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:f54cdbed1c62433189396d5582245f34",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:d5b94080f680438fbcf8c57c546a994e"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:d5b94080f680438fbcf8c57c546a994e",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:2d981cfc578e4d058a7ab9ba3b52bff8"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:2d981cfc578e4d058a7ab9ba3b52bff8",
+          "target": "category:vehicle.car"
+        },
+        {
+          "label": "HAS_OBJECT",
+          "source": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "target": "object:97874c0091914f7884c2d3264b63981b"
+        },
+        {
+          "label": "OF_CATEGORY",
+          "source": "object:97874c0091914f7884c2d3264b63981b",
+          "target": "category:vehicle.truck"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "pedestrian",
+          "id": "category:human.pedestrian.adult",
+          "label": "Category",
+          "meta": {
+            "group": "pedestrian",
+            "name": "human.pedestrian.adult"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "category:vehicle.car",
+          "label": "Category",
+          "meta": {
+            "group": "car",
+            "name": "vehicle.car"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "category:vehicle.truck",
+          "label": "Category",
+          "meta": {
+            "group": "truck",
+            "name": "vehicle.truck"
+          },
+          "on_path": false
+        },
+        {
+          "group": "egopose",
+          "id": "egopose:8f06f660fb1a472cad746511015f495f",
+          "label": "EgoPose",
+          "meta": {
+            "accel_long_min_mps2": -1.8320445804770036,
+            "can_speed_kmh": 19.72,
+            "is_hard_braking": false,
+            "speed_mps": 6.066502794591384
+          },
+          "on_path": true
+        },
+        {
+          "group": "location",
+          "id": "location:singapore-hollandvillage",
+          "label": "Location",
+          "meta": {
+            "name": "singapore-hollandvillage"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:12be76fa8e184b179ddf55004270e395",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 14.631118391156424,
+            "ego_rel_x": 14.628631927347808,
+            "ego_rel_y": -0.2697282154616305,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:1e6f281a30b245e38b94ec5afc8b3afa",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 21.25508485075715,
+            "ego_rel_x": -20.052159269384106,
+            "ego_rel_y": -7.049080837111966,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:2d981cfc578e4d058a7ab9ba3b52bff8",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 56.97563619529326,
+            "ego_rel_x": -56.90717958311264,
+            "ego_rel_y": -2.792137488337442,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:8d4f70ba1c9c4362bd4e0f10dea9e6ec",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 23.67248941647572,
+            "ego_rel_x": 23.00650146697473,
+            "ego_rel_y": 5.57562959882063,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "truck",
+          "id": "object:97874c0091914f7884c2d3264b63981b",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.truck",
+            "distance_to_ego_m": 75.91228348238067,
+            "ego_rel_x": -75.86967788603117,
+            "ego_rel_y": -2.542982693452373,
+            "group": "truck",
+            "visibility": "1"
+          },
+          "on_path": false
+        },
+        {
+          "group": "pedestrian",
+          "id": "object:aebacb927a7d481f8fb0244109b7cc81",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "human.pedestrian.adult",
+            "distance_to_ego_m": 13.717591447981963,
+            "ego_rel_x": 12.493007976817548,
+            "ego_rel_y": 5.665427329418408,
+            "group": "pedestrian",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:d5b94080f680438fbcf8c57c546a994e",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 36.411101459381875,
+            "ego_rel_x": -36.305208602401024,
+            "ego_rel_y": -2.774912218710252,
+            "group": "car",
+            "visibility": "2"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:d85555b5b7474ed88d80d5de6ae7e2f5",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 17.694472377816854,
+            "ego_rel_x": -17.543855120808086,
+            "ego_rel_y": -2.30380125649317,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "car",
+          "id": "object:f54cdbed1c62433189396d5582245f34",
+          "label": "ObjectObservation",
+          "meta": {
+            "category": "vehicle.car",
+            "distance_to_ego_m": 26.945305551464156,
+            "ego_rel_x": 18.121337407919302,
+            "ego_rel_y": -19.94158022349557,
+            "group": "car",
+            "visibility": "4"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:205a77495c02441193752562fab8d06e",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "205a77495c02441193752562fab8d06e"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:37950315c49b49e5892ad44449401452",
+          "label": "Sample",
+          "meta": {
+            "sample_token": "37950315c49b49e5892ad44449401452"
+          },
+          "on_path": false
+        },
+        {
+          "group": "sample",
+          "id": "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "label": "Sample",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "scene": "scene-1067",
+            "timestamp": 1542799585904844
+          },
+          "on_path": true
+        },
+        {
+          "group": "scene",
+          "id": "scene:16be583c31a2403caa6c158bb55ae616",
+          "label": "Scene",
+          "meta": {
+            "is_night": true,
+            "is_rain": true,
+            "location": "singapore-hollandvillage",
+            "name": "scene-1067"
+          },
+          "on_path": true
+        }
+      ],
+      "path": [
+        [
+          "scene:16be583c31a2403caa6c158bb55ae616",
+          "sample:a29674e62b0b4cdbb20ae86eca8d3356",
+          "egopose:8f06f660fb1a472cad746511015f495f"
+        ]
+      ]
+    }
+  },
+  "note": "the model verdict is not in the graph",
+  "parity": null,
+  "preset": "fn_pedestrians_night",
+  "sql_count": 4
+}

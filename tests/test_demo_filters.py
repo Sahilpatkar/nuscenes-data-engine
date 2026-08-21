@@ -18,10 +18,13 @@ from filters import (  # noqa: E402
     failure_counts,
     failure_flags,
     filter_frames,
+    graph_node_label,
+    parity_caption,
     rank_events,
     severity_caption,
     sort_frames,
     speed_caption,
+    subgraph_narrative,
 )
 
 
@@ -355,3 +358,249 @@ def test_severity_caption_uses_each_presets_own_ranking_quantity() -> None:
 def test_severity_caption_unknown_preset_raises() -> None:
     with pytest.raises(ValueError, match="unknown preset"):
         severity_caption("not_a_real_preset", {})
+
+
+# --- subgraph_narrative (Phase 6, Task 3) ------------------------------------------
+#
+# subgraph_export.assemble_subgraph's {nodes, edges, path} shape (see
+# tests/test_demo_subgraphs.py::test_event_subgraph_assembly_from_fake_records for
+# the real node/meta contract) -- built by hand here, not via assemble_subgraph
+# itself, since filters.py stays pure/backend-free (no nuscenes_data_engine import).
+
+
+def _node(node_id: str, label: str, on_path: bool, meta: dict[str, object]) -> dict[str, object]:
+    return {"id": node_id, "label": label, "group": label.lower(), "on_path": on_path, "meta": meta}
+
+
+def _full_subgraph(
+    *,
+    scene_name: str | None = "scene-0123",
+    accel: float | None = -4.5,
+    is_hard_braking: bool = True,
+    obj_group: str | None = "pedestrian",
+    obj_distance: float | None = 3.8,
+    include_scene: bool = True,
+    include_ego: bool = True,
+    include_object: bool = True,
+) -> dict[str, object]:
+    nodes = []
+    path: list[list[str]] = []
+
+    sample = _node("sample:smp1", "Sample", True, {"timestamp": 1000, "scene": scene_name})
+    nodes.append(sample)
+
+    scene_id = "scene:scn1"
+    ego_id = "egopose:ego1"
+    if include_scene:
+        nodes.append(_node(scene_id, "Scene", True, {"name": scene_name, "location": "boston-seaport"}))
+    if include_ego:
+        nodes.append(
+            _node(
+                ego_id, "EgoPose", True,
+                {"speed_mps": 12.0, "accel_long_min_mps2": accel, "is_hard_braking": is_hard_braking},
+            )
+        )
+    # assemble_subgraph appends the [scene, sample, ego] backbone chain ONLY when
+    # BOTH the Scene and the EgoPose exist (subgraph_export.py) -- with either
+    # missing, path holds object chains alone. Emitting a backbone-shaped chain
+    # here regardless was what hid item I3: the narrative read path[0][2] as the
+    # EgoPose even when path[0] was really an object chain, and reported the
+    # Category node as an EgoPose.
+    if include_scene and include_ego:
+        path.append([scene_id, "sample:smp1", ego_id])
+
+    if include_object:
+        obj_id = "object:ped1"
+        cat_id = "category:human.pedestrian.adult"
+        nodes.append(
+            _node(
+                obj_id, "ObjectObservation", True,
+                {"category": "human.pedestrian.adult", "group": obj_group, "distance_to_ego_m": obj_distance},
+            )
+        )
+        nodes.append(_node(cat_id, "Category", True, {"name": "human.pedestrian.adult", "group": obj_group}))
+        path.append(["sample:smp1", obj_id, cat_id])
+
+    return {"nodes": nodes, "edges": [], "path": path}
+
+
+def test_subgraph_narrative_full_sentence() -> None:
+    narrative = subgraph_narrative(_full_subgraph())
+    assert narrative == "Scene scene-0123 → Sample → EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_not_hard_braking_omits_the_words() -> None:
+    narrative = subgraph_narrative(_full_subgraph(accel=-2.0, is_hard_braking=False))
+    assert "hard braking" not in narrative
+    assert "EgoPose (-2.00 m/s²)" in narrative
+
+
+def test_subgraph_narrative_missing_ego_degrades_gracefully() -> None:
+    """No EgoPose means no backbone chain at all in assemble_subgraph's output --
+    the Scene segment still has to survive that (each piece drops independently)."""
+    narrative = subgraph_narrative(_full_subgraph(include_ego=False))
+    assert "EgoPose" not in narrative
+    assert narrative == "Scene scene-0123 → Sample → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_object_only_path_is_not_read_as_an_egopose() -> None:
+    """(item I3) A subgraph with NO backbone chain -- only a [sample, object,
+    category] chain, exactly what assemble_subgraph emits when the Scene or EgoPose
+    is absent -- used to render as "Sample → EgoPose": the chain's third element
+    (the Category node) was read as the EgoPose slot purely because it sat at
+    path[0][2]. The backbone is now identified by its node LABEL, so this reads as
+    what it is: a sample with a matching pedestrian and no ego pose."""
+    subgraph = {
+        "nodes": [
+            _node("sample:s1", "Sample", True, {"timestamp": 1000}),
+            _node(
+                "object:p1", "ObjectObservation", True,
+                {"category": "human.pedestrian.adult", "group": "pedestrian",
+                 "distance_to_ego_m": 3.8},
+            ),
+            _node(
+                "category:human.pedestrian.adult", "Category", True,
+                {"name": "human.pedestrian.adult", "group": "pedestrian"},
+            ),
+        ],
+        "edges": [],
+        "path": [["sample:s1", "object:p1", "category:human.pedestrian.adult"]],
+    }
+    assert subgraph_narrative(subgraph) == "Sample → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_missing_scene_degrades_gracefully() -> None:
+    narrative = subgraph_narrative(_full_subgraph(include_scene=False, scene_name=None))
+    assert not narrative.startswith("Scene")
+    assert narrative == "Sample → EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_no_matching_object_degrades_gracefully() -> None:
+    narrative = subgraph_narrative(_full_subgraph(include_object=False))
+    assert "at" not in narrative.split("EgoPose")[-1].split("m/s²)")[-1]
+    assert narrative == "Scene scene-0123 → Sample → EgoPose (hard braking -4.50 m/s²)"
+
+
+def test_subgraph_narrative_empty_subgraph_is_never_an_exception() -> None:
+    assert subgraph_narrative({}) == "Sample"
+    assert subgraph_narrative({"nodes": [], "edges": [], "path": []}) == "Sample"
+
+
+# --- graph_node_label (Phase 6 fix round: the agraph panel's node labels) ----------
+#
+# The panel used to label every node "<type>: <first 10 chars of its id>", which
+# says nothing for a hex token and actively misleads for a Category
+# ("human.pedestrian.adult" and "human.pedestrian.construction_worker" BOTH rendered
+# as "Category: human.pede...", duplicated labels on 30/126 events -- item I4).
+# These labels carry the quantity a viewer actually reads the graph for.
+
+
+def test_graph_node_label_object_observation_shows_category_tail_and_distance() -> None:
+    node = _node(
+        "object:abc123", "ObjectObservation", True,
+        {"category": "human.pedestrian.adult", "group": "pedestrian", "distance_to_ego_m": 9.94},
+    )
+    assert graph_node_label(node) == "adult 9.9 m"
+    car = _node(
+        "object:def456", "ObjectObservation", False,
+        {"category": "vehicle.car", "group": "car", "distance_to_ego_m": 5.28},
+    )
+    assert graph_node_label(car) == "car 5.3 m"
+
+
+def test_graph_node_label_object_observation_without_a_numeric_distance() -> None:
+    """A missing/NA/non-numeric distance drops the figure rather than rendering
+    "nan m" or raising."""
+    for distance in (None, float("nan"), "unknown"):
+        node = _node(
+            "object:abc123", "ObjectObservation", True,
+            {"category": "human.pedestrian.adult", "distance_to_ego_m": distance},
+        )
+        assert graph_node_label(node) == "adult"
+    assert graph_node_label(_node("object:abc123", "ObjectObservation", True, {})) == "object"
+
+
+def test_graph_node_label_egopose_shows_signed_longitudinal_accel() -> None:
+    braking = _node(
+        "egopose:abc123", "EgoPose", True,
+        {"accel_long_min_mps2": -4.52, "is_hard_braking": True, "speed_mps": 12.0},
+    )
+    assert graph_node_label(braking) == "ego -4.5 m/s²"
+    accelerating = _node("egopose:abc123", "EgoPose", True, {"accel_long_min_mps2": 1.2})
+    assert graph_node_label(accelerating) == "ego +1.2 m/s²"
+    assert graph_node_label(_node("egopose:abc123", "EgoPose", True, {})) == "ego pose"
+    assert graph_node_label(
+        _node("egopose:abc123", "EgoPose", True, {"accel_long_min_mps2": None})
+    ) == "ego pose"
+
+
+def test_graph_node_label_scene_uses_its_name() -> None:
+    assert graph_node_label(_node("scene:abc123", "Scene", True, {"name": "scene-1084"})) == "scene-1084"
+    assert graph_node_label(_node("scene:abc123", "Scene", True, {})) == "scene"
+
+
+def test_graph_node_label_sample_marks_the_event_frame() -> None:
+    """Three Sample nodes share a subgraph (prev/current/next) -- the on_path one is
+    THE event's frame, and the only one a viewer needs to pick out."""
+    assert graph_node_label(_node("sample:abc123", "Sample", True, {})) == "sample (t)"
+    assert graph_node_label(_node("sample:def456", "Sample", False, {})) == "sample"
+
+
+def test_graph_node_label_category_and_location_keep_their_full_tail() -> None:
+    """(item I4) The id tail IS the name for these two -- truncating its HEAD made
+    every human.pedestrian.* category render identically."""
+    adult = _node("category:human.pedestrian.adult", "Category", True, {})
+    worker = _node("category:human.pedestrian.construction_worker", "Category", False, {})
+    assert graph_node_label(adult) == "human.pedestrian.adult"
+    assert graph_node_label(worker) == "human.pedestrian.construction_worker"
+    assert graph_node_label(adult) != graph_node_label(worker)
+    location = _node("location:singapore-hollandvillage", "Location", False, {})
+    assert graph_node_label(location) == "singapore-hollandvillage"
+
+
+def test_graph_node_label_unknown_type_falls_back_to_the_label() -> None:
+    assert graph_node_label(_node("thing:abc123", "SomethingElse", False, {})) == "SomethingElse"
+
+
+def test_parity_caption_pluralizes_keyframe_on_count() -> None:
+    """(item 6, Phase 6 follow-up review) "keyframe" singular only for
+    sql_count == 1; plural for every other count, including 0."""
+    assert parity_caption(1, 1, True, 1) == "1 matching keyframe dataset-wide — Cypher 1 · SQL 1 ✓"
+    assert (
+        parity_caption(5, 5, True, 1)
+        == "5 matching keyframes dataset-wide — Cypher 5 · SQL 5 ✓ · showing the top 1"
+    )
+    assert parity_caption(0, 0, True, 0) == "0 matching keyframes dataset-wide — Cypher 0 · SQL 0 ✓"
+
+
+def test_parity_caption_omits_showing_the_top_clause_when_nothing_was_cut() -> None:
+    """The " · showing the top N" clause appears only when the grid actually
+    truncated the full population (n_shown < sql_count) -- suppressed when
+    n_shown == sql_count (nothing cut) and, defensively, when n_shown somehow
+    exceeds sql_count too."""
+    assert parity_caption(30, 30, True, 30) == "30 matching keyframes dataset-wide — Cypher 30 · SQL 30 ✓"
+    assert (
+        parity_caption(786, 786, True, 30)
+        == "786 matching keyframes dataset-wide — Cypher 786 · SQL 786 ✓ · showing the top 30"
+    )
+
+
+def test_parity_caption_mismatch_text_replaces_the_symbol() -> None:
+    """A recorded mismatch (parity is False) folds "✗ mismatch recorded" into the
+    string ahead of the "showing the top" clause, rather than drawing a ✓/✗
+    symbol (item M4, Phase 6 review: a finding, not small print)."""
+    assert (
+        parity_caption(5, 4, False, 1)
+        == "5 matching keyframes dataset-wide — Cypher 4 · SQL 5 ✗ mismatch recorded · showing the top 1"
+    )
+    assert (
+        parity_caption(1, 2, False, 1)
+        == "1 matching keyframe dataset-wide — Cypher 2 · SQL 1 ✗ mismatch recorded"
+    )
+
+
+def test_parity_caption_parity_none_draws_no_symbol() -> None:
+    """parity is None (never reached for a dynamics preset in practice -- model
+    presets never call this) draws no ✓/✗ symbol at all, rather than being
+    called a mismatch by default."""
+    assert parity_caption(3, None, None, 1) == "3 matching keyframes dataset-wide — Cypher None · SQL 3 · showing the top 1"

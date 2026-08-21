@@ -504,13 +504,17 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
-    assert manifest["package_version"] == "0.4"
+    assert manifest["package_version"] == "0.5"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
     config = _stage_and_pick_hero(build_config)
+    # Phase 6 (item M9, review): the graph-subgraph group is staged here too, so
+    # byte-identical rebuilds are pinned WITH it present -- the copied
+    # graph_subgraphs/*.json are package outputs like any other.
+    _stage_subgraphs(Path(config["curation"]["staging_dir"]))
     out = Path(config["paths"]["out_dir"])
     run_build(build_config)
     first = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
@@ -1269,3 +1273,184 @@ def test_build_rejects_malformed_staged_semsearch_before_copying(build_config: P
 
     out = Path(config["paths"]["out_dir"])
     assert not (out / "semantic_search_results.parquet").exists()
+
+
+# --- Phase 6: graph subgraph export (Task 2) -------------------------------------
+
+_SUBGRAPH_PRESETS = (
+    "hard_braking_near_pedestrians",
+    "night_pedestrians",
+    "fast_cyclists",
+    "rain_vru",
+    "fn_pedestrians_night",
+    "low_conf_braking",
+)
+
+
+def _stage_subgraphs(
+    staging_dir: Path,
+    *,
+    flagship_cypher_count: int = 1,
+    omit: tuple[str, ...] = (),
+    flagship_event_tokens: tuple[str, ...] = ("s1",),
+) -> None:
+    """Stage six tiny ``graph_subgraphs/<preset>.json`` files under ``staging_dir``.
+
+    Mirrors ``demo subgraph_export.export_subgraphs``'s real output shape (top-level
+    keys: preset, count_cypher, sql_count, cypher_count, parity, note?, events)
+    closely enough for ``_include_subgraphs``'s copy/hash/flagship-read logic to
+    exercise, without a live Neo4j connection -- the exporter itself (Cypher text,
+    assembly, live parity) is Task 1's own coverage (tests/test_demo_subgraphs.py).
+    ``flagship_cypher_count`` controls the flagship preset's ``cypher_count`` --
+    the one value ``_include_subgraphs`` actually reads, for the overview patch and
+    the sql==cypher assertion. ``omit`` skips writing named presets, to exercise
+    the partial-staging ValueError path.
+
+    The ``events`` KEYS matter too since the stale-staging guard (item M2, Phase 6
+    review): they must be exactly the tokens this build's own events frame ranks
+    for that preset. ``tiny_inputs`` tags exactly one event -- "s1", the flagship's
+    (hard braking + a pedestrian at 5m) -- and nothing at all for the other five
+    presets, so that is what ``flagship_event_tokens`` defaults to.
+    ``flagship_event_tokens`` can be pointed at a token the events frame does NOT
+    rank, to exercise that guard.
+    """
+    out = staging_dir / "graph_subgraphs"
+    out.mkdir(parents=True, exist_ok=True)
+    empty_subgraph = {"nodes": [], "edges": [], "path": []}
+    for preset in _SUBGRAPH_PRESETS:
+        if preset in omit:
+            continue
+        is_flagship = preset == "hard_braking_near_pedestrians"
+        cypher_count = flagship_cypher_count if is_flagship else 1
+        payload: dict[str, Any] = {
+            "preset": preset,
+            "count_cypher": "MATCH (n) RETURN count(n)",
+            "sql_count": 1,
+            "cypher_count": cypher_count,
+            "parity": cypher_count == 1,
+            "events": (
+                {token: empty_subgraph for token in flagship_event_tokens}
+                if is_flagship
+                else {}
+            ),
+        }
+        (out / f"{preset}.json").write_text(json.dumps(payload, sort_keys=True, indent=2))
+
+
+def test_build_includes_subgraphs_when_staged(build_config: Path) -> None:
+    """A fully-staged graph_subgraphs/ dir (all six presets) is copied into the
+    package, hashed as an input, and the flagship's computed Cypher count both
+    patches overview_metrics.json and passes the sql==cypher assertion (build_
+    config's flagship expected_sql_count is 1, matching this fixture's default
+    flagship_cypher_count=1)."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    _stage_subgraphs(staging, flagship_cypher_count=1)
+
+    manifest = run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    for preset in _SUBGRAPH_PRESETS:
+        assert (out / "graph_subgraphs" / f"{preset}.json").is_file()
+        assert (staging / "graph_subgraphs" / f"{preset}.json").is_file()  # staging untouched
+
+    assert manifest["validation"]["subgraphs"] == "included"
+    assert manifest["validation"]["flagship_cypher"] == 1
+
+    hashed_names = {Path(key).name for key in manifest["inputs"]}
+    for preset in _SUBGRAPH_PRESETS:
+        assert f"{preset}.json" in hashed_names
+
+    overview = json.loads((out / "overview_metrics.json").read_text())
+    assert overview["flagship"]["cypher"] == 1
+    assert overview["flagship"]["cypher_source"] == "computed (neo4j, demo subgraphs)"
+
+
+def test_build_raises_on_subgraph_flagship_parity_mismatch(build_config: Path) -> None:
+    """The flagship's computed Cypher count disagreeing with the SQL count (== the
+    plan's headline "the SQL and Cypher counts agree" claim) must fail the build
+    loudly, naming both counts -- never silently publish a mismatched claim."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    _stage_subgraphs(staging, flagship_cypher_count=2)  # sql count is 1 -- mismatch
+
+    with pytest.raises(ValueError, match=r"(?s)1.*2|2.*1"):
+        run_build(build_config)
+
+
+def test_build_notes_absent_subgraphs(build_config: Path) -> None:
+    """No `demo subgraphs` staging (build_config's default) must not fail the
+    build -- mirrors _include_semsearch's own absent-staging fallback -- and the
+    overview's flagship Cypher stays the sourced value/label exactly as before
+    (the Phase-1 contract, unchanged by this phase when there's nothing to
+    compute)."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    manifest = run_build(build_config)
+
+    assert manifest["validation"]["subgraphs"] == "absent"
+    assert "flagship_cypher" not in manifest["validation"]
+    out = Path(yaml.safe_load(build_config.read_text())["paths"]["out_dir"])
+    assert not (out / "graph_subgraphs").exists()
+
+    overview = json.loads((out / "overview_metrics.json").read_text())
+    assert overview["flagship"]["cypher"] == 30           # build_config's sourced value
+    assert overview["flagship"]["cypher_source"] == "docs/GRAPH.md"
+
+
+def test_build_raises_named_error_on_partial_subgraph_staging(build_config: Path) -> None:
+    """A graph_subgraphs/ dir with only SOME of the six presets (`demo subgraphs`
+    interrupted mid-run, or a stale partial staging from before a preset existed)
+    is an operator mid-flow state, same rationale as _include_curation's own
+    partial-staging ValueError -- it must not be silently treated as "absent"
+    (hiding the mistake) nor silently shipped partial (a page some presets can't
+    render for). The error must name the missing preset."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    _stage_subgraphs(staging, omit=("rain_vru",))
+
+    with pytest.raises(ValueError, match="rain_vru"):
+        run_build(build_config)
+
+
+def test_build_raises_on_stale_subgraph_staging(build_config: Path) -> None:
+    """A staging dir holding all six presets but subgraphs for the WRONG events (a
+    `demo subgraphs` run from before the processed tables/presets changed) must fail
+    the build naming the preset, not ship a package whose graph panel silently shows
+    the honest-but-avoidable "no subgraph staged for this event" note on every card.
+
+    tiny_inputs ranks exactly one flagship event ("s1"); staging a subgraph for some
+    other token instead is exactly the stale case.
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    _stage_subgraphs(staging, flagship_event_tokens=("a_token_from_a_previous_run",))
+
+    with pytest.raises(ValueError, match="hard_braking_near_pedestrians") as excinfo:
+        run_build(build_config)
+    assert "demo subgraphs" in str(excinfo.value)
+
+
+def test_build_accepts_subgraph_staging_matching_the_events_frame(build_config: Path) -> None:
+    """The other side of the stale guard: staging keyed by exactly the tokens this
+    build's events frame ranks (the default helper shape) builds cleanly, and the
+    package's flagship JSON really does carry that event's subgraph."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    _stage_subgraphs(Path(config["curation"]["staging_dir"]))
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["subgraphs"] == "included"
+
+    out = Path(config["paths"]["out_dir"])
+    shipped = json.loads((out / "graph_subgraphs" / "hard_braking_near_pedestrians.json").read_text())
+    assert set(shipped["events"]) == {"s1"}
