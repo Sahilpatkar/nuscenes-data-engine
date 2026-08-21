@@ -346,7 +346,17 @@ def _include_events(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     # nothing is actually capped away, but the manifest key's own meaning should
     # not depend on that coincidence holding forever).
     flagship_events = config["flagship"]["expected_sql_count"]
-    return {"events": "included", "flagship_events": flagship_events, "n_events": len(events)}
+    # "frame" carries the events DataFrame itself (not a manifest scalar like the
+    # other three keys): _include_subgraphs needs it to check the staged subgraphs
+    # are keyed by THIS build's events, not a stale earlier run's (item M2, Phase 6
+    # review). run_build reads the manifest keys by name, so it never leaks into
+    # manifest.json.
+    return {
+        "events": "included",
+        "flagship_events": flagship_events,
+        "n_events": len(events),
+        "frame": events,
+    }
 
 
 _SEMSEARCH_COLUMNS = ("query", "rank", "sample_data_token", "score", "k")
@@ -415,7 +425,9 @@ def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
     return "included"
 
 
-def _include_subgraphs(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
+def _include_subgraphs(
+    config: dict[str, Any], out_dir: Path, events: pd.DataFrame | None = None
+) -> dict[str, Any]:
     """Copy the staged graph-subgraph export into the package, or note its absence.
 
     Neo4j is an OPERATIONAL dependency (spec §1) — same rationale as
@@ -432,6 +444,20 @@ def _include_subgraphs(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     same rationale as ``_include_curation``'s partial-staging ``ValueError`` — it
     must not be silently swallowed into "absent" (hiding the mistake) nor silently
     shipped partial (a page some presets can't render for).
+
+    A staging dir holding all six files but subgraphs for the WRONG EVENTS is a
+    third case, and the one an operator actually hits (item M2, Phase 6 review):
+    ``demo subgraphs`` exports one subgraph per event its own ``build_events`` run
+    tagged, so any change to the processed tables or the preset thresholds between
+    that run and this build leaves the staging keyed by events this package no
+    longer ships (and missing the ones it does). Nothing downstream would fail —
+    the page just shows "no subgraph staged for this event" on every card — so it
+    is checked here, per preset, against ``events``: the tokens this build's own
+    events frame ranks for that preset (a non-null ``preset_rank_<preset>``, which
+    is exactly the ``preset in preset_tags`` rule ``export_subgraphs`` itself picks
+    its event tokens by — both are written from the same post-cap kept-mask in
+    events.py::build_events). ``events`` is ``None`` only for a caller that built no
+    events frame at all, and then the check is skipped rather than guessed at.
 
     When fully staged, all six preset JSONs are copied verbatim (they are already
     the exact package-ready shape ``subgraph_export.export_subgraphs`` wrote) and the
@@ -464,15 +490,34 @@ def _include_subgraphs(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
             f"preset(s) {missing} — re-run `demo subgraphs` (see docs/GRAPH.md)"
         )
 
+    payloads = {
+        preset: json.loads((staging_dir / f"{preset}.json").read_text())
+        for preset in _SUBGRAPH_PRESETS
+    }
+    if events is not None:
+        for preset in _SUBGRAPH_PRESETS:
+            rank_column = f"preset_rank_{preset}"
+            expected = set(events.loc[events[rank_column].notna(), "sample_data_token"])
+            staged = set(payloads[preset].get("events", {}))
+            if staged != expected:
+                raise ValueError(
+                    f"demo build: graph_subgraphs staging at {staging_dir} is stale for "
+                    f"preset {preset!r} — it holds {len(staged)} event subgraph(s) but "
+                    f"this build's events frame ranks {len(expected)} "
+                    f"(missing {sorted(expected - staged)[:3]}, "
+                    f"unexpected {sorted(staged - expected)[:3]}) — re-run "
+                    "`demo subgraphs` (see docs/GRAPH.md)"
+                )
+
     dest_dir = out_dir / "graph_subgraphs"
     dest_dir.mkdir(parents=True, exist_ok=True)
     for preset in _SUBGRAPH_PRESETS:
         shutil.copy2(staging_dir / f"{preset}.json", dest_dir / f"{preset}.json")
 
-    flagship_payload = json.loads(
-        (staging_dir / "hard_braking_near_pedestrians.json").read_text()
-    )
-    return {"status": "included", "flagship_cypher": flagship_payload["cypher_count"]}
+    return {
+        "status": "included",
+        "flagship_cypher": payloads["hard_braking_near_pedestrians"]["cypher_count"],
+    }
 
 
 def run_build(config_path: Path) -> dict[str, Any]:
@@ -583,7 +628,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # is asserted equal to the flagship SQL count already validated a few lines up
     # (metrics["flagship"]["sql"]) — the plan's headline "the SQL and Cypher counts
     # agree" claim, now for real instead of sourced from docs.
-    subgraphs_result = _include_subgraphs(config, out_dir)
+    subgraphs_result = _include_subgraphs(config, out_dir, events_result["frame"])
     if subgraphs_result["status"] == "included":
         flagship_cypher = subgraphs_result["flagship_cypher"]
         flagship_sql = metrics["flagship"]["sql"]

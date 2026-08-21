@@ -237,6 +237,63 @@ def test_event_subgraph_assembly_from_fake_records() -> None:
     assert ("object:ped-near-1", "category:human.pedestrian.adult", "OF_CATEGORY") in edge_labels
 
 
+def test_matching_objects_are_distance_ordered_in_path_and_edges() -> None:
+    """Matching (on_path) objects must be NEAREST-first in ``path``/``edges``,
+    whatever order the driver's rows arrived in.
+
+    The page reads ``path[1]`` for its "why this event" narrative and each card's
+    caption quotes the NEAREST matching object -- so a Neo4j row order that isn't
+    distance order makes the two disagree (31/120 real cards did). Non-matching
+    objects were already distance-sorted (the 12-nearest cap needs it); matching
+    ones were appended in raw row order.
+    """
+    sample = {"token": "smp1", "timestamp": 1000}
+    scene = {
+        "token": "scn1", "name": "scene-0001", "location": "boston-seaport",
+        "is_night": True, "is_rain": False,
+    }
+    ego = {
+        "token": "ego1", "speed_mps": 12.0, "accel_long_min_mps2": -4.5,
+        "is_hard_braking": True, "can_speed_kmh": 43.2,
+    }
+    # Deliberately NOT distance-ordered, and each with its own Category so every
+    # matching object contributes its own path chain.
+    arrivals = [
+        (_obj("ped-mid", "human.pedestrian.adult", "pedestrian", 5.7),
+         _cat("human.pedestrian.adult", "pedestrian")),
+        (_obj("ped-far", "human.pedestrian.child", "pedestrian", 8.4),
+         _cat("human.pedestrian.child", "pedestrian")),
+        (_obj("ped-near", "human.pedestrian.police_officer", "pedestrian", 2.1),
+         _cat("human.pedestrian.police_officer", "pedestrian")),
+    ]
+    records = [
+        {
+            "sample": sample, "scene": scene, "location": {"name": "boston-seaport"},
+            "ego": ego, "prev_token": None, "next_token": None,
+            "object": obj, "category": cat,
+        }
+        for obj, cat in arrivals
+    ]
+
+    result = assemble_subgraph(
+        records, preset="hard_braking_near_pedestrians", thresholds=PRESETS_THRESHOLDS,
+    )
+    by_id = {n["id"]: n for n in result["nodes"]}
+    object_chains = result["path"][1:]
+
+    # path[1] is the NEAREST matching object -- the one the card caption quotes.
+    assert object_chains[0][1] == "object:ped-near"
+    distances = [by_id[chain[1]]["meta"]["distance_to_ego_m"] for chain in object_chains]
+    assert distances == [2.1, 5.7, 8.4]
+    assert distances == sorted(distances)
+
+    # ...and the edge list follows the same order (deterministic by construction).
+    has_object_targets = [
+        edge["target"] for edge in result["edges"] if edge["label"] == "HAS_OBJECT"
+    ]
+    assert has_object_targets == ["object:ped-near", "object:ped-mid", "object:ped-far"]
+
+
 def test_assemble_subgraph_empty_records_returns_empty_shape() -> None:
     assert assemble_subgraph([], preset="hard_braking_near_pedestrians", thresholds=PRESETS_THRESHOLDS) == {
         "nodes": [], "edges": [], "path": [],

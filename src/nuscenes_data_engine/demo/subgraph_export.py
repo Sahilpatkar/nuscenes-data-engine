@@ -210,13 +210,16 @@ def assemble_subgraph(
     lowercased label otherwise), deduped by ``id``. Edges: ``{source, target,
     label}`` referencing only ids already added. ``path``: a list of ordered id
     chains — ``[scene, sample, egopose]`` (the backbone) plus one
-    ``[sample, object, category]`` chain per matching (``on_path``) object.
+    ``[sample, object, category]`` chain per matching (``on_path``) object,
+    NEAREST FIRST -- ``path[1]`` is the nearest matching object, the same one the
+    Scenario card's caption quotes.
 
     Only Scene/Sample/EgoPose and the matching objects (+ their Category) are
     ``on_path``; Location and the prev/next temporal-context Samples are always
-    off-path context. Non-matching objects are capped to the ``cap_other`` nearest
-    by ``distance_to_ego_m`` (ties broken by token, deterministic) so a crowded
-    frame stays legible; their Categories are included too, also off-path.
+    off-path context. BOTH object lists are sorted by ``distance_to_ego_m`` (ties
+    broken by token, deterministic); the non-matching one is additionally capped to
+    the ``cap_other`` nearest so a crowded frame stays legible; their Categories are
+    included too, also off-path.
     """
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, str]] = []
@@ -336,6 +339,12 @@ def assemble_subgraph(
         dist = objects[token].get("distance_to_ego_m")
         return (float(dist) if dist is not None else float("inf"), token)
 
+    # BOTH lists are distance-sorted, not just the capped one: the page reads
+    # `path[1]` for its "why this event" narrative and each Scenario card quotes the
+    # NEAREST matching object, so appending matching objects in raw Neo4j row order
+    # made the two disagree on 31/120 real cards. Sorting here also makes the edge
+    # order deterministic by construction rather than by driver row order.
+    matching.sort(key=_distance_key)
     non_matching.sort(key=_distance_key)
     kept_non_matching = non_matching[:cap_other]
 

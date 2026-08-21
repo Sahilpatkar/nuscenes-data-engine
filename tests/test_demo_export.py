@@ -511,6 +511,10 @@ def test_build_is_deterministic(build_config: Path) -> None:
     from nuscenes_data_engine.demo.build import run_build
 
     config = _stage_and_pick_hero(build_config)
+    # Phase 6 (item M9, review): the graph-subgraph group is staged here too, so
+    # byte-identical rebuilds are pinned WITH it present -- the copied
+    # graph_subgraphs/*.json are package outputs like any other.
+    _stage_subgraphs(Path(config["curation"]["staging_dir"]))
     out = Path(config["paths"]["out_dir"])
     run_build(build_config)
     first = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
@@ -1284,7 +1288,11 @@ _SUBGRAPH_PRESETS = (
 
 
 def _stage_subgraphs(
-    staging_dir: Path, *, flagship_cypher_count: int = 1, omit: tuple[str, ...] = ()
+    staging_dir: Path,
+    *,
+    flagship_cypher_count: int = 1,
+    omit: tuple[str, ...] = (),
+    flagship_event_tokens: tuple[str, ...] = ("s1",),
 ) -> None:
     """Stage six tiny ``graph_subgraphs/<preset>.json`` files under ``staging_dir``.
 
@@ -1297,9 +1305,18 @@ def _stage_subgraphs(
     the one value ``_include_subgraphs`` actually reads, for the overview patch and
     the sql==cypher assertion. ``omit`` skips writing named presets, to exercise
     the partial-staging ValueError path.
+
+    The ``events`` KEYS matter too since the stale-staging guard (item M2, Phase 6
+    review): they must be exactly the tokens this build's own events frame ranks
+    for that preset. ``tiny_inputs`` tags exactly one event -- "s1", the flagship's
+    (hard braking + a pedestrian at 5m) -- and nothing at all for the other five
+    presets, so that is what ``flagship_event_tokens`` defaults to.
+    ``flagship_event_tokens`` can be pointed at a token the events frame does NOT
+    rank, to exercise that guard.
     """
     out = staging_dir / "graph_subgraphs"
     out.mkdir(parents=True, exist_ok=True)
+    empty_subgraph = {"nodes": [], "edges": [], "path": []}
     for preset in _SUBGRAPH_PRESETS:
         if preset in omit:
             continue
@@ -1311,7 +1328,11 @@ def _stage_subgraphs(
             "sql_count": 1,
             "cypher_count": cypher_count,
             "parity": cypher_count == 1,
-            "events": {},
+            "events": (
+                {token: empty_subgraph for token in flagship_event_tokens}
+                if is_flagship
+                else {}
+            ),
         }
         (out / f"{preset}.json").write_text(json.dumps(payload, sort_keys=True, indent=2))
 
@@ -1396,3 +1417,40 @@ def test_build_raises_named_error_on_partial_subgraph_staging(build_config: Path
 
     with pytest.raises(ValueError, match="rain_vru"):
         run_build(build_config)
+
+
+def test_build_raises_on_stale_subgraph_staging(build_config: Path) -> None:
+    """A staging dir holding all six presets but subgraphs for the WRONG events (a
+    `demo subgraphs` run from before the processed tables/presets changed) must fail
+    the build naming the preset, not ship a package whose graph panel silently shows
+    the honest-but-avoidable "no subgraph staged for this event" note on every card.
+
+    tiny_inputs ranks exactly one flagship event ("s1"); staging a subgraph for some
+    other token instead is exactly the stale case.
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    staging = Path(config["curation"]["staging_dir"])
+    _stage_subgraphs(staging, flagship_event_tokens=("a_token_from_a_previous_run",))
+
+    with pytest.raises(ValueError, match="hard_braking_near_pedestrians") as excinfo:
+        run_build(build_config)
+    assert "demo subgraphs" in str(excinfo.value)
+
+
+def test_build_accepts_subgraph_staging_matching_the_events_frame(build_config: Path) -> None:
+    """The other side of the stale guard: staging keyed by exactly the tokens this
+    build's events frame ranks (the default helper shape) builds cleanly, and the
+    package's flagship JSON really does carry that event's subgraph."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    _stage_subgraphs(Path(config["curation"]["staging_dir"]))
+
+    manifest = run_build(build_config)
+    assert manifest["validation"]["subgraphs"] == "included"
+
+    out = Path(config["paths"]["out_dir"])
+    shipped = json.loads((out / "graph_subgraphs" / "hard_braking_near_pedestrians.json").read_text())
+    assert set(shipped["events"]) == {"s1"}

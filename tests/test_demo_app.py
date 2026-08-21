@@ -75,9 +75,10 @@ def _stage_subgraphs(staging_dir: Path) -> None:
     and the legend against it, so it needs real nodes/meta/path, not a stub.
     ``assemble_subgraph`` is pure and takes plain dicts ("records", the shape
     ``event_subgraph_cypher()`` rows would have) -- no live Neo4j needed here
-    either. The other five presets' JSONs stay minimal (``events: {}``): no test
-    below opens their graph panel, only their header's parity line/GT-only note,
-    which reads straight off this file's top-level ``sql_count``/``cypher_count``/
+    either. The other four presets' JSONs stay minimal (``events: {}``, which is
+    also exactly what this fixture's events frame ranks for them): no test below
+    opens their graph panel, only their header's parity line/GT-only note, which
+    reads straight off this file's top-level ``sql_count``/``cypher_count``/
     ``parity``/``note`` fields.
 
     ``flagship_records``' shared sample/scene/ego/prev/next columns (repeated
@@ -90,6 +91,13 @@ def _stage_subgraphs(staging_dir: Path) -> None:
     staged for events.py's own flagship tagging, so the narrative's "pedestrian at
     5.00 m" is the SAME 5m distance the card grid/ego panel show elsewhere on this
     page, not a disconnected number.
+
+    "night_pedestrians" gets its own real subgraph for "v1" (the fixture's other
+    tagged event, pedestrian f4 at 7m) for the same reason the flagship does, and
+    because ``build.py::_include_subgraphs``' stale-staging guard (item M2, Phase 6
+    review) requires every preset's staged ``events`` keys to be EXACTLY the tokens
+    this build's events frame ranks for it -- "v1" for night_pedestrians, "s1" for
+    the flagship, nothing for the other four.
     """
     from nuscenes_data_engine.demo.subgraph_export import assemble_subgraph
 
@@ -136,16 +144,47 @@ def _stage_subgraphs(staging_dir: Path) -> None:
         thresholds={"near_dist_m": 10.0, "high_speed_mps": 10.0},
     )
 
+    night_records = [
+        {
+            "sample": {"token": "v1", "timestamp": 1001},
+            "scene": {
+                "token": "sceneX", "name": "scene-X", "location": "boston-seaport",
+                "is_night": True, "is_rain": False,
+            },
+            "location": {"name": "boston-seaport"},
+            "ego": {
+                "token": "v1", "speed_mps": 4.9, "accel_long_min_mps2": -0.5,
+                "is_hard_braking": False, "can_speed_kmh": 18.0,
+            },
+            "prev_token": "s1",
+            "next_token": None,
+            "object": {
+                "token": "f4", "category": "human.pedestrian.adult",
+                "distance_to_ego_m": 7.0, "ego_rel_x": 6.0, "ego_rel_y": -2.0,
+                "visibility": "4",
+            },
+            "category": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+        }
+    ]
+    night_subgraph = assemble_subgraph(
+        night_records,
+        preset="night_pedestrians",
+        thresholds={"near_dist_m": 10.0, "high_speed_mps": 10.0},
+    )
+    staged_events = {
+        "hard_braking_near_pedestrians": {"s1": flagship_subgraph},
+        "night_pedestrians": {"v1": night_subgraph},
+    }
+
     for preset in _SUBGRAPH_PRESETS:
         is_model = preset in _SUBGRAPH_MODEL_PRESETS
-        is_flagship = preset == "hard_braking_near_pedestrians"
         payload: dict[str, Any] = {
             "preset": preset,
             "count_cypher": None if is_model else "MATCH (n) RETURN count(n)",
             "sql_count": 1,
             "cypher_count": None if is_model else 1,
             "parity": None if is_model else True,
-            "events": {"s1": flagship_subgraph} if is_flagship else {},
+            "events": staged_events.get(preset, {}),
         }
         if is_model:
             payload["note"] = "the model verdict is not in the graph"
