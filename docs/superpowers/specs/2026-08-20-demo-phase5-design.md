@@ -85,3 +85,11 @@ Interactive graph rendering (Phase 6 — the page leaves a labelled slot for it)
 scenario BUILDER with arbitrary filters (deferred per the master plan; presets
 only); live semantic search in the public app; any new inference or rsync
 (events use existing GT/predictions; semsearch uses the local store).
+
+**Amendment (2026-08-20, consolidated review):** event cards show ONE severity
+figure — the preset's own ranking quantity (braking g for the flagship, nearest
+VRU for rain, speed for cyclists, missed-pedestrian distance for the FN preset)
+— plus night/rain badges and the model verdict, instead of §2's literal
+"braking g + min pedestrian distance + speed" on every card. Showing pedestrian
+distance on a cyclist preset was misleading; the page shows what each preset
+ranks by. Braking is labelled braking only when the acceleration is negative.

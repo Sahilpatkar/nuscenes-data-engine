@@ -29,7 +29,7 @@ output, row counts). It **fails loudly** — no manifest is written — if:
   SQL/Cypher parity number),
 - the documented weak-retention headline (the `random` pair) is missing from
   `results.json`, or
-- the package exceeds the size budget (100 MB; currently 20.06 MB).
+- the package exceeds the size budget (100 MB; currently 22.98 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -66,9 +66,9 @@ manifest always names the commit it was built from, not the one that carries it.
 | `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
-| `sample_frames/thumbs/` | 612 × 256×144 LanceDB thumbnails (250 curated + 362 for events, filmstrip neighbors, semsearch) |
+| `sample_frames/thumbs/` | 617 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch) |
 | `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set` |
-| `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, token, score) |
+| `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, sample_data_token, score, k — k drives the gallery's "n of k" caption) |
 
 ## Picking the hero token
 
@@ -161,8 +161,8 @@ near pedestrians — the flagship, asserted at exactly 30 during `demo build` an
 shown with the SQL/Cypher parity badge read from `overview_metrics.json`; night
 pedestrians; fast cyclists; rain VRUs) and **model-result presets** over the 125
 curated val frames only, because that is where predictions exist (false-negative
-pedestrians at night: 4; low-confidence detections during braking: 2 — small-N
-stated on the page). Each preset caps at 30 ranked by its own severity (cards show
+pedestrians at night: 4; low-confidence detections during braking: 2 — the
+scope is stated on the page; the N is the card count). Each preset caps at 30 ranked by its own severity (cards show
 that quantity; braking is only called braking when the acceleration is negative).
 The **event viewer** renders curated events through the Phase-3 overlay renderer and
 non-curated ones as GT-only thumbnails with an explicit "not in the curated

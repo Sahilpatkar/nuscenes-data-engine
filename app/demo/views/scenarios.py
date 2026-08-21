@@ -71,7 +71,7 @@ PRESETS: dict[str, _Preset] = {
     },
     "fast_cyclists": {
         "label": "Nearby cyclists at speed",
-        "description": "A cyclist within 10m while driving at highway speed.",
+        "description": "A cyclist within 10m while driving above 10 m/s (~36 km/h).",
         "family": "dynamics",
         "scope_caption": _DYNAMICS_SCOPE,
         "severity_caption": "Ranked by fastest ego speed first.",
@@ -127,11 +127,13 @@ def _gt_for_render(gt: pd.DataFrame, token: str) -> pd.DataFrame:
     """``gt_boxes`` rows for ``token``, visibility-floor rows dropped, ``matched_
     <model>`` renamed to ``matched`` for ``draw_overlay``.
 
-    Safe to call for a NON-curated token too: ``gt_boxes.parquet`` only ever
-    contains rows for curated frame_manifest tokens (``build.py::_include_
-    curation``), so a non-curated token always yields zero rows here -- an empty
-    frame ``draw_overlay`` renders as "no GT boxes", exactly the honest picture for
-    a token with no curated ground truth to show.
+    Safe to call for a NON-curated token too. ``gt_boxes.parquet`` covers every
+    curated frame_manifest token -- val AND train_pool -- while ``in_curated_set``
+    is val-only, so a non-curated event usually yields zero rows, but a curated
+    train_pool frame (14 of the 119 non-curated events in the shipped package)
+    yields its GT with ``matched`` all-NA, which ``draw_overlay`` renders as plain
+    GT boxes (never as misses). Predictions are val-only, so the "not in the
+    curated prediction set" caption stays honest in both cases.
     """
     subset = gt.loc[gt["sample_data_token"] == token]
     subset = subset.loc[~subset["below_visibility_min"]]
@@ -205,11 +207,11 @@ def _render_viewer(row: pd.Series) -> None:
 
     thumb = thumb_path(token)
     if thumb.is_file():
-        # GT boxes only (no predictions exist for a non-curated token): `gt` is
-        # always empty here (see _gt_for_render's docstring), so this renders as
-        # the plain thumb -- still routed through draw_overlay, not a special
-        # case, so a future token that DOES somehow have curated-scoped GT rows
-        # (there is none today) draws correctly rather than being silently
+        # GT boxes only (no predictions exist for a non-curated token). `gt` is
+        # empty unless the token is a curated train_pool frame, in which case its
+        # GT draws with matched all-NA (plain green, never orange) -- see
+        # _gt_for_render's docstring. Routed through draw_overlay either way so
+        # those frames' GT is shown rather than being silently
         # skipped by a hand-rolled bypass.
         image = draw_overlay(Image.open(thumb), gt, pd.DataFrame(), mode="gt", scale=0.16)
         st.image(image)
@@ -316,7 +318,7 @@ def _render_filmstrip(row: pd.Series) -> None:
     _step_token, step_speed, step_accel = by_label[selected_label]
     speed_text = speed_caption(step_speed)
     accel_text = f"{step_accel:.2f} m/s²" if pd.notna(step_accel) else "n/a"
-    st.caption(f"{selected_label}: speed {speed_text}, accel {accel_text}")
+    st.caption(f"{selected_label}: {speed_text}, accel {accel_text}")
 
 
 def _render_semantic_gallery() -> None:
