@@ -107,7 +107,9 @@ contributor guardrail, not a sandbox (a dynamic `importlib` call would slip past
 Strict mypy also covers `app/demo` (see `[tool.mypy] files` in `pyproject.toml`) —
 that's real type-checking of the app code, not an import-policing mechanism. Its full
 dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
-(streamlit, pandas, pyarrow, pillow). Bare-venv smoke check:
+(streamlit, pandas, pyarrow, pillow, streamlit-agraph — the latter imported lazily
+inside the graph panel, so its absence degrades to a warning, not a crash). Bare-venv
+smoke check:
 
 ```bash
 uv venv "$TMPDIR/demo-venv" --python 3.11
