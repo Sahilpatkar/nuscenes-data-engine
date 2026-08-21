@@ -72,38 +72,109 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
     pd.DataFrame(
         {"sample_token": ["s1", "s2"], "speed_mps": [10.1, 4.9]}
     ).to_parquet(processed / "ego_pose.parquet")
+    # Phase 7 (Task 1): every arm carries night.per_class/precision/recall and
+    # slices (day/rain/clear mAP50-95) -- the shape a well-formed results.json has
+    # in production (see the plan's "Verified facts") -- plus n_boxes on the two
+    # weak arms only, matching the real file. round_order is the insertion order
+    # below (baseline=0, random=1, weak_random=2, graph_rate_night=3,
+    # weak_graph_rate_night=4); the arm-family reshape is order-independent so the
+    # arms don't need to be re-ordered to match results.json's real 13-arm order.
     (al / "results.json").write_text(
         json.dumps(
             {
                 "baseline": {
                     "n_train_images": 100,
-                    "overall": {"mAP50-95": 0.20},
-                    "night": {"mAP50-95": 0.10},
+                    "overall": {"mAP50-95": 0.20, "mAP50": 0.35},
+                    "night": {
+                        "mAP50-95": 0.10, "mAP50": 0.18, "precision": 0.50, "recall": 0.40,
+                        "per_class": {"pedestrian": 0.0826},
+                    },
+                    "slices": {
+                        "time_of_day/day": {"mAP50-95": 0.22},
+                        "weather/rain": {"mAP50-95": 0.15},
+                        "weather/clear": {"mAP50-95": 0.21},
+                    },
                 },
                 "random": {
                     "n_train_images": 115,
-                    "overall": {"mAP50-95": 0.21},
-                    "night": {"mAP50-95": 0.099},
+                    "overall": {"mAP50-95": 0.21, "mAP50": 0.36},
+                    "night": {
+                        "mAP50-95": 0.099, "mAP50": 0.17, "precision": 0.51, "recall": 0.41,
+                        "per_class": {"pedestrian": 0.081},
+                    },
+                    "slices": {
+                        "time_of_day/day": {"mAP50-95": 0.23},
+                        "weather/rain": {"mAP50-95": 0.155},
+                        "weather/clear": {"mAP50-95": 0.215},
+                    },
                 },
                 "weak_random": {
                     "n_train_images": 110,
-                    "overall": {"mAP50-95": 0.2018},
-                    "night": {"mAP50-95": 0.095},
+                    "overall": {"mAP50-95": 0.2018, "mAP50": 0.34},
+                    "night": {
+                        "mAP50-95": 0.095, "mAP50": 0.16, "precision": 0.49, "recall": 0.39,
+                        "per_class": {"pedestrian": 0.06},
+                    },
+                    "slices": {
+                        "time_of_day/day": {"mAP50-95": 0.21},
+                        "weather/rain": {"mAP50-95": 0.14},
+                        "weather/clear": {"mAP50-95": 0.20},
+                    },
+                    "n_boxes": 1942,
                 },
                 "graph_rate_night": {
                     "n_train_images": 130,
-                    "overall": {"mAP50-95": 0.22},
-                    "night": {"mAP50-95": 0.1101},
+                    "overall": {"mAP50-95": 0.22, "mAP50": 0.38},
+                    "night": {
+                        "mAP50-95": 0.1101, "mAP50": 0.20, "precision": 0.55, "recall": 0.45,
+                        "per_class": {"pedestrian": 0.1171},
+                    },
+                    "slices": {
+                        "time_of_day/day": {"mAP50-95": 0.25},
+                        "weather/rain": {"mAP50-95": 0.18},
+                        "weather/clear": {"mAP50-95": 0.24},
+                    },
                 },
                 "weak_graph_rate_night": {
                     "n_train_images": 122,
-                    "overall": {"mAP50-95": 0.205},
-                    "night": {"mAP50-95": 0.09},
+                    "overall": {"mAP50-95": 0.205, "mAP50": 0.35},
+                    "night": {
+                        "mAP50-95": 0.09, "mAP50": 0.16, "precision": 0.48, "recall": 0.38,
+                        "per_class": {"pedestrian": 0.0203},
+                    },
+                    "slices": {
+                        "time_of_day/day": {"mAP50-95": 0.20},
+                        "weather/rain": {"mAP50-95": 0.13},
+                        "weather/clear": {"mAP50-95": 0.19},
+                    },
+                    "n_boxes": 1500,
                 },
             }
         )
     )
-    return {"processed": processed, "al": al}
+    # Phase 7 (Task 1): al_communities.parquet's inputs -- 2 communities whose
+    # quotas each sum to n_mine=3 (the AL config below), identical size/mass/
+    # night_members across both arms' files (only quota differs, matching the real
+    # communities_graph_rate*.json pair).
+    for arm, quotas in (("graph_rate", [2, 1]), ("graph_rate_night", [1, 2])):
+        records = [
+            {"community": 0, "size": 10, "mass": 5.0, "night_members": 2, "quota": quotas[0]},
+            {"community": 1, "size": 8, "mass": 3.0, "night_members": 1, "quota": quotas[1]},
+        ]
+        (al / f"communities_{arm}.json").write_text(json.dumps(records))
+    al_config = tmp_path / "active_learning.yaml"
+    al_config.write_text(yaml.safe_dump({"mining": {"n_mine": 3}}))
+    # Phase 7 (Task 1): weak_verdict/al_selected_by's arm parquets -- weak_arm ==
+    # al_arm == "graph_rate_night" in every fixture here (matches configs/demo.yaml
+    # today), so one candidate/accepted/selected trio covers both roles. "v0" is
+    # the token every curation-staging helper below curates, so it comes out
+    # weak_verdict="accepted" (in both the candidate pool and accepted) and
+    # al_selected_by="graph_rate_night" (in the selected set).
+    pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(al / "graph_rate_night.parquet")
+    pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(
+        al / "graph_rate_night_accepted.parquet"
+    )
+    return {"processed": processed, "al": al, "al_config": al_config}
 
 
 def test_export_overview_derives_every_number(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
@@ -177,17 +248,26 @@ def test_export_overview_missing_input_raises(tmp_path: Path, tiny_inputs: dict[
         )
 
 
+_AL_RESULTS_COLUMNS = [
+    "arm", "n_train_images", "overall_map5095", "night_map5095",
+    "delta_overall", "delta_night",
+    "round_order", "family", "overall_map50", "night_map50",
+    "night_precision", "night_recall", "night_ped_map5095",
+    "day_map5095", "rain_map5095", "clear_map5095",
+    "n_boxes", "n_scenes", "night_share", "rain_share",
+]
+
+
 def test_export_al_results_reshapes_and_sorts(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
     from nuscenes_data_engine.demo.exporters import export_al_results
 
     out = tmp_path / "demo_data"
-    df = export_al_results(al_dir=tiny_inputs["al"], out_dir=out)
+    df = export_al_results(
+        al_dir=tiny_inputs["al"], out_dir=out, processed_dir=tiny_inputs["processed"]
+    )
     on_disk = pd.read_parquet(out / "active_learning_results.parquet")
     pd.testing.assert_frame_equal(df, on_disk)
-    assert list(df.columns) == [
-        "arm", "n_train_images", "overall_map5095", "night_map5095",
-        "delta_overall", "delta_night",
-    ]
+    assert list(df.columns) == _AL_RESULTS_COLUMNS
     assert list(df["arm"]) == sorted(df["arm"])          # deterministic order
     row = df.set_index("arm").loc["graph_rate_night"]
     assert row["delta_night"] == pytest.approx(0.0101, abs=1e-6)
@@ -201,7 +281,247 @@ def test_export_al_results_missing_results_json_raises(tmp_path: Path) -> None:
     al = tmp_path / "active_learning"
     al.mkdir()
     with pytest.raises(ValueError, match=r"results\.json"):
-        export_al_results(al_dir=al, out_dir=tmp_path / "demo_data")
+        export_al_results(al_dir=al, out_dir=tmp_path / "demo_data", processed_dir=tmp_path)
+
+
+def test_al_results_keeps_round_order_and_family(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    """round_order is results.json's own insertion index (survives the arm-sorted
+    output); family collapses baseline/weak_* and leaves every other arm as its own
+    singleton family (spec §2)."""
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    df = export_al_results(
+        al_dir=tiny_inputs["al"], out_dir=tmp_path / "demo_data",
+        processed_dir=tiny_inputs["processed"],
+    ).set_index("arm")
+    # insertion order in tiny_inputs' results.json: baseline, random, weak_random,
+    # graph_rate_night, weak_graph_rate_night
+    assert df.loc["baseline", "round_order"] == 0
+    assert df.loc["random", "round_order"] == 1
+    assert df.loc["weak_random", "round_order"] == 2
+    assert df.loc["graph_rate_night", "round_order"] == 3
+    assert df.loc["weak_graph_rate_night", "round_order"] == 4
+    assert df.loc["baseline", "family"] == "baseline"
+    assert df.loc["weak_random", "family"] == "weak"
+    assert df.loc["weak_graph_rate_night", "family"] == "weak"
+    assert df.loc["random", "family"] == "random"
+    assert df.loc["graph_rate_night", "family"] == "graph_rate_night"
+
+
+def test_al_results_night_pedestrian_and_slices_are_derived(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    df = export_al_results(
+        al_dir=tiny_inputs["al"], out_dir=tmp_path / "demo_data",
+        processed_dir=tiny_inputs["processed"],
+    ).set_index("arm")
+    grn = df.loc["graph_rate_night"]
+    assert grn["night_ped_map5095"] == pytest.approx(0.1171, abs=1e-6)
+    assert grn["day_map5095"] == pytest.approx(0.25, abs=1e-6)
+    assert grn["rain_map5095"] == pytest.approx(0.18, abs=1e-6)
+    assert grn["clear_map5095"] == pytest.approx(0.24, abs=1e-6)
+    # n_boxes: NA for a non-weak arm, present for the two weak arms.
+    assert pd.isna(df.loc["random", "n_boxes"])
+    assert df.loc["weak_random", "n_boxes"] == 1942
+    assert df.loc["weak_graph_rate_night", "n_boxes"] == 1500
+
+
+def test_al_results_composition_columns_come_from_arm_composition(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    """n_scenes/night_share/rain_share come from active_learning.report.
+    arm_composition for an arm with a token parquet whose tokens actually match
+    samples.parquet (random.parquet here, "s1"/"s2" from tiny_inputs' processed/
+    samples.parquet); an arm whose only matching tokens aren't real samples rows
+    (graph_rate_night.parquet here holds only "v0", the weak_verdict/al_selected_by
+    fixture token, which isn't in samples.parquet) ends up with zero matched rows,
+    so composition has nothing to report and the column is NA -- same outward
+    result as the file being absent entirely. baseline is always NA (arm_
+    composition skips it by design)."""
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    al_dir = tiny_inputs["al"]
+    pd.DataFrame({"sample_data_token": ["s1", "s2"]}).to_parquet(al_dir / "random.parquet")
+
+    df = export_al_results(
+        al_dir=al_dir, out_dir=tmp_path / "demo_data", processed_dir=tiny_inputs["processed"]
+    ).set_index("arm")
+    assert df.loc["random", "n_scenes"] == 1        # s1/s2 both scene-X
+    assert df.loc["random", "night_share"] == pytest.approx(0.0)
+    assert df.loc["random", "rain_share"] == pytest.approx(0.0)
+    assert pd.isna(df.loc["baseline", "n_scenes"])
+    assert pd.isna(df.loc["graph_rate_night", "n_scenes"])
+
+
+def _write_communities(
+    al_dir: Path, *, arm: str, records: list[dict[str, Any]]
+) -> None:
+    (al_dir / f"communities_{arm}.json").write_text(json.dumps(records))
+
+
+def test_al_communities_merges_both_quota_columns_and_checks_sums(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_communities
+
+    out = tmp_path / "demo_data"
+    df = export_al_communities(
+        al_dir=tiny_inputs["al"], out_dir=out,
+        arms=("graph_rate", "graph_rate_night"), n_mine=3,
+    )
+    on_disk = pd.read_parquet(out / "al_communities.parquet")
+    pd.testing.assert_frame_equal(df, on_disk)
+    assert set(df.columns) >= {
+        "community", "size", "night_members", "mass", "quota_graph_rate",
+        "quota_graph_rate_night",
+    }
+    assert list(df["community"]) == sorted(df["community"])
+    assert df["quota_graph_rate"].sum() == 3
+    assert df["quota_graph_rate_night"].sum() == 3
+
+
+def test_al_communities_size_mismatch_raises(tmp_path: Path, tiny_inputs: dict[str, Path]) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_communities
+
+    al_dir = tiny_inputs["al"]
+    records = json.loads((al_dir / "communities_graph_rate.json").read_text())
+    records[0]["size"] = records[0]["size"] + 1     # disagree with the night file
+    _write_communities(al_dir, arm="graph_rate", records=records)
+
+    with pytest.raises(ValueError, match=r"community 0"):
+        export_al_communities(
+            al_dir=al_dir, out_dir=tmp_path / "demo_data",
+            arms=("graph_rate", "graph_rate_night"), n_mine=3,
+        )
+
+
+def test_al_communities_quota_sum_mismatch_raises(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_communities
+
+    with pytest.raises(ValueError, match=r"sums to 3.*n_mine=4"):
+        export_al_communities(
+            al_dir=tiny_inputs["al"], out_dir=tmp_path / "demo_data",
+            arms=("graph_rate", "graph_rate_night"), n_mine=4,
+        )
+
+
+def _write_al_exemplar_inputs(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """A minimal config + manifest + predictions trio for export_al_exemplars: one
+    val token ("good") that satisfies every validation clause."""
+    config = {
+        "al": {"arm": "graph_rate_night", "baseline": "baseline", "exemplar_tokens": ["good"]},
+        "models": {"baseline": {}, "graph_rate_night": {}},
+    }
+    manifest = pd.DataFrame({
+        "sample_data_token": ["good"], "split": ["val"],
+        "fixes_fn_vs_baseline_graph_rate_night": [True],
+    })
+    predictions = pd.DataFrame({
+        "sample_data_token": ["good", "good"],
+        "model": ["baseline", "graph_rate_night"],
+    })
+    return config, manifest, predictions
+
+
+def test_al_exemplars_validation(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.exporters import export_al_exemplars
+
+    config, manifest, predictions = _write_al_exemplar_inputs(tmp_path)
+    out = tmp_path / "demo_data"
+
+    # happy path first, to prove the fixture itself is valid before each failure
+    # variant below mutates one thing at a time.
+    tokens = export_al_exemplars(
+        config=config, manifest=manifest, predictions=predictions, out_dir=out,
+        curation_present=True,
+    )
+    assert tokens == ["good"]
+    on_disk = json.loads((out / "al_exemplars.json").read_text())
+    assert on_disk == {"arm": "graph_rate_night", "baseline": "baseline", "tokens": ["good"]}
+
+    # non-val token
+    bad_config = {**config, "al": {**config["al"], "exemplar_tokens": ["ghost"]}}
+    with pytest.raises(ValueError, match="ghost"):
+        export_al_exemplars(
+            config=bad_config, manifest=manifest, predictions=predictions, out_dir=out,
+            curation_present=True,
+        )
+
+    # fixes_fn flag False
+    flag_false_manifest = manifest.copy()
+    flag_false_manifest["fixes_fn_vs_baseline_graph_rate_night"] = [False]
+    with pytest.raises(ValueError, match="fixes_fn"):
+        export_al_exemplars(
+            config=config, manifest=flag_false_manifest, predictions=predictions, out_dir=out,
+            curation_present=True,
+        )
+
+    # missing predictions for one configured model
+    partial_predictions = predictions.loc[predictions["model"] == "baseline"]
+    with pytest.raises(ValueError, match="graph_rate_night"):
+        export_al_exemplars(
+            config=config, manifest=manifest, predictions=partial_predictions, out_dir=out,
+            curation_present=True,
+        )
+
+    # empty list + curation absent -> ok, writes an empty tokens list
+    empty_config = {**config, "al": {**config["al"], "exemplar_tokens": []}}
+    tokens = export_al_exemplars(
+        config=empty_config, manifest=manifest, predictions=predictions, out_dir=out,
+        curation_present=False,
+    )
+    assert tokens == []
+    on_disk = json.loads((out / "al_exemplars.json").read_text())
+    assert on_disk == {"arm": "graph_rate_night", "baseline": "baseline", "tokens": []}
+
+    # empty list + curation present -> error
+    with pytest.raises(ValueError, match="empty"):
+        export_al_exemplars(
+            config=empty_config, manifest=manifest, predictions=predictions, out_dir=out,
+            curation_present=True,
+        )
+
+
+def test_frame_manifest_gains_weak_verdict_and_al_selected_by(tmp_path: Path) -> None:
+    from nuscenes_data_engine.demo.build import _add_al_selection_columns
+
+    al_dir = tmp_path / "active_learning"
+    al_dir.mkdir()
+    # "accepted": weak arm's candidate pool AND accepted set.
+    # "candidate_only": weak arm's candidate pool but not accepted -> "rejected".
+    # "other": in neither -> NA.
+    pd.DataFrame({"sample_data_token": ["accepted", "candidate_only"]}).to_parquet(
+        al_dir / "graph_rate_night.parquet"
+    )
+    pd.DataFrame({"sample_data_token": ["accepted"]}).to_parquet(
+        al_dir / "graph_rate_night_accepted.parquet"
+    )
+    manifest = pd.DataFrame(
+        {"sample_data_token": ["accepted", "candidate_only", "other"], "split": ["val"] * 3}
+    )
+
+    out = _add_al_selection_columns(
+        manifest, al_dir=al_dir, weak_arm="graph_rate_night", al_arm="graph_rate_night"
+    )
+    result = out.set_index("sample_data_token")
+    assert result.loc["accepted", "weak_verdict"] == "accepted"
+    assert result.loc["candidate_only", "weak_verdict"] == "rejected"
+    assert pd.isna(result.loc["other", "weak_verdict"])
+    # al_selected_by: graph_rate_night.parquet is also the al_arm's selected set
+    # here -- both accepted and candidate_only are in it, other is not.
+    assert result.loc["accepted", "al_selected_by"] == "graph_rate_night"
+    assert result.loc["candidate_only", "al_selected_by"] == "graph_rate_night"
+    assert pd.isna(result.loc["other", "al_selected_by"])
+    assert result["weak_verdict"].dtype == "string"
+    assert result["al_selected_by"].dtype == "string"
 
 
 def test_export_weaksup_empty_dir_raises(tmp_path: Path) -> None:
@@ -388,6 +708,7 @@ def _write_demo_config(
         "paths": {
             "processed_dir": str(tiny_inputs["processed"]),
             "active_learning_dir": str(al),
+            "active_learning_config": str(tiny_inputs["al_config"]),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -414,8 +735,25 @@ def _write_demo_config(
         # Task 4: absent by default -- no `demo curate`/`demo infer` run has staged
         # anything under this dir in most fixtures here, so run_build must skip the
         # curation group loudly rather than erroring. The curation-specific tests
-        # below stage real files under this same staging_dir.
-        "curation": {"staging_dir": str(tmp_path / "curation_staging")},
+        # below stage real files under this same staging_dir. weak_arm/al_arm mirror
+        # configs/demo.yaml's real values -- tiny_inputs' al dir already carries the
+        # matching graph_rate_night(.parquet/_accepted.parquet) fixtures.
+        "curation": {
+            "staging_dir": str(tmp_path / "curation_staging"),
+            "weak_arm": "graph_rate_night",
+            "al_arm": "graph_rate_night",
+        },
+        # Phase 7 (Task 1): al_communities.parquet always runs (see run_build), so
+        # every build_config-based test needs this section; exemplar_tokens is
+        # empty by default (curation is absent by default too, so that's valid --
+        # see export_al_exemplars) -- tests that stage curation opt into a real
+        # exemplar token via _stage_and_pick_hero (or set it themselves).
+        "al": {
+            "arm": "graph_rate_night",
+            "baseline": "baseline",
+            "community_arms": ["graph_rate", "graph_rate_night"],
+            "exemplar_tokens": [],
+        },
     }
     path = tmp_path / "demo.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -439,6 +777,9 @@ def _stage_minimal_curation(staging_dir: Path) -> None:
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
         "n_preds_baseline": pd.array([1], dtype="Int64"),
+        # Phase 7 (Task 1): al.exemplar_tokens=["v0"] (set by _stage_and_pick_hero)
+        # needs this flag True to pass export_al_exemplars' validation.
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
     }).to_parquet(staging_dir / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
@@ -472,6 +813,11 @@ def _stage_and_pick_hero(config_path: Path, *, token: str = "v0") -> dict[str, A
     config = yaml.safe_load(config_path.read_text())
     _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": token}
+    # Phase 7 (Task 1): export_al_exemplars requires a non-empty token list once
+    # curation is included (see configs/demo.yaml's al.exemplar_tokens) -- reuse
+    # the same token, which _stage_minimal_curation already gives the required
+    # fixes_fn_vs_baseline_graph_rate_night=True flag and val split.
+    config["al"]["exemplar_tokens"] = [token]
     config_path.write_text(yaml.safe_dump(config))
     return config
 
@@ -504,7 +850,7 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
-    assert manifest["package_version"] == "0.5"
+    assert manifest["package_version"] == "0.6"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:
@@ -672,12 +1018,16 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
     results.json. Exact composition for build_config + _stage_and_pick_hero: 1
     (active_learning_dir/results.json) + 5 (exporters.PROCESSED_INPUTS: samples/
     annotations/annotations_3d/canbus/ego_pose) + 1 (random_pseudo_summary.json) + 3
-    (staged frame_manifest/gt_boxes/predictions.parquet, curation included) = 10."""
+    (staged frame_manifest/gt_boxes/predictions.parquet, curation included) + 1
+    (paths.active_learning_config) + 2 (communities_graph_rate[_night].json,
+    always hashed) + 2 (weak_arm.parquet/weak_arm_accepted.parquet -- weak_arm ==
+    al_arm == "graph_rate_night" here, so al_arm.parquet is the same file as
+    weak_arm.parquet and dedupes under one dict key) = 15."""
     from nuscenes_data_engine.demo.build import run_build
 
     _stage_and_pick_hero(build_config)
     manifest = run_build(build_config)
-    assert len(manifest["inputs"]) == 10
+    assert len(manifest["inputs"]) == 15
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
 
 
@@ -715,6 +1065,7 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
         "n_preds_baseline": pd.array([1], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
@@ -728,6 +1079,7 @@ def test_build_includes_curation_group_when_staged(build_config: Path, tmp_path:
     }).to_parquet(staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     config["hero"] = {"token": "v0"}
+    config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
     manifest = run_build(build_config)
     assert manifest["validation"]["curation"] == "included"
@@ -838,17 +1190,26 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
     config = yaml.safe_load(build_config.read_text())
     staging = Path(config["curation"]["staging_dir"])
     (staging / "crops").mkdir(parents=True)
+    # v1: a second, ordinarily-covered val token purely so al.exemplar_tokens (now
+    # required once curation is included, Phase 7 Task 1) has a real exemplar to
+    # validate -- v0 stays the dedicated "ran and found nothing" case below (zero
+    # predictions.parquet rows is the whole point of this test), which
+    # export_al_exemplars would otherwise (correctly) reject as "no predictions".
     pd.DataFrame({
-        "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
-        "curation_buckets": [["night_failure"]],
-        "n_preds_baseline": pd.array([0], dtype="Int64"),
+        "sample_data_token": ["v0", "v1"], "split": ["val", "val"],
+        "filename": ["images/v0.jpg", "images/v1.jpg"],
+        "curation_buckets": [["night_failure"], ["night_failure"]],
+        "n_preds_baseline": pd.array([0, 1], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([False, True], dtype="boolean"),
     }).to_parquet(staging / "frame_manifest.parquet")
     # baseline ran and found nothing on v0 -- predictions.parquet has zero rows for
-    # it, same as a model that never ran would; n_preds is what disambiguates.
-    pd.DataFrame(columns=["sample_data_token", "model", "category_group", "x_min",
-                          "y_min", "x_max", "y_max", "conf", "status",
-                          "matched_annotation_token"]).to_parquet(
-        staging / "predictions.parquet")
+    # it, same as a model that never ran would; n_preds is what disambiguates. v1
+    # gets one real row so it's a valid exemplar.
+    pd.DataFrame({
+        "sample_data_token": ["v1"], "model": ["baseline"], "category_group": ["car"],
+        "x_min": [1.0], "y_min": [1.0], "x_max": [2.0], "y_max": [2.0],
+        "conf": [0.9], "status": ["tp"], "matched_annotation_token": [None],
+    }).to_parquet(staging / "predictions.parquet")
     # matched_baseline: zero rows, but the column itself must still exist -- this
     # staging is fully "included" (unlike the two sibling tests above, which fail
     # inside _include_curation before ever reaching it), so build_events'
@@ -858,7 +1219,9 @@ def test_build_passes_val_coverage_with_a_zero_prediction_count(build_config: Pa
                           "x_min", "y_min", "x_max", "y_max", "matched_baseline"]).to_parquet(
         staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
+    (staging / "crops" / "v1.jpg").write_bytes(b"\xff\xd8\xff\xe0crop1")
     config["hero"] = {"token": "v0"}
+    config["al"]["exemplar_tokens"] = ["v1"]
     build_config.write_text(yaml.safe_dump(config))
 
     manifest = run_build(build_config)
@@ -905,6 +1268,7 @@ def test_build_tolerates_a_corrupt_lancedb_store(
         "sample_data_token": ["v0"], "split": ["val"], "filename": ["images/v0.jpg"],
         "curation_buckets": [["night_failure"]],
         "n_preds_baseline": pd.array([1], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True], dtype="boolean"),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0"], "model": ["baseline"], "category_group": ["car"],
@@ -918,6 +1282,7 @@ def test_build_tolerates_a_corrupt_lancedb_store(
     }).to_parquet(staging / "gt_boxes.parquet")
     (staging / "crops" / "v0.jpg").write_bytes(b"\xff\xd8\xff\xe0crop")
     config["hero"] = {"token": "v0"}
+    config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
 
     # Exists (is_dir() True) but has no valid lance table inside -- open_table raises.
@@ -937,6 +1302,7 @@ def test_build_enriches_gt_boxes_with_distance_and_size(build_config: Path) -> N
     config = yaml.safe_load(build_config.read_text())
     _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": "v0"}
+    config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
     processed = Path(config["paths"]["processed_dir"])
     # a1/a2 join onto the annotation_token values _stage_minimal_curation already
@@ -996,6 +1362,7 @@ def test_build_hero_from_token_copies_crop_and_records_token(build_config: Path)
     config = yaml.safe_load(build_config.read_text())
     _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": "v0"}          # v0 is a staged crop in the fixture
+    config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
     run_build(build_config)
     out = Path(config["paths"]["out_dir"])
@@ -1014,6 +1381,7 @@ def test_build_null_hero_token_fails_loudly(build_config: Path) -> None:
     config = yaml.safe_load(build_config.read_text())
     _stage_minimal_curation(Path(config["curation"]["staging_dir"]))
     config["hero"] = {"token": None}
+    config["al"]["exemplar_tokens"] = ["v0"]
     build_config.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError, match="hero token"):
         run_build(build_config)

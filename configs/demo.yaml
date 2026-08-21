@@ -3,6 +3,9 @@
 paths:
   processed_dir: data/processed
   active_learning_dir: data/active_learning
+  active_learning_config: configs/active_learning.yaml   # Phase 7: n_mine for
+                      # al_communities.parquet's quota-sum check -- never re-typed
+                      # in this file
   mlruns_dir: mlruns
   lancedb_path: data/lancedb
   lancedb_table: frames
@@ -86,3 +89,14 @@ curation:
   weak_arm: graph_rate_night
   al_arm: graph_rate_night
   crop_size: [960, 540]
+
+al:                               # Phase 7: Active Learning page
+  arm: graph_rate_night
+  baseline: baseline
+  community_arms: [graph_rate, graph_rate_night]
+  exemplar_tokens:                # hand-approved val frames where `arm` catches a box `baseline` misses
+    - 00ec313e03a34216b14ae025674a953a
+    - 0cd93fca74e8407b8c7785998fbaeefa
+    - 1073070a0cca4393a8cfdd69e7a08d14
+    - 10dbe21a87c949f4a539a075cb76b18d
+    - 1bd76f7d72524a7f94e21e454998602b

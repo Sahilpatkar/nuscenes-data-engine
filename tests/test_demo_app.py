@@ -439,11 +439,31 @@ def built_demo_data(tmp_path: Path) -> Path:
         "k": [2, 2],
     }).to_parquet(staging / "semantic_search_results.parquet")
 
+    # Phase 7 (Task 1): al_communities.parquet's inputs (always required -- see
+    # run_build) -- 2 communities whose quotas each sum to n_mine=3, mirroring
+    # tests/test_demo_export.py's tiny_inputs fixture.
+    for arm, quotas in (("graph_rate", [2, 1]), ("graph_rate_night", [1, 2])):
+        records = [
+            {"community": 0, "size": 10, "mass": 5.0, "night_members": 2, "quota": quotas[0]},
+            {"community": 1, "size": 8, "mass": 3.0, "night_members": 1, "quota": quotas[1]},
+        ]
+        (al / f"communities_{arm}.json").write_text(json.dumps(records))
+    al_config_path = tmp_path / "active_learning.yaml"
+    al_config_path.write_text(yaml.safe_dump({"mining": {"n_mine": 3}}))
+    # weak_verdict/al_selected_by's arm parquets: v0 is both a weak-arm candidate
+    # AND accepted ("accepted"); v1 is a candidate but not accepted ("rejected").
+    # Both are in the al_arm's selected set (same file, weak_arm == al_arm here).
+    pd.DataFrame({"sample_data_token": ["v0", "v1"]}).to_parquet(al / "graph_rate_night.parquet")
+    pd.DataFrame({"sample_data_token": ["v0"]}).to_parquet(
+        al / "graph_rate_night_accepted.parquet"
+    )
+
     out = tmp_path / "demo_data"
     config = {
         "paths": {
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
+            "active_learning_config": str(al_config_path),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -462,7 +482,20 @@ def built_demo_data(tmp_path: Path) -> Path:
             "high_speed_mps": 10.0,
             "model_for_results": "baseline",
         },
-        "curation": {"staging_dir": str(staging)},
+        "curation": {
+            "staging_dir": str(staging),
+            "weak_arm": "graph_rate_night",
+            "al_arm": "graph_rate_night",
+        },
+        # Phase 7 (Task 1): "v0" already carries fixes_fn_vs_baseline_graph_rate_
+        # night=True, split="val", and predictions for both configured models
+        # above, so it's a valid exemplar token.
+        "al": {
+            "arm": "graph_rate_night",
+            "baseline": "baseline",
+            "community_arms": ["graph_rate", "graph_rate_night"],
+            "exemplar_tokens": ["v0"],
+        },
     }
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))

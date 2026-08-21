@@ -192,26 +192,225 @@ def export_overview(
     return metrics
 
 
-def export_al_results(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:
-    """Reshape results.json into the arm-comparison table the demo charts read."""
+def _arm_family(arm: str) -> str:
+    """``baseline`` -> "baseline"; any ``weak_*`` arm -> "weak"; everything else is
+    its own family (mined/random/graph/rate/strat/rate_strat/graph_rate/
+    graph_rate_night are each singletons, not grouped with one another)."""
+    if arm == "baseline":
+        return "baseline"
+    if arm.startswith("weak_"):
+        return "weak"
+    return arm
+
+
+def export_al_results(*, al_dir: Path, out_dir: Path, processed_dir: Path) -> pd.DataFrame:
+    """Reshape results.json into the arm-comparison table the demo charts read.
+
+    Phase 7 (Task 1): widens the table with ``round_order`` (results.json's own
+    insertion order -- lost by the plain dict iteration below, since the returned
+    rows are re-sorted by ``arm`` for a stable, deterministic file), ``family``, the
+    night pedestrian/day/rain/clear slice numbers, the weak arms' ``n_boxes``, and
+    mined-set composition (``n_scenes``/``night_share``/``rain_share``) via
+    ``active_learning.report.arm_composition``. ``per_class``/``slices`` are read
+    with ``.get`` throughout so an older results.json without them yields NA
+    (pandas ``None``) rather than a ``KeyError`` -- every existing column and value
+    is otherwise unchanged, and rows stay sorted by ``arm``.
+    """
+    from nuscenes_data_engine.active_learning.report import arm_composition
+
     results = json.loads(_require(al_dir / "results.json").read_text())
     base_overall = results["baseline"]["overall"]["mAP50-95"]
     base_night = results["baseline"]["night"]["mAP50-95"]
-    rows = [
-        {
-            "arm": arm,
-            "n_train_images": entry.get("n_train_images"),
-            "overall_map5095": entry["overall"]["mAP50-95"],
-            "night_map5095": entry["night"]["mAP50-95"],
-            "delta_overall": round(entry["overall"]["mAP50-95"] - base_overall, 4),
-            "delta_night": round(entry["night"]["mAP50-95"] - base_night, 4),
-        }
-        for arm, entry in results.items()
-    ]
+    composition = arm_composition(al_dir, processed_dir)
+    round_order = {arm: i for i, arm in enumerate(results)}
+    rows = []
+    for arm, entry in results.items():
+        overall = entry["overall"]
+        night = entry["night"]
+        slices = entry.get("slices", {})
+        comp = composition.get(arm, {})
+        rows.append(
+            {
+                "arm": arm,
+                "n_train_images": entry.get("n_train_images"),
+                "overall_map5095": overall["mAP50-95"],
+                "night_map5095": night["mAP50-95"],
+                "delta_overall": round(overall["mAP50-95"] - base_overall, 4),
+                "delta_night": round(night["mAP50-95"] - base_night, 4),
+                "round_order": round_order[arm],
+                "family": _arm_family(arm),
+                "overall_map50": overall.get("mAP50"),
+                "night_map50": night.get("mAP50"),
+                "night_precision": night.get("precision"),
+                "night_recall": night.get("recall"),
+                "night_ped_map5095": night.get("per_class", {}).get("pedestrian"),
+                "day_map5095": slices.get("time_of_day/day", {}).get("mAP50-95"),
+                "rain_map5095": slices.get("weather/rain", {}).get("mAP50-95"),
+                "clear_map5095": slices.get("weather/clear", {}).get("mAP50-95"),
+                "n_boxes": entry.get("n_boxes"),
+                "n_scenes": comp.get("n_scenes"),
+                "night_share": comp.get("night_share"),
+                "rain_share": comp.get("rain_share"),
+            }
+        )
     df = pd.DataFrame(sorted(rows, key=lambda row: row["arm"])).reset_index(drop=True)
+    df["n_boxes"] = df["n_boxes"].astype("Int64")
+    df["n_scenes"] = df["n_scenes"].astype("Int64")
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "active_learning_results.parquet", index=False)
     return df
+
+
+def export_al_communities(
+    *,
+    al_dir: Path,
+    out_dir: Path,
+    arms: tuple[str, ...] = ("graph_rate", "graph_rate_night"),
+    n_mine: int,
+) -> pd.DataFrame:
+    """Merge the per-arm community diagnostics (``communities_<arm>.json``) into one
+    table: ``community, size, night_members, mass, quota_<arm>`` (one quota column
+    per arm), sorted by ``community``.
+
+    ``size``/``night_members``/``mass`` are per-COMMUNITY facts (the community
+    structure and its routed failure mass are identical regardless of which arm's
+    quota allocation is being looked at) -- the two (or more) files are expected to
+    agree on them exactly (``mass`` to floating-point tolerance) and disagreement
+    names the offending community rather than silently picking one file's value.
+    Each ``quota_<arm>`` column must sum to ``n_mine`` (the arm's mining budget) --
+    a mismatch means the diagnostics file doesn't describe the run that actually
+    produced ``<arm>.parquet``, and is a build-time ``ValueError``, not a silently
+    wrong chart. A ``community == -1`` backfill-sentinel row, if present in any
+    file, is kept (not dropped as an outlier) and flagged via a boolean
+    ``is_backfill`` column.
+    """
+    if not arms:
+        raise ValueError("export_al_communities: empty arms")
+    per_arm: dict[str, pd.DataFrame] = {}
+    for arm in arms:
+        path = _require(al_dir / f"communities_{arm}.json")
+        records = json.loads(path.read_text())
+        per_arm[arm] = pd.DataFrame.from_records(
+            records, columns=["community", "size", "night_members", "mass", "quota"]
+        ).set_index("community")
+
+    base_arm = arms[0]
+    merged = per_arm[base_arm][["size", "night_members", "mass"]].copy()
+    for arm in arms[1:]:
+        other = per_arm[arm]
+        if set(merged.index) != set(other.index):
+            symmetric_diff = sorted(set(merged.index) ^ set(other.index))
+            raise ValueError(
+                f"export_al_communities: communities_{base_arm}.json and "
+                f"communities_{arm}.json disagree on which communities exist: "
+                f"{symmetric_diff}"
+            )
+        for community in merged.index:
+            for col in ("size", "night_members"):
+                left = merged.loc[community, col]
+                right = other.loc[community, col]
+                if left != right:
+                    raise ValueError(
+                        f"export_al_communities: community {community} disagrees "
+                        f"between communities_{base_arm}.json and communities_{arm}.json "
+                        f"on {col!r}: {left!r} != {right!r}"
+                    )
+            left_mass = merged.loc[community, "mass"]
+            right_mass = other.loc[community, "mass"]
+            if abs(left_mass - right_mass) >= 1e-9:
+                raise ValueError(
+                    f"export_al_communities: community {community} disagrees between "
+                    f"communities_{base_arm}.json and communities_{arm}.json on "
+                    f"'mass': {left_mass!r} != {right_mass!r}"
+                )
+
+    for arm in arms:
+        quota = per_arm[arm]["quota"]
+        merged[f"quota_{arm}"] = quota
+        total = int(quota.sum())
+        if total != n_mine:
+            raise ValueError(
+                f"export_al_communities: quota_{arm} sums to {total}, expected "
+                f"n_mine={n_mine} (communities_{arm}.json doesn't match the mining "
+                "config it's supposed to describe)"
+            )
+
+    merged["is_backfill"] = merged.index == -1
+    merged = merged.reset_index().sort_values("community").reset_index(drop=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(out_dir / "al_communities.parquet", index=False)
+    return merged
+
+
+def export_al_exemplars(
+    *,
+    config: dict[str, Any],
+    manifest: pd.DataFrame,
+    predictions: pd.DataFrame,
+    out_dir: Path,
+    curation_present: bool,
+) -> list[str]:
+    """Validate ``configs/demo.yaml``'s hand-approved ``al.exemplar_tokens`` against
+    the curated frame manifest and write ``al_exemplars.json``.
+
+    Every token must be a ``split == "val"`` row of ``manifest`` with
+    ``fixes_fn_vs_<baseline>_<arm> == True`` (the arm caught a box the baseline
+    missed) and must have ``predictions`` rows for EVERY model in
+    ``config["models"]`` (else the before/after page can't render one of its
+    panels). A null/empty token list is only valid when ``curation_present`` is
+    False (the same "nothing curated yet" rule ``run_build`` applies to
+    ``hero.token``) -- an empty list while curation IS included is a build error,
+    since the exemplars would then just silently never render.
+    """
+    al_cfg = config.get("al") or {}
+    arm = al_cfg.get("arm")
+    baseline = al_cfg.get("baseline")
+    tokens = list(al_cfg.get("exemplar_tokens") or [])
+
+    if not tokens:
+        if curation_present:
+            raise ValueError(
+                "export_al_exemplars: al.exemplar_tokens is empty but curation is "
+                "included — pick hand-approved exemplar tokens (see docs/DEMO.md)"
+            )
+        write_json(out_dir / "al_exemplars.json", {"arm": arm, "baseline": baseline, "tokens": []})
+        return []
+
+    if not curation_present:
+        raise ValueError(
+            f"export_al_exemplars: al.exemplar_tokens configured ({len(tokens)} "
+            "tokens) but curation is absent — exemplars are validated against the "
+            "curated frame manifest; run `demo curate` + `demo infer` first (see "
+            "docs/DEMO.md)"
+        )
+
+    flag_col = f"fixes_fn_vs_{baseline}_{arm}"
+    val_manifest = manifest.loc[manifest["split"] == "val"].set_index("sample_data_token")
+    model_names = sorted(config["models"])
+    pred_tokens_by_model = {
+        model: set(predictions.loc[predictions["model"] == model, "sample_data_token"])
+        for model in model_names
+    }
+    for token in tokens:
+        if token not in val_manifest.index:
+            raise ValueError(
+                f"export_al_exemplars: token {token!r} is not a val row of "
+                "frame_manifest.parquet"
+            )
+        flag = val_manifest.loc[token].get(flag_col) if flag_col in val_manifest.columns else None
+        if not (pd.notna(flag) and bool(flag)):
+            raise ValueError(
+                f"export_al_exemplars: token {token!r} does not have {flag_col} == True"
+            )
+        for model in model_names:
+            if token not in pred_tokens_by_model[model]:
+                raise ValueError(
+                    f"export_al_exemplars: token {token!r} has no predictions for "
+                    f"model {model!r}"
+                )
+
+    write_json(out_dir / "al_exemplars.json", {"arm": arm, "baseline": baseline, "tokens": tokens})
+    return tokens
 
 
 def export_weaksup(*, al_dir: Path, out_dir: Path) -> pd.DataFrame:

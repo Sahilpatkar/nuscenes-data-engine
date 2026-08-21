@@ -37,7 +37,12 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # 0.5 (Phase 6): graph_subgraphs/<preset>.json (six presets, from `demo subgraphs`)
 # joins the package when staged, and overview_metrics.json's flagship.cypher becomes
 # a COMPUTED (live Neo4j) value instead of a sourced one whenever it does.
-_PACKAGE_VERSION = "0.5"
+# 0.6 (Phase 7, Task 1): active_learning_results.parquet gains round_order/family/
+# night pedestrian+slice columns/n_boxes/mined-set composition; al_communities.
+# parquet (always) and al_exemplars.json (validated, curation-gated) join the
+# package; frame_manifest.parquet gains weak_verdict/al_selected_by when curation
+# is included.
+_PACKAGE_VERSION = "0.6"
 
 # Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
 # edges, so every token collection over these columns must drop the NA entries.
@@ -520,6 +525,48 @@ def _include_subgraphs(
     }
 
 
+def _add_al_selection_columns(
+    manifest: pd.DataFrame, *, al_dir: Path, weak_arm: str, al_arm: str
+) -> pd.DataFrame:
+    """Add ``weak_verdict``/``al_selected_by`` to a copied ``frame_manifest``,
+    derived from the local AL arm parquets at build time (never hand-tagged).
+
+    ``weak_verdict`` is ``"accepted"`` for a token in ``<weak_arm>_accepted.
+    parquet``, ``"rejected"`` for a token in the weak arm's candidate pool
+    (``<weak_arm>.parquet``) but not accepted, else NA. ``al_selected_by`` is
+    ``al_arm`` for a token in ``<al_arm>.parquet`` (the arm's selected set), else
+    NA. Both are pandas nullable ``string`` columns (``pd.NA``, not None/NaN) so a
+    parquet round-trip keeps them queryable as strings.
+    """
+    candidate = set(
+        pd.read_parquet(exporters._require(al_dir / f"{weak_arm}.parquet"))["sample_data_token"]
+    )
+    accepted = set(
+        pd.read_parquet(
+            exporters._require(al_dir / f"{weak_arm}_accepted.parquet")
+        )["sample_data_token"]
+    )
+    selected = set(
+        pd.read_parquet(exporters._require(al_dir / f"{al_arm}.parquet"))["sample_data_token"]
+    )
+
+    def verdict(token: str) -> Any:
+        if token in accepted:
+            return "accepted"
+        if token in candidate:
+            return "rejected"
+        return pd.NA
+
+    manifest = manifest.copy()
+    manifest["weak_verdict"] = manifest["sample_data_token"].map(verdict).astype("string")
+    manifest["al_selected_by"] = (
+        manifest["sample_data_token"]
+        .map(lambda token: al_arm if token in selected else pd.NA)
+        .astype("string")
+    )
+    return manifest
+
+
 def run_build(config_path: Path) -> dict[str, Any]:
     """Run every registered exporter, then write demo_data/manifest.json.
 
@@ -555,9 +602,46 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "source": config["flagship"]["cypher_source"],
         },
     )
-    al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir)
+    al_df = exporters.export_al_results(al_dir=al_dir, out_dir=out_dir, processed_dir=processed)
     weak_df = exporters.export_weaksup(al_dir=al_dir, out_dir=out_dir)
     curation_status = _include_curation(config, out_dir)
+
+    # Phase 7 (Task 1): weak_verdict/al_selected_by are derived from the local AL
+    # arm parquets, only meaningful once there's a real frame_manifest to tag — so
+    # gated on curation_status, same rationale as every other curated-frames-
+    # dependent step. al_communities.parquet is NOT gated: it comes entirely from
+    # al_dir's persisted community diagnostics + the AL config's n_mine, so the
+    # community chart works even on a fresh clone with curation absent (spec §2).
+    # export_al_exemplars always runs too (it enforces its OWN absent/included rule
+    # -- an empty token list only when curation_present is False, same as
+    # hero.token below), reading the manifest/predictions this step just produced
+    # when curation is included, or empty frames otherwise (never touched when the
+    # configured token list is empty, which absent curation requires).
+    al_cfg = config["al"]
+    al_config_path = Path(paths["active_learning_config"])
+    n_mine = load_yaml(al_config_path)["mining"]["n_mine"]
+
+    manifest_df = pd.DataFrame()
+    predictions_df = pd.DataFrame()
+    if curation_status == "included":
+        manifest_path = out_dir / "frame_manifest.parquet"
+        manifest_df = _add_al_selection_columns(
+            pd.read_parquet(manifest_path),
+            al_dir=al_dir,
+            weak_arm=config["curation"]["weak_arm"],
+            al_arm=config["curation"]["al_arm"],
+        )
+        manifest_df.to_parquet(manifest_path, index=False)
+        predictions_df = pd.read_parquet(out_dir / "predictions.parquet")
+
+    communities_df = exporters.export_al_communities(
+        al_dir=al_dir, out_dir=out_dir, arms=tuple(al_cfg["community_arms"]), n_mine=n_mine,
+    )
+
+    exemplar_tokens = exporters.export_al_exemplars(
+        config=config, manifest=manifest_df, predictions=predictions_df, out_dir=out_dir,
+        curation_present=(curation_status == "included"),
+    )
 
     # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group
     # (configs/demo.yaml `hero.token`), not an mlruns mosaic — see the dated
@@ -678,10 +762,25 @@ def run_build(config_path: Path) -> dict[str, Any]:
         inputs[str(path)] = _sha256(path)
     for path in sorted(al_dir.glob("*_pseudo_summary.json")):
         inputs[str(path)] = _sha256(path)
+    # Phase 7 (Task 1): al_communities.parquet's own inputs -- always hashed, since
+    # the export itself is unconditional (see the comment above its call site).
+    inputs[str(al_config_path)] = _sha256(al_config_path)
+    for arm in al_cfg["community_arms"]:
+        path = al_dir / f"communities_{arm}.json"
+        inputs[str(path)] = _sha256(path)
     if curation_status == "included":
         staging_dir = Path(config["curation"]["staging_dir"])
         for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
             path = staging_dir / name
+            inputs[str(path)] = _sha256(path)
+        # weak_verdict/al_selected_by's own arm-parquet inputs (weak_arm and al_arm
+        # may be the same arm today, e.g. both "graph_rate_night" -- a dict key
+        # naturally dedupes that case rather than hashing the same file twice under
+        # two names).
+        weak_arm = config["curation"]["weak_arm"]
+        al_arm = config["curation"]["al_arm"]
+        for name in (f"{weak_arm}.parquet", f"{weak_arm}_accepted.parquet", f"{al_arm}.parquet"):
+            path = al_dir / name
             inputs[str(path)] = _sha256(path)
     # Events need no staging input of their own — build_events reads only the
     # already-hashed processed tables (+ the same three curation-staging parquets
@@ -707,6 +806,8 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "package_mb": round(package_mb, 2),
             "n_arms": len(al_df),
             "n_weak_arms": len(weak_df),
+            "n_communities": len(communities_df),
+            "n_exemplars": len(exemplar_tokens),
             "curation": curation_status,
             "events": events_result["events"],
             "flagship_events": events_result["flagship_events"],
