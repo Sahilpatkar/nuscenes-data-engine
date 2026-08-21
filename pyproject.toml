@@ -137,6 +137,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "streamlit.*",
+    "streamlit_agraph.*",
     "pyquaternion.*",
     "shapely.*",
     "wandb.*",

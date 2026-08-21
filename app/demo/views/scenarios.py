@@ -13,11 +13,11 @@ more complete than it actually is.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pandas as pd
 import streamlit as st
-from filters import rank_events, severity_caption, speed_caption
+from filters import rank_events, severity_caption, speed_caption, subgraph_narrative
 from PIL import Image
 from render import draw_overlay, recorded_banner
 
@@ -27,9 +27,10 @@ from data import (
     load_events,
     load_frame_manifest,
     load_gt_boxes,
-    load_overview,
     load_predictions,
     load_semsearch,
+    load_subgraphs,
+    subgraphs_available,
     thumb_path,
 )
 
@@ -105,6 +106,20 @@ PRESETS: dict[str, _Preset] = {
 
 _FLAGSHIP_PRESET = "hard_braking_near_pedestrians"
 
+# Phase 6 (Task 3): the interactive subgraph panel -- on_path nodes get the accent
+# color + the larger size, off-path (context) nodes are faded + smaller. Two colors
+# total, not one per node type (spec docs/superpowers/specs/2026-08-20-demo-phase6-
+# design.md §2: "on_path nodes in the accent color ... off-path nodes faded") --
+# the six node TYPES are distinguished by their label text (in the node's own label
+# and the legend caption below), not by six separate colors.
+_NODE_ON_PATH_COLOR = "#FF851B"
+_NODE_OFF_PATH_COLOR = "#BBBBBB"
+_NODE_ON_PATH_SIZE = 22
+_NODE_OFF_PATH_SIZE = 12
+_GRAPH_LEGEND = "Node types: Scene · Sample · EgoPose · ObjectObservation · Category · Location"
+_GRAPH_ABSENT_NOTE = "graph export not included in this package"
+_MODEL_GT_ONLY_NOTE = "graph holds GT only — model verdict comes from the prediction set"
+
 # Filmstrip step order, before/after the current frame -- plain ASCII hyphens
 # (ruff RUF001 flags the design doc's typographic U+2212 minus sign as an
 # ambiguous character), matching the t_minus/t_plus column-name convention.
@@ -138,6 +153,116 @@ def _gt_for_render(gt: pd.DataFrame, token: str) -> pd.DataFrame:
     subset = gt.loc[gt["sample_data_token"] == token]
     subset = subset.loc[~subset["below_visibility_min"]]
     return subset.rename(columns={f"matched_{_MODEL_FOR_RESULTS}": "matched"})
+
+
+def _render_parity_line(preset_name: str, preset: _Preset) -> None:
+    """Phase 6 (Task 3): the preset header's SQL/Cypher parity line.
+
+    Model-result presets always get the fixed GT-only note (their verdict is
+    never graph-derivable, regardless of whether `demo subgraphs` ran). Dynamics
+    presets read their own `graph_subgraphs/<preset>.json`'s `cypher_count`/
+    `sql_count`/`parity` -- written honestly for all four by `demo subgraphs`
+    (the flagship's mismatch would already have failed the build; the other
+    three's mismatch, if any, is recorded plainly here as "mismatch recorded",
+    never hidden). Replaces the old flagship-only badge that read overview_
+    metrics.json's sourced-until-Phase-6 value: every dynamics preset now gets
+    this line, not just the flagship, and the package having no subgraphs staged
+    at all is a silent no-op here (nothing to report) rather than a stale claim --
+    the viewer's graph panel below carries the honest absent note for that case.
+    """
+    if preset["family"] == "model":
+        st.caption(_MODEL_GT_ONLY_NOTE)
+        return
+    if not subgraphs_available():
+        return
+    subgraph_payload = load_subgraphs(preset_name)
+    if subgraph_payload is None:
+        return
+    cypher_count = subgraph_payload.get("cypher_count")
+    sql_count = subgraph_payload.get("sql_count")
+    symbol = "✓" if subgraph_payload.get("parity") else "✗ mismatch recorded"
+    st.caption(f"Cypher: {cypher_count} · SQL: {sql_count} {symbol}")
+
+
+def _short_id(node_id: str) -> str:
+    """The id portion after its "<type>:" prefix, truncated for a readable agraph
+    node label -- real graph tokens are long hex strings; Category/Location ids
+    are names, usually already short."""
+    token = node_id.split(":", 1)[1] if ":" in node_id else node_id
+    return token if len(token) <= 10 else f"{token[:10]}..."
+
+
+def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
+    """Phase 6 (Task 3): the interactive subgraph panel -- the Scenario page's
+    long-standing Phase-6 slot, now implemented.
+
+    Degrades honestly at three levels, each without raising: no `demo subgraphs`
+    staged at all (`subgraphs_available()` False), this preset's own JSON missing
+    (defensive -- `demo build` ships all six together or none), or this specific
+    event absent from that preset's `events` dict (its subgraph export capped at
+    <=30 events per preset, or the event simply isn't tagged with this preset).
+    All three show the same honest note rather than a crash or a silent gap.
+
+    `streamlit_agraph` is imported here (not at module level) so a package/
+    environment missing it still renders every other page element -- an
+    ImportError becomes an `st.warning` naming the package, not a fatal import
+    error for the whole module.
+    """
+    st.markdown("**Interactive graph**")
+
+    if not subgraphs_available():
+        st.info(_GRAPH_ABSENT_NOTE)
+        return
+    subgraph_payload = load_subgraphs(preset_name)
+    if subgraph_payload is None:
+        st.info(_GRAPH_ABSENT_NOTE)
+        return
+    events: dict[str, Any] = subgraph_payload.get("events", {})
+    event_subgraph: dict[str, Any] | None = events.get(str(row.sample_data_token))
+    if event_subgraph is None:
+        st.info(_GRAPH_ABSENT_NOTE)
+        return
+
+    try:
+        from streamlit_agraph import Config, Edge, Node, agraph
+    except ImportError:
+        st.warning(
+            "streamlit-agraph is not installed — the interactive graph panel is unavailable."
+        )
+        return
+
+    nodes_data: list[dict[str, Any]] = event_subgraph.get("nodes", [])
+    edges_data: list[dict[str, Any]] = event_subgraph.get("edges", [])
+    nodes_by_id = {n["id"]: n for n in nodes_data}
+
+    agraph_nodes = [
+        Node(
+            id=n["id"],
+            label=f"{n['label']}: {_short_id(n['id'])}",
+            size=_NODE_ON_PATH_SIZE if n.get("on_path") else _NODE_OFF_PATH_SIZE,
+            color=_NODE_ON_PATH_COLOR if n.get("on_path") else _NODE_OFF_PATH_COLOR,
+        )
+        for n in nodes_data
+    ]
+    agraph_edges = [
+        Edge(source=e["source"], target=e["target"], label=e["label"]) for e in edges_data
+    ]
+    config = Config(width=700, height=420, directed=True, physics=False, hierarchical=False)
+
+    graph_col, detail_col = st.columns([2, 1])
+    with graph_col:
+        clicked = agraph(nodes=agraph_nodes, edges=agraph_edges, config=config)
+    with detail_col:
+        clicked_node = nodes_by_id.get(clicked) if clicked else None
+        if clicked_node is not None:
+            meta = clicked_node.get("meta", {})
+            st.table(
+                pd.DataFrame({"key": list(meta.keys()), "value": [str(v) for v in meta.values()]})
+            )
+        else:
+            st.caption(subgraph_narrative(event_subgraph))
+
+    st.caption(_GRAPH_LEGEND)
 
 
 def _render_preset_buttons() -> None:
@@ -375,21 +500,12 @@ def render() -> None:
     st.divider()
     st.subheader(preset["label"])
     st.caption(f"{preset['scope_caption']} {preset['severity_caption']}")
-
-    if preset_name == _FLAGSHIP_PRESET:
-        # The parity claim ("identical count in DuckDB SQL and Neo4j Cypher")
-        # states the ASSERTED numbers from overview_metrics.json (item 2,
-        # consolidated review) -- exporters.export_overview computes flagship.sql
-        # live via DuckDB and run_build asserts it against flagship.expected_sql_
-        # count before the package ships; flagship.cypher is separately sourced
-        # from GRAPH.md. Reading len(ranked) here instead would report the
-        # (post-cap) card-grid count, which is a different number from the
-        # headline claim if a future config ever capped below the real count.
-        flagship = load_overview()["flagship"]
-        st.success(
-            f"{flagship['sql']} events — identical count in DuckDB SQL and Neo4j "
-            f"Cypher (Cypher sourced from {flagship['cypher_source']} until Phase 6)"
-        )
+    # Phase 6 (Task 3): every dynamics preset gets its own Cypher/SQL parity
+    # line (read from graph_subgraphs/<preset>.json, written by `demo
+    # subgraphs`); model presets get the fixed GT-only note. Supersedes the old
+    # flagship-only badge that read overview_metrics.json's sourced-until-
+    # Phase-6 value -- see _render_parity_line's docstring.
+    _render_parity_line(preset_name, preset)
 
     _render_card_grid(ranked, preset_name, preset)
 
@@ -403,9 +519,9 @@ def render() -> None:
         _render_context_panel(row)
         _render_model_panel(row, preset)
         _render_filmstrip(row)
-        # Phase-6 slot (item 11, consolidated review): the interactive graph page
-        # plugs into this labelled placeholder.
-        st.info("Interactive graph traversal for this scenario lands in Phase 6.")
+        # Phase-6 slot (item 11, consolidated review): implemented -- the
+        # interactive subgraph panel (Task 3).
+        _render_graph_panel(row, preset_name)
 
     st.divider()
     _render_semantic_gallery()

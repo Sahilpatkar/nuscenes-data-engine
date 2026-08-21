@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import io
 import json
+import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -14,6 +16,21 @@ import yaml
 
 FORBIDDEN = ("nuscenes_data_engine", "requests", "torch", "lancedb", "neo4j", "duckdb")
 DEMO_DIR = Path(__file__).resolve().parents[1] / "app" / "demo"
+
+# Phase 6 (Task 3): the six scenario presets subgraph_export.py exports one JSON
+# per -- mirrors tests/test_demo_export.py's own module-level tuple of the same
+# name/shape (that file exercises build.py's copy/validate side; this file's own
+# copy exercises the Scenario page's rendering side, no cross-import needed for
+# six short strings).
+_SUBGRAPH_PRESETS = (
+    "hard_braking_near_pedestrians",
+    "night_pedestrians",
+    "fast_cyclists",
+    "rain_vru",
+    "fn_pedestrians_night",
+    "low_conf_braking",
+)
+_SUBGRAPH_MODEL_PRESETS = ("fn_pedestrians_night", "low_conf_braking")
 
 
 def test_demo_app_never_imports_the_backend() -> None:
@@ -42,6 +59,97 @@ def test_demo_requirements_stay_minimal() -> None:
         if line.strip() and not line.startswith("#")
     ]
     assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
+
+
+def _stage_subgraphs(staging_dir: Path) -> None:
+    """Stage six ``graph_subgraphs/<preset>.json`` files under ``staging_dir`` --
+    adapted from tests/test_demo_export.py's own ``_stage_subgraphs`` helper (Task
+    2), which mirrors ``demo subgraph_export.export_subgraphs``'s real output shape
+    closely enough for ``run_build``'s ``_include_subgraphs`` copy/hash/flagship-
+    read logic to exercise, without a live Neo4j connection.
+
+    Unlike that helper, the flagship preset's one event ("s1" -- this fixture's own
+    flagship-tagged CAM_FRONT sample, see the Task-3 comments below) gets a REAL
+    subgraph built through the actual ``assemble_subgraph`` (not a synthetic ``{}``
+    events dict): Task 3's page tests render the graph panel, the path narrative,
+    and the legend against it, so it needs real nodes/meta/path, not a stub.
+    ``assemble_subgraph`` is pure and takes plain dicts ("records", the shape
+    ``event_subgraph_cypher()`` rows would have) -- no live Neo4j needed here
+    either. The other five presets' JSONs stay minimal (``events: {}``): no test
+    below opens their graph panel, only their header's parity line/GT-only note,
+    which reads straight off this file's top-level ``sql_count``/``cypher_count``/
+    ``parity``/``note`` fields.
+
+    ``flagship_records``' shared sample/scene/ego/prev/next columns (repeated
+    across the two ObjectObservation rows) mirror this fixture's own staged
+    samples/canbus/ego_pose/annotations_3d for "s1": is_hard_braking=True,
+    accel_long_min_mps2=-7.5, speed_mps=10.1, can_speed_kmh=36.0 (from
+    canbus.is_hard_braking/accel_long_min_mps2 and ego_pose.speed_mps/canbus.
+    can_speed_kmh below), a matching pedestrian at 5m (f1, < near_dist_m=10) and a
+    non-matching one at 20m (f2) -- the SAME f1/f2 annotations_3d rows already
+    staged for events.py's own flagship tagging, so the narrative's "pedestrian at
+    5.00 m" is the SAME 5m distance the card grid/ego panel show elsewhere on this
+    page, not a disconnected number.
+    """
+    from nuscenes_data_engine.demo.subgraph_export import assemble_subgraph
+
+    out = staging_dir / "graph_subgraphs"
+    out.mkdir(parents=True, exist_ok=True)
+
+    common = {
+        "sample": {"token": "s1", "timestamp": 1000},
+        "scene": {
+            "token": "sceneX", "name": "scene-X", "location": "boston-seaport",
+            "is_night": False, "is_rain": False,
+        },
+        "location": {"name": "boston-seaport"},
+        "ego": {
+            "token": "s1", "speed_mps": 10.1, "accel_long_min_mps2": -7.5,
+            "is_hard_braking": True, "can_speed_kmh": 36.0,
+        },
+        "prev_token": None,
+        "next_token": "v1",
+    }
+    flagship_records = [
+        {
+            **common,
+            "object": {
+                "token": "f1", "category": "human.pedestrian.adult",
+                "distance_to_ego_m": 5.0, "ego_rel_x": 3.0, "ego_rel_y": -1.0,
+                "visibility": "4",
+            },
+            "category": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+        },
+        {
+            **common,
+            "object": {
+                "token": "f2", "category": "human.pedestrian.adult",
+                "distance_to_ego_m": 20.0, "ego_rel_x": 18.0, "ego_rel_y": -4.0,
+                "visibility": "4",
+            },
+            "category": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+        },
+    ]
+    flagship_subgraph = assemble_subgraph(
+        flagship_records,
+        preset="hard_braking_near_pedestrians",
+        thresholds={"near_dist_m": 10.0, "high_speed_mps": 10.0},
+    )
+
+    for preset in _SUBGRAPH_PRESETS:
+        is_model = preset in _SUBGRAPH_MODEL_PRESETS
+        is_flagship = preset == "hard_braking_near_pedestrians"
+        payload: dict[str, Any] = {
+            "preset": preset,
+            "count_cypher": None if is_model else "MATCH (n) RETURN count(n)",
+            "sql_count": 1,
+            "cypher_count": None if is_model else 1,
+            "parity": None if is_model else True,
+            "events": {"s1": flagship_subgraph} if is_flagship else {},
+        }
+        if is_model:
+            payload["note"] = "the model verdict is not in the graph"
+        (out / f"{preset}.json").write_text(json.dumps(payload, sort_keys=True, indent=2))
 
 
 @pytest.fixture()
@@ -299,6 +407,15 @@ def built_demo_data(tmp_path: Path) -> Path:
     }
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))
+
+    # Task 3 (Phase 6): stage graph_subgraphs/ BEFORE run_build so the Scenario
+    # page's tests below get a package with the interactive graph panel included
+    # by default (mirrors curation/semsearch already being staged above) --
+    # _stage_subgraphs's hardcoded cypher_count=1 matches this fixture's flagship
+    # expected_sql_count (also 1), so run_build's sql==cypher assertion (Task 2)
+    # passes.
+    _stage_subgraphs(staging)
+
     run_build(config_path)
 
     # No real LanceDB store is staged in this fixture, so run_build's thumbnail
@@ -597,24 +714,105 @@ def test_scenario_filmstrip_slider_changes_readout(
 def test_scenario_flagship_badge(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """(d) The flagship preset shows the SQL/Cypher parity badge."""
+    """(d) The flagship preset's header shows the SQL/Cypher parity line.
+
+    Phase 6 (Task 3) replaces the old flagship-only, overview_metrics-sourced
+    badge ("N events -- identical count ... Cypher sourced from ... until Phase
+    6") with the generic per-preset parity line every dynamics preset now gets,
+    read straight off that preset's own graph_subgraphs/<preset>.json --
+    built_demo_data's _stage_subgraphs (Task 3) stages cypher_count=sql_count=1
+    (parity True) for every dynamics preset, so the flagship's line here is
+    "Cypher: 1 · SQL: 1 ✓".
+    """
     pytest.importorskip("streamlit")
     at = _scenarios_apptest(built_demo_data, monkeypatch)
 
     at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
     at.run(timeout=30)
     assert not at.exception
-    badges = [str(s.value) for s in at.success]
-    assert any("identical count in DuckDB SQL and Neo4j Cypher" in b for b in badges)
-    # cypher_source is read straight from overview_metrics.json's flagship dict
-    # (item 2, consolidated review) -- the fixture's config sets it to
-    # "docs/GRAPH.md" (the real configs/demo.yaml value), not the bare "GRAPH.md"
-    # the badge text used to hardcode.
-    assert any("Cypher sourced from docs/GRAPH.md until Phase 6" in b for b in badges)
-    # The count is the ASSERTED overview_metrics flagship.sql number, not a
-    # re-derivation from the (post-cap) events frame -- both happen to be 1 in
-    # this fixture, but for the right reason now.
-    assert any(b.startswith("1 events") for b in badges)
+    captions = [str(c.value) for c in at.caption]
+    assert any(c == "Cypher: 1 · SQL: 1 ✓" for c in captions)
+
+
+def test_scenario_graph_panel_shows_parity_narrative_and_legend(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(f) Selecting the flagship event ("s1") renders the interactive graph
+    panel's surrounding Streamlit elements: the header's Cypher/SQL parity line,
+    the path narrative caption, and the six-node-type legend.
+
+    ``streamlit_agraph.agraph`` is a custom component AppTest does not render (no
+    real browser round-trip happens, so ``clicked`` is always its default/initial
+    value) -- this only proves the surrounding page renders without raising and
+    with the right text, not that the graph itself draws correctly or that a
+    click updates the metadata panel. That's covered by the plan's Task 4 live
+    `streamlit run` check (a documented limitation, spec
+    docs/superpowers/specs/2026-08-20-demo-phase6-design.md §3).
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    captions = [str(c.value) for c in at.caption]
+    assert any(c == "Cypher: 1 · SQL: 1 ✓" for c in captions)
+    # The narrative is built by filters.subgraph_narrative from _stage_subgraphs's
+    # real assemble_subgraph output for "s1" -- see that helper's docstring for
+    # why 5.00m (not 3.80m) is the right distance here.
+    assert any(
+        "Scene scene-X" in c and "EgoPose (hard braking -7.50 m/s²)" in c
+        and "pedestrian at 5.00 m" in c
+        for c in captions
+    )
+    assert any(
+        "Scene" in c and "Sample" in c and "EgoPose" in c and "ObjectObservation" in c
+        and "Category" in c and "Location" in c
+        for c in captions
+    )
+
+
+def test_scenario_graph_panel_absent_when_subgraphs_not_staged(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(g) A package built without `demo subgraphs` staging (the Phase 1-5
+    contract, still valid in Phase 6 -- `demo build` never requires Neo4j) shows
+    the honest absent note in the graph slot instead of crashing or silently
+    rendering nothing. Deletes the staged graph_subgraphs/ from an otherwise-
+    normal built package rather than rebuilding one from scratch without it --
+    same idiom as the existing scenario_events.parquet/crop-file absence tests
+    just above.
+    """
+    pytest.importorskip("streamlit")
+    shutil.rmtree(built_demo_data / "graph_subgraphs")
+
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+    assert any("graph export not included in this package" in str(i.value) for i in at.info)
+    # The header's parity line is silent (nothing to report), not a stale claim.
+    captions = [str(c.value) for c in at.caption]
+    assert not any(c.startswith("Cypher:") for c in captions)
+
+
+def test_scenario_model_preset_shows_gt_only_note(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(h) A model-result preset's header shows the graph-holds-GT-only note, not
+    a Cypher/SQL parity line -- the model verdict lives in the prediction set,
+    never the graph (subgraph_export.py's own model-preset ``note``)."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.button(key="scenario_preset_fn_pedestrians_night").click().run(timeout=30)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any("graph holds GT only" in c and "prediction set" in c for c in captions)
+    assert not any(c.startswith("Cypher:") for c in captions)
 
 
 def test_scenario_semantic_gallery_renders(

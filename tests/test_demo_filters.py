@@ -22,6 +22,7 @@ from filters import (  # noqa: E402
     severity_caption,
     sort_frames,
     speed_caption,
+    subgraph_narrative,
 )
 
 
@@ -355,3 +356,95 @@ def test_severity_caption_uses_each_presets_own_ranking_quantity() -> None:
 def test_severity_caption_unknown_preset_raises() -> None:
     with pytest.raises(ValueError, match="unknown preset"):
         severity_caption("not_a_real_preset", {})
+
+
+# --- subgraph_narrative (Phase 6, Task 3) ------------------------------------------
+#
+# subgraph_export.assemble_subgraph's {nodes, edges, path} shape (see
+# tests/test_demo_subgraphs.py::test_event_subgraph_assembly_from_fake_records for
+# the real node/meta contract) -- built by hand here, not via assemble_subgraph
+# itself, since filters.py stays pure/backend-free (no nuscenes_data_engine import).
+
+
+def _node(node_id: str, label: str, on_path: bool, meta: dict[str, object]) -> dict[str, object]:
+    return {"id": node_id, "label": label, "group": label.lower(), "on_path": on_path, "meta": meta}
+
+
+def _full_subgraph(
+    *,
+    scene_name: str | None = "scene-0123",
+    accel: float | None = -4.5,
+    is_hard_braking: bool = True,
+    obj_group: str | None = "pedestrian",
+    obj_distance: float | None = 3.8,
+    include_scene: bool = True,
+    include_ego: bool = True,
+    include_object: bool = True,
+) -> dict[str, object]:
+    nodes = []
+    path: list[list[str]] = []
+
+    sample = _node("sample:smp1", "Sample", True, {"timestamp": 1000, "scene": scene_name})
+    nodes.append(sample)
+
+    scene_id = "scene:scn1"
+    ego_id = "egopose:ego1"
+    if include_scene:
+        nodes.append(_node(scene_id, "Scene", True, {"name": scene_name, "location": "boston-seaport"}))
+    if include_ego:
+        nodes.append(
+            _node(
+                ego_id, "EgoPose", True,
+                {"speed_mps": 12.0, "accel_long_min_mps2": accel, "is_hard_braking": is_hard_braking},
+            )
+        )
+    if include_scene or include_ego:
+        path.append([scene_id, "sample:smp1", ego_id])
+
+    if include_object:
+        obj_id = "object:ped1"
+        cat_id = "category:human.pedestrian.adult"
+        nodes.append(
+            _node(
+                obj_id, "ObjectObservation", True,
+                {"category": "human.pedestrian.adult", "group": obj_group, "distance_to_ego_m": obj_distance},
+            )
+        )
+        nodes.append(_node(cat_id, "Category", True, {"name": "human.pedestrian.adult", "group": obj_group}))
+        path.append(["sample:smp1", obj_id, cat_id])
+
+    return {"nodes": nodes, "edges": [], "path": path}
+
+
+def test_subgraph_narrative_full_sentence() -> None:
+    narrative = subgraph_narrative(_full_subgraph())
+    assert narrative == "Scene scene-0123 → Sample → EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_not_hard_braking_omits_the_words() -> None:
+    narrative = subgraph_narrative(_full_subgraph(accel=-2.0, is_hard_braking=False))
+    assert "hard braking" not in narrative
+    assert "EgoPose (-2.00 m/s²)" in narrative
+
+
+def test_subgraph_narrative_missing_ego_degrades_gracefully() -> None:
+    narrative = subgraph_narrative(_full_subgraph(include_ego=False))
+    assert "EgoPose" not in narrative
+    assert narrative == "Scene scene-0123 → Sample → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_missing_scene_degrades_gracefully() -> None:
+    narrative = subgraph_narrative(_full_subgraph(include_scene=False, scene_name=None))
+    assert not narrative.startswith("Scene")
+    assert narrative == "Sample → EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m"
+
+
+def test_subgraph_narrative_no_matching_object_degrades_gracefully() -> None:
+    narrative = subgraph_narrative(_full_subgraph(include_object=False))
+    assert "at" not in narrative.split("EgoPose")[-1].split("m/s²)")[-1]
+    assert narrative == "Scene scene-0123 → Sample → EgoPose (hard braking -4.50 m/s²)"
+
+
+def test_subgraph_narrative_empty_subgraph_is_never_an_exception() -> None:
+    assert subgraph_narrative({}) == "Sample"
+    assert subgraph_narrative({"nodes": [], "edges": [], "path": []}) == "Sample"

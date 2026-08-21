@@ -99,6 +99,36 @@ def load_semsearch() -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+def _subgraphs_dir() -> Path:
+    return DEMO_DATA / "graph_subgraphs"
+
+
+def subgraphs_available() -> bool:
+    """Whether `demo subgraphs` was staged for this package (build.py's `demo
+    build` copies `graph_subgraphs/<preset>.json` for all six presets together, or
+    none at all -- a partial staging fails the build rather than shipping, see
+    tests/test_demo_export.py) -- mirrors `events_available`'s file-existence
+    check so the Scenario page can show an honest absent note instead of a bare
+    FileNotFoundError.
+    """
+    return _subgraphs_dir().is_dir()
+
+
+@st.cache_data
+def load_subgraphs(preset: str) -> dict[str, Any] | None:
+    """One preset's `graph_subgraphs/<preset>.json` (subgraph_export.export_
+    subgraphs' `{preset, count_cypher, sql_count, cypher_count, parity, note?,
+    events}` shape), or `None` when the file is absent -- either the whole package
+    has no subgraphs (`subgraphs_available()` is False) or (defensively) this one
+    preset's file specifically is missing.
+    """
+    path = _subgraphs_dir() / f"{preset}.json"
+    if not path.is_file():
+        return None
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 

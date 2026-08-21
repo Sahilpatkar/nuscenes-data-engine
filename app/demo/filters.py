@@ -309,3 +309,57 @@ def severity_caption(preset: str, row: Mapping[str, Any]) -> str:
     if preset == "low_conf_braking":
         return confidence_caption(row["low_conf_min_conf"])
     raise ValueError(f"severity_caption: unknown preset {preset!r} — expected one of {_SEVERITY_PRESETS}")
+
+
+def subgraph_narrative(subgraph: Mapping[str, Any]) -> str:
+    """The "why this event" one-liner for one event's assembled subgraph (Phase 6's
+    ``subgraph_export.assemble_subgraph`` output: ``{nodes, edges, path}``, nodes
+    carrying ``{id, label, group, on_path, meta}``): "Scene scene-0123 → Sample →
+    EgoPose (hard braking -4.50 m/s²) → pedestrian at 3.80 m".
+
+    ``path``'s ordered id chains pick out WHICH node fills each slot -- the backbone
+    ``[scene_id, sample_id, ego_id]`` (``path[0]``) and the first ``[sample_id,
+    object_id, category_id]`` chain (the earliest-matching on_path
+    ObjectObservation) -- while each node's own ``meta`` supplies the values. Every
+    piece degrades independently rather than raising or emitting a "None" literal:
+    a missing Scene name, EgoPose accel, or on_path object each just drops its own
+    segment. "Sample" always appears (even for a totally empty ``subgraph``) so the
+    panel never shows a blank caption.
+    """
+    nodes = subgraph.get("nodes") or []
+    path = subgraph.get("path") or []
+    by_id = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
+
+    backbone = path[0] if path and len(path[0]) == 3 else [None, None, None]
+    scene = by_id.get(backbone[0])
+    ego = by_id.get(backbone[2])
+
+    parts: list[str] = []
+
+    scene_name = (scene.get("meta") or {}).get("name") if scene else None
+    if scene_name:
+        parts.append(f"Scene {scene_name}")
+
+    parts.append("Sample")
+
+    if ego is not None:
+        ego_meta = ego.get("meta") or {}
+        accel = ego_meta.get("accel_long_min_mps2")
+        if accel is not None:
+            prefix = "hard braking " if ego_meta.get("is_hard_braking") else ""
+            parts.append(f"EgoPose ({prefix}{float(accel):.2f} m/s²)")
+        else:
+            parts.append("EgoPose")
+
+    object_chain = next((chain for chain in path[1:] if len(chain) == 3), None)
+    obj = by_id.get(object_chain[1]) if object_chain else None
+    if obj is not None:
+        obj_meta = obj.get("meta") or {}
+        category = obj_meta.get("group") or obj_meta.get("category")
+        distance = obj_meta.get("distance_to_ego_m")
+        if category and distance is not None:
+            parts.append(f"{category} at {float(distance):.2f} m")
+        elif category:
+            parts.append(str(category))
+
+    return " → ".join(parts)
