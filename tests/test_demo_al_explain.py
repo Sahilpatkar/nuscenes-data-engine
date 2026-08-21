@@ -241,6 +241,29 @@ def test_pick_pass_attribution_covers_selected_set_exactly() -> None:
     assert main == {"a3", "b2", "c1"}
 
 
+def test_pick_pass_attribution_rejects_a_selected_list_out_of_pass_order() -> None:
+    """The backfill tokens are identified POSITIONALLY (the entries between the
+    night take and the main pass), which is only correct because select_by_mass
+    appends in pass order. A caller that sorted or set-round-tripped the token list
+    must get a loud error, not a silently wrong `backfill` attribution
+    (consolidated review M3).
+    """
+    selected, _diagnostics = _synthetic_selection()
+    shuffled = sorted(selected)
+    assert shuffled != selected                      # the fixture really is reordered
+
+    with pytest.raises(ValueError, match="select_by_mass pass order"):
+        al_explain.attribute_pick_pass(
+            _COMMUNITIES,
+            _DEGREES,
+            _MASSES,
+            shuffled,
+            night_tokens=_NIGHT,
+            night_floor=_NIGHT_FLOOR,
+            n_mine=_N_MINE,
+        )
+
+
 # ---------------------------------------------------------------------------
 # validate_reproduction
 # ---------------------------------------------------------------------------

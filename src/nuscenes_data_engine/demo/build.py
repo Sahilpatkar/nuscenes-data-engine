@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from nuscenes_data_engine.config import load_yaml
+from nuscenes_data_engine.config import get_settings, load_yaml
 from nuscenes_data_engine.demo import exporters
 from nuscenes_data_engine.demo.events import build_events
 from nuscenes_data_engine.demo.exporters import write_json
@@ -581,7 +581,7 @@ def _include_al_explain(config: dict[str, Any], out_dir: Path) -> str:
         )
 
     validation = json.loads((staging_dir / "al_explain_validation.json").read_text())
-    expected_arm = config["al"]["arm"]
+    expected_arm = _al_section(config)["arm"]
     if validation.get("arm") != expected_arm:
         raise ValueError(
             f"demo build: al_explain staging at {staging_dir} is for arm "
@@ -598,6 +598,50 @@ def _include_al_explain(config: dict[str, Any], out_dir: Path) -> str:
     for name in _AL_EXPLAIN_FILES:
         shutil.copy2(staging_dir / name, out_dir / name)
     return "included"
+
+
+def _al_section(config: dict[str, Any]) -> dict[str, Any]:
+    """``configs/demo.yaml``'s ``al:`` section, or a directive error.
+
+    Consolidated review (M9): Phase 7 added the section, and both ``run_build`` and
+    ``_include_al_explain`` used to index ``config["al"]`` straight -- a demo.yaml
+    written before Phase 7 (or one whose section was deleted) failed with a bare
+    ``KeyError: 'al'`` that names neither the file nor the fix.
+    """
+    al_cfg: dict[str, Any] | None = config.get("al")
+    if not al_cfg:
+        raise ValueError(
+            "configs/demo.yaml needs an `al:` section (Phase 7) — see docs/DEMO.md"
+        )
+    return al_cfg
+
+
+def _vlm_label_paths(config: dict[str, Any], *, al_dir: Path) -> list[Path]:
+    """The VLM label tables ``vlm_counts`` must read, resolved from the same config
+    keys ``active_learning/pseudo_label.py::run_pseudo_label`` resolves them from.
+
+    The run merges ``<settings.data_dir>/autolabel/labels.parquet`` and the weak
+    autolabel config's own ``state.dir`` label table, so both are resolved here
+    rather than hardcoded: ``paths.autolabel_dir`` overrides the first (the
+    settings expression is the fallback, exactly what the run computes), and
+    ``paths.autolabel_weak_config``'s ``state.dir`` the second (falling back to
+    ``<active_learning_dir>/autolabel_weak``, the shipped config's own value).
+    Both keys are optional so a pre-Phase-7 demo.yaml still builds.
+    """
+    paths = config["paths"]
+    configured_autolabel = paths.get("autolabel_dir")
+    autolabel_dir = (
+        Path(configured_autolabel)
+        if configured_autolabel
+        else Path(get_settings().data_dir) / "autolabel"
+    )
+    weak_state = al_dir / "autolabel_weak"
+    weak_config = paths.get("autolabel_weak_config")
+    if weak_config and Path(weak_config).is_file():
+        configured_weak = (load_yaml(Path(weak_config)).get("state") or {}).get("dir")
+        if configured_weak:
+            weak_state = Path(configured_weak)
+    return exporters.vlm_label_tables(autolabel_dir=autolabel_dir, weak_state_dir=weak_state)
 
 
 def _add_al_selection_columns(
@@ -692,9 +736,12 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # hero.token below), reading the manifest/predictions/gt_boxes this step just
     # produced when curation is included, or empty frames otherwise (never touched
     # when the configured token list is empty, which absent curation requires).
-    al_cfg = config["al"]
+    al_cfg = _al_section(config)
     al_config_path = Path(paths["active_learning_config"])
-    n_mine = load_yaml(al_config_path)["mining"]["n_mine"]
+    # Consolidated review (M4): resolved through the one helper al_explain.py also
+    # calls -- graph_mining.n_mine wins over mining.n_mine, so the quota-sum check
+    # below is against the budget the GRAPH arms actually ran with.
+    n_mine = exporters.resolve_n_mine(load_yaml(al_config_path))
 
     manifest_df = pd.DataFrame()
     predictions_df = pd.DataFrame()
@@ -750,6 +797,10 @@ def run_build(config_path: Path) -> dict[str, Any]:
                 f"({overview_retention!r}) — the two recipes have drifted"
             )
 
+    # Both VLM label tables the weak run merged (C3) -- resolved once, so the
+    # export and the input-hash sweep below can never read different files.
+    vlm_label_paths = _vlm_label_paths(config, al_dir=al_dir)
+
     n_weak_labels = 0
     n_vlm_counts = 0
     if curation_status == "included":
@@ -760,15 +811,20 @@ def run_build(config_path: Path) -> dict[str, Any]:
         )
         n_weak_labels = len(weak_labels_df)
 
+        # Consolidated review (I1): every curated frame carrying a weak_verdict, not
+        # just the two weak_accepted/weak_rejected curation buckets. The page's
+        # accepted/rejected tabs are keyed off weak_verdict (78 frames today, not
+        # the buckets' 40), so a bucket-scoped table left 38 of the frames it
+        # renders without a counts row at all.
         vlm_tokens = [
-            token
-            for token, buckets in zip(
-                manifest_df["sample_data_token"], manifest_df["curation_buckets"], strict=True
-            )
-            if "weak_accepted" in buckets or "weak_rejected" in buckets
+            str(token)
+            for token in manifest_df.loc[
+                manifest_df["weak_verdict"].notna(), "sample_data_token"
+            ]
         ]
         vlm_counts_df = exporters.export_vlm_counts(
-            al_dir=al_dir, processed_dir=processed, tokens=vlm_tokens, out_dir=out_dir,
+            label_paths=vlm_label_paths, processed_dir=processed,
+            tokens=vlm_tokens, out_dir=out_dir,
         )
         n_vlm_counts = len(vlm_counts_df)
 
@@ -929,8 +985,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
         # above.
         pseudo_labels_path = al_dir / f"{weak_arm}_pseudo_labels.parquet"
         inputs[str(pseudo_labels_path)] = _sha256(pseudo_labels_path)
-        vlm_labels_path = al_dir / "autolabel_weak" / "labels.parquet"
-        inputs[str(vlm_labels_path)] = _sha256(vlm_labels_path)
+        # BOTH label tables (C3), each hashed only when it exists -- a fresh clone
+        # has no data/autolabel/, which export_vlm_counts logs and skips.
+        for vlm_labels_path in vlm_label_paths:
+            if vlm_labels_path.is_file():
+                inputs[str(vlm_labels_path)] = _sha256(vlm_labels_path)
     # Events need no staging input of their own — build_events reads only the
     # already-hashed processed tables (+ the same three curation-staging parquets
     # hashed just above, when present). Semsearch's own staged parquet is a

@@ -214,7 +214,7 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
             "weather": ["clear"],
             "hazards": ["[]"],
             "notable_conditions": ["[]"],
-            "label_confidence": [0.8],
+            "label_confidence": ["high"],
             "cars": [1.0], "trucks": [0.0], "buses": [0.0], "trailers": [0.0],
             "construction_vehicles": [0.0], "motorcycles": [0.0], "bicycles": [0.0],
             "pedestrians": [1.0], "traffic_cones": [0.0], "barriers": [0.0],
@@ -300,7 +300,7 @@ _AL_RESULTS_COLUMNS = [
     "round_order", "family", "overall_map50", "night_map50",
     "night_precision", "night_recall", "night_ped_map5095",
     "day_map5095", "rain_map5095", "clear_map5095",
-    "n_boxes", "n_scenes", "night_share", "rain_share",
+    "n_boxes", "n_scenes", "night_share", "rain_share", "val_images",
 ]
 
 
@@ -374,6 +374,30 @@ def test_al_results_night_pedestrian_and_slices_are_derived(
     assert pd.isna(df.loc["random", "n_boxes"])
     assert df.loc["weak_random", "n_boxes"] == 1942
     assert df.loc["weak_graph_rate_night", "n_boxes"] == 1500
+
+
+def test_al_results_carries_val_images_when_results_json_has_it(
+    tmp_path: Path, tiny_inputs: dict[str, Path]
+) -> None:
+    """``val_images`` is results.json's own per-arm val-split size (6019 on every
+    real arm) -- the Active Learning page's Evaluation beat names it. Nullable
+    Int64: an arm (or a whole results.json) without it gets NA, not 0, and not a
+    KeyError."""
+    from nuscenes_data_engine.demo.exporters import export_al_results
+
+    al = tiny_inputs["al"]
+    results_path = al / "results.json"
+    results = json.loads(results_path.read_text())
+    results["baseline"]["val_images"] = 6019
+    results_path.write_text(json.dumps(results))
+
+    df = export_al_results(
+        al_dir=al, out_dir=tmp_path / "demo_data", processed_dir=tiny_inputs["processed"]
+    ).set_index("arm")
+    assert df["val_images"].dtype == "Int64"
+    assert df.loc["baseline", "val_images"] == 6019
+    # every other arm in this fixture carries no val_images at all
+    assert pd.isna(df.loc["random", "val_images"])
 
 
 def test_al_results_composition_columns_come_from_arm_composition(
@@ -905,7 +929,9 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
         "weather": [None, "clear", "rain", "fog", "fog2"],
         "hazards": ["[]"] * 5,
         "notable_conditions": ["[]"] * 5,
-        "label_confidence": [None, 0.9, 0.7, None, None],
+        # A STRING enum in the real table ("high"/"low"/None), never a float
+        # (consolidated review C1).
+        "label_confidence": [None, "high", "low", None, None],
     }
     for name, values in _count_cols(5).items():
         rows[name] = values
@@ -918,9 +944,31 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
         "category_group": ["car", "pedestrian", "car", "bus"],
     }).to_parquet(processed / "annotations.parquet")
 
+    # The frame the Phase-6b autolabel run labelled and the weak run never did:
+    # its label lives ONLY in the OTHER table, which run_pseudo_label merges before
+    # verifying (consolidated review C3). vlm_counts must find it there.
+    autolabel = tmp_path / "autolabel"
+    autolabel.mkdir()
+    other: dict[str, Any] = {
+        "sample_data_token": ["wOther"],
+        "model": ["qwen2.5-vl"],
+        "parse_status": ["ok"],
+        "time_of_day": ["night"],
+        "weather": ["clear"],
+        "hazards": ["[]"],
+        "notable_conditions": ["[]"],
+        "label_confidence": ["high"],
+    }
+    for name, values in _count_cols(1).items():
+        other[name] = values
+    other["cars"] = [3.0]
+    other["pedestrians"] = [1.0]
+    pd.DataFrame(other).to_parquet(autolabel / "labels.parquet")
+
     out = tmp_path / "demo_data"
     df = export_vlm_counts(
-        al_dir=al, processed_dir=processed, tokens=["wA", "wR", "wNoVlm", "wBothBad"],
+        label_paths=[autolabel / "labels.parquet", al / "autolabel_weak" / "labels.parquet"],
+        processed_dir=processed, tokens=["wA", "wR", "wNoVlm", "wBothBad", "wOther"],
         out_dir=out,
     ).set_index("sample_data_token")
 
@@ -932,6 +980,7 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
     ]
     # wA: the "ok" row wins over the earlier "truncated" duplicate.
     assert df.loc["wA", "parse_status"] == "ok"
+    assert df.loc["wA", "label_confidence"] == "high"
     assert df.loc["wA", "vlm_time_of_day"] == "night"
     assert df.loc["wA", "vlm_car"] == 1.0
     assert df.loc["wA", "vlm_pedestrian"] == 2.0
@@ -951,6 +1000,12 @@ def test_vlm_counts_one_row_per_token_prefers_ok_parse_and_adds_gt_counts(
     assert pd.isna(df.loc["wNoVlm", "parse_status"])
     assert pd.isna(df.loc["wNoVlm", "vlm_car"])
     assert df.loc["wNoVlm", "gt_car"] == 0
+    # wOther: labelled only in the FIRST table -- the row the old single-table read
+    # left entirely NA (8 of the 40 shipped rows).
+    assert df.loc["wOther", "parse_status"] == "ok"
+    assert df.loc["wOther", "label_confidence"] == "high"
+    assert df.loc["wOther", "vlm_car"] == 3.0
+    assert df.loc["wOther", "vlm_pedestrian"] == 1.0
 
 
 def test_vlm_counts_empty_tokens_writes_empty_table_with_schema(tmp_path: Path) -> None:
@@ -961,10 +1016,66 @@ def test_vlm_counts_empty_tokens_writes_empty_table_with_schema(tmp_path: Path) 
     al.mkdir()
     processed.mkdir()
     out = tmp_path / "demo_data"
-    df = export_vlm_counts(al_dir=al, processed_dir=processed, tokens=[], out_dir=out)
+    df = export_vlm_counts(
+        label_paths=[al / "autolabel_weak" / "labels.parquet"],
+        processed_dir=processed, tokens=[], out_dir=out,
+    )
     assert df.empty
     assert (out / "vlm_counts.parquet").is_file()
     assert "gt_car" in df.columns
+
+
+def test_vlm_counts_absent_label_table_is_a_logged_no_op(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A fresh clone has no ``data/autolabel/`` at all -- the missing table is
+    logged and skipped, and the remaining one still produces the rows. Only when
+    NO table exists does the export refuse (there is no VLM label anywhere)."""
+    from nuscenes_data_engine.demo.exporters import export_vlm_counts
+
+    al = tmp_path / "active_learning"
+    processed = tmp_path / "processed"
+    (al / "autolabel_weak").mkdir(parents=True)
+    processed.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["wA"], "model": ["qwen2.5-vl"], "parse_status": ["ok"],
+        "time_of_day": ["night"], "weather": ["clear"],
+        "hazards": ["[]"], "notable_conditions": ["[]"], "label_confidence": ["high"],
+        "cars": [1.0], "trucks": [0.0], "buses": [0.0], "trailers": [0.0],
+        "construction_vehicles": [0.0], "motorcycles": [0.0], "bicycles": [0.0],
+        "pedestrians": [0.0], "traffic_cones": [0.0], "barriers": [0.0],
+    }).to_parquet(al / "autolabel_weak" / "labels.parquet")
+    pd.DataFrame(
+        {"sample_data_token": ["wA"], "category_group": ["car"]}
+    ).to_parquet(processed / "annotations.parquet")
+
+    missing = tmp_path / "autolabel" / "labels.parquet"
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        df = export_vlm_counts(
+            label_paths=[missing, al / "autolabel_weak" / "labels.parquet"],
+            processed_dir=processed, tokens=["wA"], out_dir=tmp_path / "demo_data",
+        )
+    assert str(missing) in caplog.text
+    assert df.set_index("sample_data_token").loc["wA", "parse_status"] == "ok"
+
+    with pytest.raises(ValueError, match="no VLM label table found"):
+        export_vlm_counts(
+            label_paths=[missing], processed_dir=processed, tokens=["wA"],
+            out_dir=tmp_path / "demo_data",
+        )
+
+
+def test_resolve_n_mine_prefers_the_graph_mining_override(tmp_path: Path) -> None:
+    """The graph arms read ``graph_mining.n_mine`` first (graph_mining.py), so the
+    demo's two readers -- build.py's quota-sum check and al_explain's
+    re-derivation -- must too, or they measure different budgets (consolidated
+    review M4)."""
+    from nuscenes_data_engine.demo.exporters import resolve_n_mine
+
+    assert resolve_n_mine({"mining": {"n_mine": 1500}, "graph_mining": {"n_mine": 900}}) == 900
+    assert resolve_n_mine({"mining": {"n_mine": 1500}}) == 1500
+    assert resolve_n_mine({"graph_mining": {"n_mine": 900}}) == 900
+    assert resolve_n_mine({}) == 1500
 
 
 def test_export_thumbs_writes_one_jpeg_per_token(tmp_path: Path) -> None:
@@ -1130,6 +1241,11 @@ def _write_demo_config(
             "processed_dir": str(tiny_inputs["processed"]),
             "active_learning_dir": str(al),
             "active_learning_config": str(tiny_inputs["al_config"]),
+            # Phase 7 (consolidated review C3): vlm_counts reads BOTH label tables
+            # run_pseudo_label merges. Pointed inside tmp_path so these fixtures
+            # never reach for the machine's real data/autolabel/ -- absent by
+            # default (a logged skip), staged by the test that exercises the merge.
+            "autolabel_dir": str(tmp_path / "autolabel"),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -1477,6 +1593,80 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
         for key in manifest["inputs"]
     )
     assert any(key.endswith("random_accepted.parquet") for key in manifest["inputs"])
+
+
+def test_build_vlm_counts_cover_every_weak_verdict_frame_from_both_label_tables(
+    build_config: Path, tmp_path: Path
+) -> None:
+    """vlm_counts is scoped to ``frame_manifest.weak_verdict``, not the two
+    curation buckets (consolidated review I1) -- the page's tabs render every
+    verdict frame -- and it reads BOTH label tables (C3), hashing each one that
+    exists.
+
+    "v0" is the staged curated frame: it carries ``curation_buckets =
+    ["night_failure"]`` (so the old bucket-scoped list skipped it entirely) but is
+    in the weak arm's accepted set, so ``weak_verdict == "accepted"``. Its VLM
+    label is staged ONLY in the Phase-6b autolabel table here, so a row that is
+    populated at all proves both fixes at once.
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    autolabel_dir = Path(config["paths"]["autolabel_dir"])
+    autolabel_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0"], "model": ["qwen2.5-vl"], "parse_status": ["ok"],
+        "time_of_day": ["night"], "weather": ["clear"],
+        "hazards": ["[]"], "notable_conditions": ["[]"], "label_confidence": ["high"],
+        "cars": [3.0], "trucks": [0.0], "buses": [0.0], "trailers": [0.0],
+        "construction_vehicles": [0.0], "motorcycles": [0.0], "bicycles": [0.0],
+        "pedestrians": [1.0], "traffic_cones": [0.0], "barriers": [0.0],
+    }).to_parquet(autolabel_dir / "labels.parquet")
+
+    manifest = run_build(build_config)
+    out = Path(config["paths"]["out_dir"])
+    counts = pd.read_parquet(out / "vlm_counts.parquet").set_index("sample_data_token")
+    assert list(counts.index) == ["v0"]
+    assert manifest["validation"]["n_vlm_counts"] == 1
+    assert counts.loc["v0", "parse_status"] == "ok"
+    assert counts.loc["v0", "label_confidence"] == "high"
+    assert counts.loc["v0", "vlm_car"] == 3.0
+    # both tables hashed as inputs, the weak one and the Phase-6b one
+    assert str(autolabel_dir / "labels.parquet") in manifest["inputs"]
+    assert any(key.endswith("autolabel_weak/labels.parquet") for key in manifest["inputs"])
+
+
+def test_build_resolves_n_mine_from_the_graph_mining_override(
+    build_config: Path, tmp_path: Path
+) -> None:
+    """A config that overrides the budget for the GRAPH arms only must be read the
+    same way graph_mining.py reads it, or export_al_communities' quota-sum check
+    fires against a budget no arm ever used (consolidated review M4)."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    al_config_path = Path(config["paths"]["active_learning_config"])
+    # tiny_inputs' communities_*.json quotas each sum to 3; mining.n_mine says 99
+    # (a budget no graph arm used), graph_mining.n_mine says 3.
+    al_config_path.write_text(
+        yaml.safe_dump({"mining": {"n_mine": 99}, "graph_mining": {"n_mine": 3}})
+    )
+    run_build(build_config)
+    assert pd.read_parquet(Path(config["paths"]["out_dir"]) / "al_communities.parquet").shape[0]
+
+
+def test_build_without_an_al_section_fails_directively(build_config: Path) -> None:
+    """A pre-Phase-7 configs/demo.yaml has no ``al:`` key at all; a bare
+    ``KeyError: 'al'`` names neither the file nor the fix (consolidated review
+    M9)."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    del config["al"]
+    build_config.write_text(yaml.safe_dump(config))
+
+    with pytest.raises(ValueError, match=r"needs an `al:` section"):
+        run_build(build_config)
 
 
 def test_build_wires_weak_tables_and_checks_retention_against_overview(

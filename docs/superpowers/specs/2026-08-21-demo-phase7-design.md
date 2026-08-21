@@ -92,6 +92,11 @@ baseline 0.0826 → `graph_rate_night` 0.1171, `weak_graph_rate_night` 0.0203),
 `rain_share` via `active_learning/report.py::arm_composition` (nullable where an
 arm has no token list). Existing columns and their values are unchanged.
 
+*Amendment (2026-08-21, consolidated review I2): plus `val_images` (results.json's
+own per-arm val-split size, 6019 on every arm), appended last as a nullable Int64 —
+the page's Evaluation beat already reads it and falls back to a number-less sentence
+without it.*
+
 **`weak_supervision_results.parquet`** (2 rows) gains: `n_rejected`, `tolerance`,
 `conf`, `n_unparsed`, `gt_boxes_per_candidate_frame`, and
 **`gt_boxes_per_rejected_frame`** computed with the verified recipe: read
@@ -132,6 +137,19 @@ bicycles`) and `gt_car … gt_bicycle` (from `annotations.parquet` `category_gro
 If `labels.parquet` carries more than one row for a token, keep the first
 `parse_status == "ok"` row in file order and assert uniqueness afterwards.
 
+*Amendment (2026-08-21, consolidated review C3/I1): the scope is every curated frame
+carrying a `weak_verdict` (78 today), not the `weak_accepted`/`weak_rejected`
+curation buckets (40) — the page's accepted/rejected tabs are keyed off
+`weak_verdict`, so a bucket-scoped table left 38 rendered frames with no counts row.
+And the INPUTS are BOTH label tables `active_learning/pseudo_label.py::
+run_pseudo_label` merges — `<settings.data_dir>/autolabel/labels.parquet` and the
+weak autolabel config's `state.dir` table — resolved from the same config keys the
+run resolves them from (`paths.autolabel_dir` / `paths.autolabel_weak_config` in
+`configs/demo.yaml`, each with the run's own expression as its fallback), hashed as
+inputs when present, a missing table logged and skipped. Reading only the weak table
+shipped 8 of 40 rows all-NA for frames the VLM had labelled; the union covers 78/78,
+all `parse_status == "ok"` (69 high, 9 low).*
+
 **`frame_manifest.parquet`** gains `weak_verdict` (`accepted` / `rejected` for
 tokens in the weak arm's candidate pool, else NA) and `al_selected_by` (the AL arm
 name for tokens in `curation.al_arm`'s selected parquet, else NA) — derived from the
@@ -139,7 +157,10 @@ local arm parquets at build, not hand-tagged.
 
 **`al_communities.parquet`** — 97 rows from the two persisted diagnostics files
 (`communities_graph_rate.json`, `communities_graph_rate_night.json`): `community,
-size, night_members, mass, quota_graph_rate, quota_graph_rate_night`. Build asserts
+size, night_members, mass, quota_graph_rate, quota_graph_rate_night`, plus
+`is_backfill` (True only for `select_by_mass`'s `community == -1` sentinel row —
+amendment 2026-08-21, consolidated review: the shipped table carries it and the
+page filters on `community >= 0`, so the schema is written down here too). Build asserts
 the two files agree on `size`/`night_members`/`mass` and that each quota column sums
 to `n_mine`. No Neo4j needed — the community chart works even when `al-explain` is
 absent.
@@ -202,7 +223,13 @@ Phase-3 overlay (`draw_overlay`, mode `overlay`, 0.6 crop), and a per-box table
 built by a pure `filters.fixed_boxes(gt, preds, *, baseline, arm)` helper: every
 visible GT box where the arm's claim beats the baseline's — baseline `none` (no
 prediction ≥ floor) or `low-conf 0.22` → arm `0.61 (tp)` / `low-conf 0.41` — with
-class and distance. Below it the arm-level line: night mAP50-95 0.1667 → 0.1768 on
+class and distance.
+
+*Amendment (2026-08-21, consolidated review): `arm_claim` is a bare confidence
+string like `0.61` (the `(tp)` suffix the paragraph above sketches is not written),
+and only `tp` arm claims qualify as an upgrade — the same per-box rule the exemplar
+validation amendment below applies, so the table and the validation agree by
+construction.* Below it the arm-level line: night mAP50-95 0.1667 → 0.1768 on
 the held-out val split. The doc's `Failure → Selected → Added → Retrained →
 Improved` arrows close the section.
 
@@ -228,7 +255,16 @@ mutual-zero shares from `weak_verifier_by_class.parquet` (pedestrian 79%).
 **(d) Visual comparison.** Tabs *accepted* / *rejected* over the 40 curated weak
 frames (`weak_verdict`): crop with GT (green) and VLM pseudo boxes in a new style
 (`STYLE_VLM`: blue solid, label `VLM 0.73`) via a `draw_overlay` `vlm_boxes=`
-extension that keeps the existing signature backward-compatible; verdict badge
+extension that keeps the existing signature backward-compatible;
+
+*Amendment (2026-08-21, consolidated review C2): the pseudo boxes are the BASELINE
+DETECTOR's proposals at conf ≥ 0.5 (`pseudo_label.py::propose_boxes`), kept only
+when the VLM's per-class counts agree within tolerance 1 — the VLM never draws
+boxes. So the style is `STYLE_PSEUDO`, the label `pseudo 0.73`, and the kwarg
+`pseudo_boxes=`; `VLM 0.73` attributed the detector's own confidence to the VLM.
+`docs/DEMO_PLAN.md:606`'s "VLM-generated labels" wording is the master plan's
+shorthand, which the demo deliberately corrects. The tab scope is every
+`weak_verdict` frame (78), not 40 — see the `vlm_counts` amendment in §2.* verdict badge
 (accepted-with-zero-boxes flagged "accepted — 0 pseudo boxes (mutual zero)";
 rejected frames have no boxes by construction and the caption says the verifier
 compared the VLM's counts to the *detector's*, which are not in the package); a VLM

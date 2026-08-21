@@ -61,7 +61,7 @@ from nuscenes_data_engine.active_learning.mining import (
 )
 from nuscenes_data_engine.config import get_settings, load_yaml
 from nuscenes_data_engine.data_engine.graph import connection
-from nuscenes_data_engine.demo.exporters import write_json
+from nuscenes_data_engine.demo.exporters import resolve_n_mine, write_json
 
 logger = logging.getLogger("nuscenes_data_engine")
 
@@ -186,7 +186,9 @@ def attribute_pick_pass(
 
     Raises ``ValueError`` unless the three labels partition ``selected`` exactly —
     an attribution that doesn't cover the set is a re-derivation bug, not something
-    to paper over with a default label.
+    to paper over with a default label — and (consolidated review, M3) unless
+    ``selected`` is still in ``select_by_mass``'s own append order, since the
+    backfill tokens are identified by their POSITION in it.
     """
     ranked = _ranked_members(communities, degrees)
     passes: dict[str, str] = {}
@@ -203,6 +205,14 @@ def attribute_pick_pass(
             picked[c] += len(take)
     for token in night_take:
         passes[token] = "night"
+
+    # Identifying the backfill POSITIONALLY below is only correct because
+    # `select_by_mass` appends in pass order (night take, then backfill, then main)
+    # -- so verify that `selected` really is in that order before trusting a slice
+    # of it. A caller that sorted or set-round-tripped the token list would
+    # otherwise get a silently wrong `backfill` attribution rather than an error.
+    if list(selected[: len(night_take)]) != night_take:
+        raise ValueError("selected is not in select_by_mass pass order")
 
     # The seeded backfill (if any) immediately follows the night take in `selected`
     # and brings it up to exactly `night_floor` frames.
@@ -452,7 +462,9 @@ def run_al_explain(
         )
     quotas_cfg = {flag: int(v) for flag, v in (arm_cfg.get("quotas") or {}).items()}
     night_floor = quotas_cfg.get("is_night", 0)
-    n_mine = int(graph_cfg.get("n_mine", cfg.get("mining", {}).get("n_mine", 1500)))
+    # Consolidated review (M4): the one helper build.py also calls, so the demo's
+    # two n_mine reads cannot drift apart.
+    n_mine = resolve_n_mine(cfg)
     route_k = int(graph_cfg.get("route_k", 10))
     seed = int(graph_cfg.get("seed", cfg.get("mining", {}).get("seed", 64)))
     top_k = int(cfg.get("sweep", {}).get("top_k_failures", 1000))

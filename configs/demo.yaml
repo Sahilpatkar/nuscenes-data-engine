@@ -6,6 +6,17 @@ paths:
   active_learning_config: configs/active_learning.yaml   # Phase 7: n_mine for
                       # al_communities.parquet's quota-sum check -- never re-typed
                       # in this file
+  autolabel_dir: data/autolabel          # Phase 7 (consolidated review, C3): the
+                      # Phase-6b VLM label table. `al pseudo-label` MERGES this
+                      # with the weak run's own table before verifying, so
+                      # vlm_counts.parquet must read both or frames the VLM did
+                      # label come out all-NA. Optional: defaults to
+                      # <DATA_DIR>/autolabel, the same expression pseudo_label.py
+                      # computes.
+  autolabel_weak_config: configs/autolabel_weak.yaml     # its `state.dir` is the
+                      # weak run's OWN label table -- resolved from the config the
+                      # run reads, never hardcoded here. Optional: defaults to
+                      # <active_learning_dir>/autolabel_weak.
   mlruns_dir: mlruns
   lancedb_path: data/lancedb
   lancedb_table: frames

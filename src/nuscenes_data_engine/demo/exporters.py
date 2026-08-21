@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +215,13 @@ def export_al_results(*, al_dir: Path, out_dir: Path, processed_dir: Path) -> pd
     with ``.get`` throughout so an older results.json without them yields NA
     (pandas ``None``) rather than a ``KeyError`` -- every existing column and value
     is otherwise unchanged, and rows stay sorted by ``arm``.
+
+    Consolidated review (I2): ``val_images`` (results.json's own per-arm val-split
+    size, 6019 on every arm today) is carried too, as a LAST, nullable Int64
+    column -- the Active Learning page's Evaluation beat already reads it and
+    falls back to a number-less sentence, so dropping it was losing a number the
+    package could state. Appended rather than inserted so the existing column
+    ORDER is unchanged as well.
     """
     from nuscenes_data_engine.active_learning.report import arm_composition
 
@@ -251,14 +258,33 @@ def export_al_results(*, al_dir: Path, out_dir: Path, processed_dir: Path) -> pd
                 "n_scenes": comp.get("n_scenes"),
                 "night_share": comp.get("night_share"),
                 "rain_share": comp.get("rain_share"),
+                "val_images": entry.get("val_images"),
             }
         )
     df = pd.DataFrame(sorted(rows, key=lambda row: row["arm"])).reset_index(drop=True)
     df["n_boxes"] = df["n_boxes"].astype("Int64")
     df["n_scenes"] = df["n_scenes"].astype("Int64")
+    df["val_images"] = df["val_images"].astype("Int64")
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "active_learning_results.parquet", index=False)
     return df
+
+
+def resolve_n_mine(al_config: Mapping[str, Any]) -> int:
+    """The mining budget a GRAPH arm actually ran with, from a loaded
+    ``configs/active_learning.yaml``.
+
+    ``graph_mining.n_mine`` overrides ``mining.n_mine`` (the graph arms read their
+    own section first -- ``graph_mining.run_graph_mining``, and
+    ``al_explain.run_al_explain`` mirrors it), and 1500 is the fallback both use.
+    Consolidated review (M4): ``build.py`` used to read ``mining.n_mine`` alone, so
+    a config that overrode the budget for the graph arms only would have made
+    ``export_al_communities``'s quota-sum assertion fail against a budget no arm
+    used. Both callers resolve it here, so they cannot disagree again.
+    """
+    graph_cfg = al_config.get("graph_mining") or {}
+    mining_cfg = al_config.get("mining") or {}
+    return int(graph_cfg.get("n_mine", mining_cfg.get("n_mine", 1500)))
 
 
 def export_al_communities(
@@ -669,8 +695,8 @@ def export_weak_labels(
 ) -> pd.DataFrame:
     """The weak arm's verified pseudo boxes for curated ``tokens`` only, native
     (1600x900) coordinates untouched — ``draw_overlay``-ready. Accepted frames with
-    no rows here are the "mutual zero" case (the verifier accepted zero VLM boxes
-    against zero detector boxes) and are simply absent, same as any other arm
+    no rows here are the "mutual zero" case (the verifier accepted zero
+    VLM-counted objects against zero detector boxes) and are simply absent, same as any arm
     without a matching row.
     """
     labels = pd.read_parquet(_require(al_dir / f"{arm}_pseudo_labels.parquet"))
@@ -684,7 +710,48 @@ def export_weak_labels(
     return filtered
 
 
-# category_group -> its VLM count column in autolabel_weak/labels.parquet.
+def vlm_label_tables(*, autolabel_dir: Path, weak_state_dir: Path) -> list[Path]:
+    """The VLM label tables the weak-supervision run merged, in ITS order.
+
+    ``active_learning/pseudo_label.py::run_pseudo_label`` concatenates
+    ``<settings.data_dir>/autolabel/labels.parquet`` (the Phase-6b 5,000-frame
+    run) and the weak run's own ``<autolabel_weak state.dir>/labels.parquet``
+    before verifying, so a frame's VLM label may live in EITHER. Both directories
+    are resolved by the caller from the same config keys the run reads (never
+    re-typed here) and simply paired with the file name in this one place, so the
+    demo's ``vlm_counts`` covers exactly the labels the run verified against.
+
+    Consolidated review (C3): reading only the weak table left 8 of the 40 shipped
+    rows all-NA for frames the VLM had in fact labelled.
+    """
+    return [autolabel_dir / "labels.parquet", weak_state_dir / "labels.parquet"]
+
+
+def _merged_vlm_labels(label_paths: Sequence[Path]) -> pd.DataFrame:
+    """``label_paths``' tables concatenated in order, missing ones logged and
+    skipped -- a fresh clone has no ``data/autolabel/`` at all, and that is an
+    ordinary state, not a build failure. Raises only when NONE of them exist
+    (``run_pseudo_label`` raises there too: there is no VLM label anywhere).
+    """
+    frames: list[pd.DataFrame] = []
+    for path in label_paths:
+        if path.is_file():
+            frames.append(pd.read_parquet(path))
+        else:
+            logger.warning(
+                "demo build: VLM label table %s is absent — vlm_counts covers only "
+                "the label tables that exist on this machine",
+                path,
+            )
+    if not frames:
+        raise ValueError(
+            "export_vlm_counts: no VLM label table found at any of "
+            f"{[str(path) for path in label_paths]}"
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+# category_group -> its VLM count column in the autolabel label tables.
 _VLM_CLASS_COLUMNS = {
     "car": "cars", "truck": "trucks", "bus": "buses",
     "pedestrian": "pedestrians", "bicycle": "bicycles",
@@ -698,20 +765,25 @@ _VLM_COUNTS_COLUMNS = (
 
 
 def export_vlm_counts(
-    *, al_dir: Path, processed_dir: Path, tokens: list[str], out_dir: Path
+    *, label_paths: Sequence[Path], processed_dir: Path, tokens: list[str], out_dir: Path
 ) -> pd.DataFrame:
-    """One row per curated ``weak_accepted``/``weak_rejected`` token: the VLM's
-    raw counts/parse metadata (``autolabel_weak/labels.parquet``) alongside the
-    GT detector-class counts (``annotations.parquet``) for the same token, so the
-    page can put them side by side.
+    """One row per curated weak-verdict token: the VLM's raw counts/parse metadata
+    alongside the GT detector-class counts (``annotations.parquet``) for the same
+    token, so the page can put them side by side.
+
+    ``label_paths`` are the VLM label tables ``run_pseudo_label`` merged, in its
+    order (see ``vlm_label_tables``) -- BOTH of them, because a curated frame's
+    label may live in either. They are concatenated in that order and deduped with
+    the same preference the run applies: the first ``parse_status == "ok"`` row
+    wins; if none of a token's rows parsed ok, the first row (in table then file
+    order) is kept instead — uniqueness is asserted afterwards. (The run keeps the
+    LAST ok row rather than the first; on the shipped data no token has an ok row
+    in more than one table, so the two rules pick the same row.)
 
     Every token in ``tokens`` gets a row even with no VLM label at all (``vlm_*``/
     ``parse_status`` NA) — but GT counts always fill 0 rather than NA, since "zero
     boxes of this class" is a real, known fact from ``annotations.parquet``, not a
-    missing one. When ``labels.parquet`` carries more than one row for a token,
-    the first ``parse_status == "ok"`` row (in file order) wins; if none of a
-    token's rows parsed ok, the first row (in file order) is kept instead —
-    uniqueness is asserted afterwards.
+    missing one.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     if not tokens:
@@ -721,11 +793,12 @@ def export_vlm_counts(
 
     token_index = pd.Index(sorted(set(tokens)), name="sample_data_token")
 
-    labels = pd.read_parquet(_require(al_dir / "autolabel_weak" / "labels.parquet"))
+    labels = _merged_vlm_labels(label_paths)
     labels = labels.loc[labels["sample_data_token"].isin(set(tokens))].copy()
     # Stable sort by (token, "is this row NOT ok") -- ties (same token, same
-    # ok-ness) keep their original file-order relative position, so the first row
-    # after sorting is exactly "first ok row in file order, else first row".
+    # ok-ness) keep their original relative position (table order, then file order
+    # within a table), so the first row after sorting is exactly "first ok row,
+    # else first row".
     labels["_not_ok"] = (labels["parse_status"] != "ok").astype(int)
     labels = labels.sort_values(["sample_data_token", "_not_ok"], kind="stable")
     deduped = (
