@@ -449,3 +449,35 @@ def graph_node_label(node: Mapping[str, Any]) -> str:
         node_id = str(node.get("id") or "")
         return node_id.split(":", 1)[1] if ":" in node_id else node_id
     return label
+
+
+def parity_caption(
+    sql_count: int, cypher_count: int | None, parity: bool | None, n_shown: int
+) -> str:
+    """The exact wording of a dynamics preset's SQL/Cypher parity line (item 6,
+    Phase 6 review) -- pure so it is unit-testable without a Streamlit runtime;
+    ``views/scenarios.py::_render_parity_line`` is the only caller, and decides
+    ``st.warning`` vs ``st.caption`` off ``parity is False`` itself (a rendering
+    choice, not a wording one).
+
+    "keyframe" is singular only when ``sql_count == 1`` -- plural otherwise, same
+    as any other count-noun agreement. The " · showing the top N" clause is
+    included only when the grid actually cut something (``n_shown < sql_count``);
+    a tiny/test fixture where every matching keyframe got a card would otherwise
+    claim a cap that never bit. A recorded mismatch (``parity is False``) folds
+    "✗ mismatch recorded" into the same string, ahead of that clause, rather than
+    a separate ✓/✗ symbol -- it is a finding, not small print (item M4). ``parity
+    is None`` (model presets never reach here; a dynamics preset's JSON always
+    carries a bool) draws no symbol at all rather than being called a mismatch by
+    default.
+    """
+    noun = "keyframe" if sql_count == 1 else "keyframes"
+    counts = (
+        f"{sql_count} matching {noun} dataset-wide — "
+        f"Cypher {cypher_count} · SQL {sql_count}"
+    )
+    shown = f" · showing the top {n_shown}" if n_shown < sql_count else ""
+    if parity is False:
+        return f"{counts} ✗ mismatch recorded{shown}"
+    symbol = " ✓" if parity is True else ""
+    return f"{counts}{symbol}{shown}"

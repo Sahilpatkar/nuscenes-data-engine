@@ -167,11 +167,13 @@ families: **dynamics presets** over all 34,149 keyframes from GT alone (hard bra
 near pedestrians — the flagship, asserted at exactly 30 during `demo build`; night
 pedestrians; fast cyclists; rain VRUs — each header carries its own SQL/Cypher
 parity line read from `graph_subgraphs/<preset>.json`, stating the full-population
-count next to the 30 cards shown) and **model-result presets** over the 125
-curated val frames only, because that is where predictions exist (false-negative
-pedestrians at night: 4; low-confidence detections during braking: 2 — the
-scope is stated on the page; the N is the card count). Each preset caps at 30 ranked by its own severity (cards show
-that quantity; braking is only called braking when the acceleration is negative).
+count and, only when the 30-card cap actually cuts it down, how many of the 30 are
+shown — the flagship's own 30-of-30 has nothing to cut) and **model-result
+presets** over the 125 curated val frames only, because that is where predictions
+exist (false-negative pedestrians at night: 4; low-confidence detections during
+braking: 2 — the scope is stated on the page; the N is the card count). Each
+preset caps at 30 ranked by its own severity (cards show that quantity; braking
+is only called braking when the acceleration is negative).
 The **event viewer** renders curated events through the Phase-3 overlay renderer and
 non-curated ones as GT-only thumbnails with an explicit "not in the curated
 prediction set" caption; ego/context/model panels; and a t−2…t+2 filmstrip (strip +
@@ -204,10 +206,11 @@ The **panel** (event viewer, `app/demo/views/scenarios.py`) renders that subgrap
 with `streamlit-agraph`: orange = the matched path, grey = context, semantic
 labels (`adult 6.2 m`, `ego -4.5 m/s²`, `scene-1084`), force-directed layout;
 clicking a node shows its properties, otherwise a one-line narrative of the path
-(nearest matching object first, so it agrees with the card's caption). Without a
-staged `graph_subgraphs/`, `demo build` records `validation.subgraphs: "absent"`,
-the page shows an honest "not included in this package" note, and Overview keeps
-the sourced Cypher value.
+(nearest matching object first, so it agrees with the card's caption; a
+model-result preset's path stops at the EgoPose, since its verdict isn't in the
+graph). Without a staged `graph_subgraphs/`, `demo build` records
+`validation.subgraphs: "absent"`, the page shows an honest "not included in this
+package" note, and Overview keeps the sourced Cypher value.
 
 ## Dataset attribution & license
 

@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 from filters import (
     graph_node_label,
+    parity_caption,
     rank_events,
     severity_caption,
     speed_caption,
@@ -199,11 +200,17 @@ def _render_parity_line(preset_name: str, preset: _Preset, n_shown: int) -> None
 
     The line says WHAT the counts count and how many of them the grid below
     actually shows (item I2, review): a bare "Cypher: 786 · SQL: 786 ✓" sat above
-    a 30-card grid with nothing on screen reconciling 786 with 30. And a recorded
-    MISMATCH goes through st.warning rather than the same grey caption a clean
-    parity gets (item M4) -- it is a finding, not small print. `parity is None`
-    (model presets only, which never reach here) draws no symbol at all rather
-    than being called a mismatch by default.
+    a 30-card grid with nothing on screen reconciling 786 with 30 -- though the
+    "showing the top N" clause only appears when the grid actually cut something
+    (`n_shown < sql_count`; item 6, Phase 6 follow-up review), so a preset whose
+    full population fits on screen doesn't claim a cap that never bit. And a
+    recorded MISMATCH goes through st.warning rather than the same grey caption a
+    clean parity gets (item M4) -- it is a finding, not small print. `parity is
+    None` (model presets only, which never reach here) draws no symbol at all
+    rather than being called a mismatch by default. The exact wording (singular/
+    plural "keyframe", the mismatch text, the suppressed clause) lives in the
+    pure `filters.parity_caption`, unit-tested there without a Streamlit runtime;
+    this function only decides st.warning vs st.caption off `parity is False`.
     """
     if preset["family"] == "model":
         st.caption(_MODEL_GT_ONLY_NOTE)
@@ -214,18 +221,16 @@ def _render_parity_line(preset_name: str, preset: _Preset, n_shown: int) -> None
     if subgraph_payload is None:
         return
     cypher_count = subgraph_payload.get("cypher_count")
-    sql_count = subgraph_payload.get("sql_count")
+    # sql_count is always written by `demo subgraphs` for a dynamics preset (unlike
+    # cypher_count, which is legitimately null only for a model preset -- never
+    # reached here). The 0 default is a typed fallback for mypy, not a real case.
+    sql_count = subgraph_payload.get("sql_count", 0)
     parity = subgraph_payload.get("parity")
-    counts = (
-        f"{sql_count} matching keyframes dataset-wide — "
-        f"Cypher {cypher_count} · SQL {sql_count}"
-    )
-    shown = f" · showing the top {n_shown}"
+    caption = parity_caption(sql_count, cypher_count, parity, n_shown)
     if parity is False:
-        st.warning(f"{counts} ✗ mismatch recorded{shown}")
+        st.warning(caption)
         return
-    symbol = " ✓" if parity is True else ""
-    st.caption(f"{counts}{symbol}{shown}")
+    st.caption(caption)
 
 
 def _node_font(on_path: bool) -> dict[str, Any]:

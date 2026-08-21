@@ -19,6 +19,7 @@ from filters import (  # noqa: E402
     failure_flags,
     filter_frames,
     graph_node_label,
+    parity_caption,
     rank_events,
     severity_caption,
     sort_frames,
@@ -559,3 +560,47 @@ def test_graph_node_label_category_and_location_keep_their_full_tail() -> None:
 
 def test_graph_node_label_unknown_type_falls_back_to_the_label() -> None:
     assert graph_node_label(_node("thing:abc123", "SomethingElse", False, {})) == "SomethingElse"
+
+
+def test_parity_caption_pluralizes_keyframe_on_count() -> None:
+    """(item 6, Phase 6 follow-up review) "keyframe" singular only for
+    sql_count == 1; plural for every other count, including 0."""
+    assert parity_caption(1, 1, True, 1) == "1 matching keyframe dataset-wide — Cypher 1 · SQL 1 ✓"
+    assert (
+        parity_caption(5, 5, True, 1)
+        == "5 matching keyframes dataset-wide — Cypher 5 · SQL 5 ✓ · showing the top 1"
+    )
+    assert parity_caption(0, 0, True, 0) == "0 matching keyframes dataset-wide — Cypher 0 · SQL 0 ✓"
+
+
+def test_parity_caption_omits_showing_the_top_clause_when_nothing_was_cut() -> None:
+    """The " · showing the top N" clause appears only when the grid actually
+    truncated the full population (n_shown < sql_count) -- suppressed when
+    n_shown == sql_count (nothing cut) and, defensively, when n_shown somehow
+    exceeds sql_count too."""
+    assert parity_caption(30, 30, True, 30) == "30 matching keyframes dataset-wide — Cypher 30 · SQL 30 ✓"
+    assert (
+        parity_caption(786, 786, True, 30)
+        == "786 matching keyframes dataset-wide — Cypher 786 · SQL 786 ✓ · showing the top 30"
+    )
+
+
+def test_parity_caption_mismatch_text_replaces_the_symbol() -> None:
+    """A recorded mismatch (parity is False) folds "✗ mismatch recorded" into the
+    string ahead of the "showing the top" clause, rather than drawing a ✓/✗
+    symbol (item M4, Phase 6 review: a finding, not small print)."""
+    assert (
+        parity_caption(5, 4, False, 1)
+        == "5 matching keyframes dataset-wide — Cypher 4 · SQL 5 ✗ mismatch recorded · showing the top 1"
+    )
+    assert (
+        parity_caption(1, 2, False, 1)
+        == "1 matching keyframe dataset-wide — Cypher 2 · SQL 1 ✗ mismatch recorded"
+    )
+
+
+def test_parity_caption_parity_none_draws_no_symbol() -> None:
+    """parity is None (never reached for a dynamics preset in practice -- model
+    presets never call this) draws no ✓/✗ symbol at all, rather than being
+    called a mismatch by default."""
+    assert parity_caption(3, None, None, 1) == "3 matching keyframes dataset-wide — Cypher None · SQL 3 · showing the top 1"

@@ -87,8 +87,10 @@ def export_overview(
 
     Nothing is hardcoded: scale = parquet row counts, r = live correlation of CAN
     speed vs GT-derived ego speed, flagship = the documented SQL re-run over the
-    local tables. The Cypher twin stays *sourced* (docs/GRAPH.md) until Phase 6
-    computes it against a live graph — the JSON labels it as such.
+    local tables. The Cypher twin written here is the *sourced* fallback
+    (docs/GRAPH.md), labelled as such — ``run_build`` overwrites
+    ``flagship.cypher``/``cypher_source`` with the *computed* value whenever
+    ``demo subgraphs``' staging is present (build.py::_include_subgraphs).
 
     Phase 3's hero_token is deliberately NOT a parameter here: the hero token is
     only resolved after curation is included, which runs after this export

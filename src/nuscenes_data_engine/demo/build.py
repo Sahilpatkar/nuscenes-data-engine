@@ -426,7 +426,7 @@ def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
 
 
 def _include_subgraphs(
-    config: dict[str, Any], out_dir: Path, events: pd.DataFrame | None = None
+    config: dict[str, Any], out_dir: Path, *, events: pd.DataFrame | None
 ) -> dict[str, Any]:
     """Copy the staged graph-subgraph export into the package, or note its absence.
 
@@ -628,7 +628,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # is asserted equal to the flagship SQL count already validated a few lines up
     # (metrics["flagship"]["sql"]) — the plan's headline "the SQL and Cypher counts
     # agree" claim, now for real instead of sourced from docs.
-    subgraphs_result = _include_subgraphs(config, out_dir, events_result["frame"])
+    subgraphs_result = _include_subgraphs(config, out_dir, events=events_result["frame"])
     if subgraphs_result["status"] == "included":
         flagship_cypher = subgraphs_result["flagship_cypher"]
         flagship_sql = metrics["flagship"]["sql"]

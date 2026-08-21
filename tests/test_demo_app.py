@@ -53,12 +53,17 @@ def test_demo_app_never_imports_the_backend() -> None:
 
 
 def test_demo_requirements_stay_minimal() -> None:
-    lines = [
-        line.split("==")[0].split(">=")[0].strip()
+    raw_lines = [
+        line
         for line in (DEMO_DIR / "requirements.txt").read_text().splitlines()
         if line.strip() and not line.startswith("#")
     ]
+    lines = [line.split("==")[0].split(">=")[0].strip() for line in raw_lines]
     assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
+    # The subset check above would still pass if streamlit-agraph were dropped
+    # entirely -- the interactive graph panel (Phase 6) needs it present, not just
+    # not-disallowed.
+    assert any(line.startswith("streamlit-agraph") for line in raw_lines)
 
 
 def _stage_subgraphs_with_event(staging_dir: Path) -> None:
@@ -177,13 +182,27 @@ def _stage_subgraphs_with_event(staging_dir: Path) -> None:
         "night_pedestrians": {"v1": night_subgraph},
     }
 
+    # sql_count/cypher_count are 1/1 for every preset except night_pedestrians,
+    # which gets 5/5 (item 1, Phase 6 follow-up review): the flagship MUST stay
+    # at 1 -- run_build's sql==cypher assertion (Task 2) checks it against this
+    # fixture's flagship expected_sql_count (also 1, see built_demo_data below).
+    # night_pedestrians has no such constraint (only its `events` dict's KEYS are
+    # checked by build.py::_include_subgraphs' stale-staging guard, never the
+    # sql_count/cypher_count values), so giving it a distinct count from n_shown
+    # (this fixture ranks exactly one event per preset) is what lets a test tell
+    # sql_count and n_shown apart in the rendered parity line -- a swap of the
+    # two in _render_parity_line would otherwise pass every existing assertion.
+    counts_by_preset = dict.fromkeys(_SUBGRAPH_PRESETS, 1)
+    counts_by_preset["night_pedestrians"] = 5
+
     for preset in _SUBGRAPH_PRESETS:
         is_model = preset in _SUBGRAPH_MODEL_PRESETS
+        count = counts_by_preset[preset]
         payload: dict[str, Any] = {
             "preset": preset,
             "count_cypher": None if is_model else "MATCH (n) RETURN count(n)",
-            "sql_count": 1,
-            "cypher_count": None if is_model else 1,
+            "sql_count": count,
+            "cypher_count": None if is_model else count,
             "parity": None if is_model else True,
             "events": staged_events.get(preset, {}),
         }
@@ -451,9 +470,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     # Task 3 (Phase 6): stage graph_subgraphs/ BEFORE run_build so the Scenario
     # page's tests below get a package with the interactive graph panel included
     # by default (mirrors curation/semsearch already being staged above) --
-    # _stage_subgraphs_with_event's hardcoded cypher_count=1 matches this fixture's flagship
-    # expected_sql_count (also 1), so run_build's sql==cypher assertion (Task 2)
-    # passes.
+    # _stage_subgraphs_with_event's flagship cypher_count=1 matches this fixture's
+    # flagship expected_sql_count (also 1), so run_build's sql==cypher assertion
+    # (Task 2) passes. Only the flagship's count is constrained this way; the
+    # other five presets' sql_count/cypher_count are free (see that helper).
     _stage_subgraphs_with_event(staging)
 
     run_build(config_path)
@@ -814,11 +834,16 @@ def test_scenario_flagship_badge(
     6") with the generic per-preset parity line every dynamics preset now gets,
     read straight off that preset's own graph_subgraphs/<preset>.json --
     built_demo_data's _stage_subgraphs_with_event (Task 3) stages
-    cypher_count=sql_count=1 (parity True) for every dynamics preset.
+    cypher_count=sql_count=1 (parity True) for the flagship.
 
     The line says WHAT the number counts and that the grid below it is capped
     (item I2, Phase 6 review): rendering a bare "Cypher: 786 · SQL: 786 ✓" above a
-    30-card grid left the viewer to guess whether 786 or 30 was the answer.
+    30-card grid left the viewer to guess whether 786 or 30 was the answer. Here,
+    with n_shown (1) >= sql_count (1), nothing was actually cut, so the "showing
+    the top N" clause is suppressed and "keyframe" is singular (item 6, Phase 6
+    follow-up review) -- see test_scenario_night_pedestrians_parity_line_states_
+    the_full_population_count_separately_from_n_shown just below for the plural,
+    clause-included case.
     """
     pytest.importorskip("streamlit")
     at = _scenarios_apptest(built_demo_data, monkeypatch)
@@ -827,7 +852,31 @@ def test_scenario_flagship_badge(
     at.run(timeout=30)
     assert not at.exception
     captions = [str(c.value) for c in at.caption]
-    assert any(c == "1 matching keyframes dataset-wide — Cypher 1 · SQL 1 ✓ · showing the top 1" for c in captions)
+    assert any(c == "1 matching keyframe dataset-wide — Cypher 1 · SQL 1 ✓" for c in captions)
+
+
+def test_scenario_night_pedestrians_parity_line_states_the_full_population_count_separately_from_n_shown(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item 1, Phase 6 follow-up review) Pins sql_count/n_shown apart: the
+    flagship's own fixture has sql_count == n_shown == 1, which a swap of the two
+    numbers in _render_parity_line would pass unnoticed. night_pedestrians stages
+    sql_count=cypher_count=5 (built_demo_data's _stage_subgraphs_with_event)
+    while this fixture still ranks exactly one event ("v1") for it, so n_shown
+    stays 1 -- a caption reading "5 ... showing the top 1" only assembles
+    correctly if sql_count and n_shown are read from the right places.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.run(timeout=30)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        c == "5 matching keyframes dataset-wide — Cypher 5 · SQL 5 ✓ · showing the top 1"
+        for c in captions
+    )
 
 
 def test_scenario_graph_panel_shows_parity_narrative_and_legend(
@@ -854,7 +903,9 @@ def test_scenario_graph_panel_shows_parity_narrative_and_legend(
     assert not at.exception
 
     captions = [str(c.value) for c in at.caption]
-    assert any(c == "1 matching keyframes dataset-wide — Cypher 1 · SQL 1 ✓ · showing the top 1" for c in captions)
+    # n_shown (1) >= sql_count (1) here -- singular, no "showing the top" clause
+    # (item 6, Phase 6 follow-up review).
+    assert any(c == "1 matching keyframe dataset-wide — Cypher 1 · SQL 1 ✓" for c in captions)
     # The narrative is built by filters.subgraph_narrative from
     # _stage_subgraphs_with_event's real assemble_subgraph output for "s1" -- see
     # that helper's docstring for why 5.00m (not 3.80m) is the right distance here.
@@ -924,6 +975,43 @@ def test_scenario_graph_panel_absent_when_subgraphs_not_staged(
     # The header's parity line is silent (nothing to report), not a stale claim.
     captions = [str(c.value) for c in at.caption]
     assert not any("matching keyframes dataset-wide" in c for c in captions)
+
+
+def test_scenario_graph_panel_shows_per_event_absent_note_not_whole_package_note(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(item M3 / item 4, Phase 6 follow-up review) A staged graph_subgraphs/
+    package that just doesn't hold THIS event's subgraph is a DIFFERENT case from
+    the whole-package absence covered by
+    test_scenario_graph_panel_absent_when_subgraphs_not_staged just above: the
+    package does carry a graph export, this one event isn't in it. Deletes the
+    flagship preset's only staged event ("s1") from its own JSON (rather than the
+    whole graph_subgraphs/ directory) so the panel must fall through to
+    _GRAPH_EVENT_ABSENT_NOTE, and the two notes stay distinguishable on screen --
+    a viewer must not read "no subgraph for this event" as "no graph in this
+    package at all", or vice versa.
+
+    Unreachable for a package actually built by `demo build` since
+    build.py::_include_subgraphs' stale-staging guard, per that note's own
+    comment -- this test edits the built package's JSON directly, after the
+    build already succeeded, the same way test_scenario_parity_mismatch_is_a_
+    warning_not_grey_small_print edits night_pedestrians' JSON just above.
+    """
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "graph_subgraphs" / "hard_braking_near_pedestrians.json"
+    payload = json.loads(path.read_text())
+    del payload["events"]["s1"]
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2))
+
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    infos = [str(i.value) for i in at.info]
+    assert any("no subgraph staged for this event" in i for i in infos)
+    assert not any("graph export not included in this package" in i for i in infos)
 
 
 def test_scenario_model_preset_shows_gt_only_note(
