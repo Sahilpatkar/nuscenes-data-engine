@@ -41,7 +41,7 @@ def test_demo_requirements_stay_minimal() -> None:
         for line in (DEMO_DIR / "requirements.txt").read_text().splitlines()
         if line.strip() and not line.startswith("#")
     ]
-    assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow"}
+    assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
 
 
 @pytest.fixture()

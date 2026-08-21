@@ -58,6 +58,7 @@ serve = [
     "streamlit>=1.36",
     "python-multipart>=0.0.9",
     "httpx>=0.27",  # TestClient transport + the serving benchmark client
+    "streamlit-agraph>=0.0.45",  # Phase 6: the Scenario page's interactive subgraph panel
 ]
 dev = [
     "pytest>=8.0",

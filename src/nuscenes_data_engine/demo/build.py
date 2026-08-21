@@ -34,11 +34,28 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # 0.4 (Phase 5): scenario_events.parquet (six presets + filmstrip neighbors) and
 # semantic_search_results.parquet (recorded semsearch) join the package, plus their
 # filmstrip/gallery thumbnails.
-_PACKAGE_VERSION = "0.4"
+# 0.5 (Phase 6): graph_subgraphs/<preset>.json (six presets, from `demo subgraphs`)
+# joins the package when staged, and overview_metrics.json's flagship.cypher becomes
+# a COMPUTED (live Neo4j) value instead of a sourced one whenever it does.
+_PACKAGE_VERSION = "0.5"
 
 # Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
 # edges, so every token collection over these columns must drop the NA entries.
 _FILMSTRIP_NEIGHBOR_COLUMNS = ("t_minus2", "t_minus1", "t_plus1", "t_plus2")
+
+# The six scenario presets subgraph_export.py exports one JSON per (mirrors that
+# module's private _ALL_PRESETS -- kept as its own tuple here rather than imported,
+# same reasoning _SEMSEARCH_COLUMNS below is its own constant: this list is build.py's
+# OWN contract about what a complete graph_subgraphs/ staging dir must contain, not a
+# re-export of the exporter's internals).
+_SUBGRAPH_PRESETS = (
+    "hard_braking_near_pedestrians",
+    "night_pedestrians",
+    "fast_cyclists",
+    "rain_vru",
+    "fn_pedestrians_night",
+    "low_conf_braking",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -398,6 +415,66 @@ def _include_semsearch(config: dict[str, Any], out_dir: Path) -> str:
     return "included"
 
 
+def _include_subgraphs(config: dict[str, Any], out_dir: Path) -> dict[str, Any]:
+    """Copy the staged graph-subgraph export into the package, or note its absence.
+
+    Neo4j is an OPERATIONAL dependency (spec §1) — same rationale as
+    ``_include_semsearch``'s recorded-search staging: ``demo build`` never talks to
+    the live graph itself, it only copies+validates what ``demo subgraphs`` already
+    staged at ``curation.staging_dir/graph_subgraphs/``. No ``curation:`` config
+    section, or no ``graph_subgraphs/`` staging dir at all (``demo subgraphs`` hasn't
+    run yet), is "absent" — a warning, not a build failure, mirroring every other
+    optional group's TRINITY/Neo4j-unreachable fallback.
+
+    A staging dir that EXISTS but doesn't hold all six preset JSONs (``demo
+    subgraphs`` interrupted mid-run, or a stale partial staging from before a preset
+    existed) is a different case: an operator mid-flow, not a no-subgraphs machine,
+    same rationale as ``_include_curation``'s partial-staging ``ValueError`` — it
+    must not be silently swallowed into "absent" (hiding the mistake) nor silently
+    shipped partial (a page some presets can't render for).
+
+    When fully staged, all six preset JSONs are copied verbatim (they are already
+    the exact package-ready shape ``subgraph_export.export_subgraphs`` wrote) and the
+    flagship preset's ``cypher_count`` is read back out — that's the one number
+    ``run_build`` needs to upgrade ``overview_metrics.json``'s sourced flagship.cypher
+    to a computed one.
+    """
+    curation_cfg = config.get("curation")
+    if not curation_cfg:
+        logger.warning(
+            "demo build: no `curation:` config section — shipping without the "
+            "graph subgraphs panel (see docs/DEMO.md)"
+        )
+        return {"status": "absent"}
+    staging_dir = Path(curation_cfg["staging_dir"]) / "graph_subgraphs"
+    if not staging_dir.is_dir():
+        logger.warning(
+            "demo build: no graph_subgraphs staging at %s — shipping without the "
+            "interactive graph panel (run `demo subgraphs` first, see docs/GRAPH.md)",
+            staging_dir,
+        )
+        return {"status": "absent"}
+
+    missing = [
+        preset for preset in _SUBGRAPH_PRESETS if not (staging_dir / f"{preset}.json").is_file()
+    ]
+    if missing:
+        raise ValueError(
+            f"demo build: graph_subgraphs staging at {staging_dir} is missing "
+            f"preset(s) {missing} — re-run `demo subgraphs` (see docs/GRAPH.md)"
+        )
+
+    dest_dir = out_dir / "graph_subgraphs"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for preset in _SUBGRAPH_PRESETS:
+        shutil.copy2(staging_dir / f"{preset}.json", dest_dir / f"{preset}.json")
+
+    flagship_payload = json.loads(
+        (staging_dir / "hard_braking_near_pedestrians.json").read_text()
+    )
+    return {"status": "included", "flagship_cypher": flagship_payload["cypher_count"]}
+
+
 def run_build(config_path: Path) -> dict[str, Any]:
     """Run every registered exporter, then write demo_data/manifest.json.
 
@@ -498,6 +575,30 @@ def run_build(config_path: Path) -> dict[str, Any]:
     events_result = _include_events(config, out_dir)
     semsearch_status = _include_semsearch(config, out_dir)
 
+    # Phase 6: the graph subgraphs group runs last among the optional groups, same
+    # slot the plan calls for (after semsearch, before the size-budget check below,
+    # so its files count toward both). When present, its flagship's COMPUTED Cypher
+    # count both upgrades overview_metrics.json's sourced flagship.cypher (the
+    # write_json-patch mechanism the hero_token patch above already established) and
+    # is asserted equal to the flagship SQL count already validated a few lines up
+    # (metrics["flagship"]["sql"]) — the plan's headline "the SQL and Cypher counts
+    # agree" claim, now for real instead of sourced from docs.
+    subgraphs_result = _include_subgraphs(config, out_dir)
+    if subgraphs_result["status"] == "included":
+        flagship_cypher = subgraphs_result["flagship_cypher"]
+        flagship_sql = metrics["flagship"]["sql"]
+        if flagship_sql != flagship_cypher:
+            raise ValueError(
+                "demo build: computed flagship Cypher count disagrees with the SQL "
+                f"count — sql={flagship_sql} cypher={flagship_cypher} (the graph and "
+                "processed tables have drifted; re-verify before publishing)"
+            )
+        overview_path = out_dir / "overview_metrics.json"
+        overview_metrics = json.loads(overview_path.read_text())
+        overview_metrics["flagship"]["cypher"] = flagship_cypher
+        overview_metrics["flagship"]["cypher_source"] = "computed (neo4j, demo subgraphs)"
+        write_json(overview_path, overview_metrics)
+
     package_bytes = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
     package_mb = package_bytes / 1e6
     if package_mb > config["budgets"]["max_package_mb"]:
@@ -544,8 +645,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
     if semsearch_status == "included":
         semsearch_path = Path(config["curation"]["staging_dir"]) / "semantic_search_results.parquet"
         inputs[str(semsearch_path)] = _sha256(semsearch_path)
+    if subgraphs_result["status"] == "included":
+        subgraphs_staging = Path(config["curation"]["staging_dir"]) / "graph_subgraphs"
+        for preset in _SUBGRAPH_PRESETS:
+            path = subgraphs_staging / f"{preset}.json"
+            inputs[str(path)] = _sha256(path)
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "git_sha": _git_sha(),
         "package_version": _PACKAGE_VERSION,
@@ -561,8 +667,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "flagship_events": events_result["flagship_events"],
             "n_events": events_result["n_events"],
             "semsearch": semsearch_status,
+            "subgraphs": subgraphs_result["status"],
         },
     }
+    if subgraphs_result["status"] == "included":
+        manifest["validation"]["flagship_cypher"] = subgraphs_result["flagship_cypher"]
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     logger.info("demo build: %d outputs, %.2f MB -> %s", len(outputs), package_mb, out_dir)
     return manifest
