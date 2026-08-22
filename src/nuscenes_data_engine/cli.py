@@ -1345,6 +1345,112 @@ def demo_al_explain(
     )
 
 
+@demo_app.command("chat-record")
+def demo_chat_record(
+    config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),
+    provider: str | None = typer.Option(None, "--provider", help="local | anthropic."),
+    model: str | None = typer.Option(None, "--model", help="Override the chat model."),
+    limit: int | None = typer.Option(
+        None, "--limit", help="First N questions in total, showcase first (dry runs)."
+    ),
+) -> None:
+    """Record a chat session for the demo's recorded "Ask the Dataset" page.
+
+    Answers the graded eval cases + the configured showcase through the real agent.
+    With --provider anthropic this is a PAID run: ≈25 Claude answers, ≈ $4 at Opus
+    list price. Use --limit 2 to dry-run.
+
+    Fails rather than staging a dud: a showcase question whose configured `expect`
+    (chart / cypher / frames / search) the answer does not deliver aborts the run.
+    """
+    from nuscenes_data_engine.config import get_settings, load_yaml
+    from nuscenes_data_engine.data_engine.chat.catalog import catalog_tables, open_catalog
+    from nuscenes_data_engine.data_engine.chat.evaluate import load_cases
+    from nuscenes_data_engine.data_engine.chat.transports import make_transport
+    from nuscenes_data_engine.demo.chat_record import (
+        load_showcase,
+        record_session,
+        write_staging,
+    )
+
+    cfg = load_yaml(config)
+    replay_cfg = cfg.get("chat_replay") or {}
+    curation_cfg = cfg["curation"]
+    settings = get_settings()
+
+    # Cheapest preflight first: no transport, no encoder, no driver is worth building
+    # for a catalog the agent could not answer a single question from.
+    processed_dir = Path(cfg["paths"]["processed_dir"])
+    con = open_catalog(
+        processed_dir, labels_path=Path(settings.data_dir) / "autolabel" / "labels.parquet"
+    )
+    # `samples`, not "any view at all": labels.parquet lives outside processed_dir and
+    # registers its own view, so a non-empty catalog is no proof the dataset is there.
+    if "samples" not in catalog_tables(con):
+        raise ValueError(
+            f"demo chat-record: no processed dataset under {processed_dir} (samples.parquet "
+            "missing) — the recorder answers questions about it, so run the ingestion "
+            "first (`nuscenes-data-engine ingest -c configs/data.yaml`)"
+        )
+    cases = load_cases(Path(replay_cfg.get("cases", "configs/chat_eval.yaml")))
+    showcase = load_showcase(cfg)
+
+    transport = make_transport(settings, provider=provider, model=model)
+    engine: Any | None = None
+    try:
+        from nuscenes_data_engine.data_engine.search import SearchEngine
+
+        engine = SearchEngine(
+            Path(settings.search_lancedb_path), settings.search_table,
+            settings.search_model_name, device=settings.search_device,
+        )
+    except (ImportError, FileNotFoundError) as exc:
+        logger.warning("Vector search unavailable (%s) — recording without frames.", exc)
+    else:
+        # Same probe as `chat-eval`: construction alone never touches the encoder, so a
+        # missing torch would otherwise surface only per question, as a silent
+        # "search failed: ..." tool error. The engine stays in place on a probe failure
+        # (frames_by_tokens/show_frames never touches the encoder) -- the failed
+        # search_frames step is recorded honestly, and a `search` showcase then fails
+        # the run rather than shipping.
+        try:
+            engine.search_text("probe", k=1)
+        except Exception as exc:
+            logger.warning(
+                "Semantic search unavailable (%s) — token-based frame attachment "
+                "still works, but a `search` showcase will fail the run.", exc,
+            )
+
+    from nuscenes_data_engine.data_engine.graph import connection as graph_connection
+
+    try:
+        graph_driver: Any | None = graph_connection.get_driver(settings)
+    except Exception as exc:  # not installed / unreachable -> no run_cypher tool
+        logger.warning("Knowledge graph unavailable (%s) — recording without Cypher.", exc)
+        graph_driver = None
+
+    # Resolved the way `chat-eval` resolves its label, not from the raw flag: a
+    # flagless run under CHAT_PROVIDER=anthropic must record "anthropic".
+    label = provider or settings.chat_provider
+    out_dir = Path(curation_cfg["staging_dir"]) / "chat_replays"
+    try:
+        records, summary = record_session(
+            con=con, transport=transport, search_engine=engine, graph_driver=graph_driver,
+            graph_database=settings.neo4j_database, cases=cases, showcase=showcase,
+            provider=label, max_turns=int(replay_cfg.get("max_turns", 8)), limit=limit,
+        )
+    finally:
+        graph_connection.close(graph_driver)
+
+    write_staging(records, summary, out_dir)
+    logger.info(
+        "demo chat-record: %s graded %d/%d, %d showcase replays -> %s (run `demo build` "
+        "to include them in the package)",
+        summary["model"], summary["n_passed"], summary["n_eval"], summary["n_showcase"],
+        out_dir,
+    )
+
+
 @demo_app.command("build")
 def demo_build(
     config: Path = typer.Option(Path("configs/demo.yaml"), "--config", "-c"),

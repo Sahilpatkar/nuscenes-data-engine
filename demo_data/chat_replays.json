@@ -1,0 +1,1299 @@
+[
+  {
+    "answer": "Here's the breakdown of night keyframes by location:\n\n- **singapore-hollandvillage**: 15,942\n- **singapore-queenstown**: 7,980\n\nAs expected, all night driving is in Singapore (Boston and the other Singapore locations have no night keyframes). Chart is attached above.",
+    "charts": [
+      {
+        "columns": [
+          "location",
+          "night_keyframes"
+        ],
+        "kind": "bar",
+        "rows": [
+          [
+            "singapore-hollandvillage",
+            15942
+          ],
+          [
+            "singapore-queenstown",
+            7980
+          ]
+        ],
+        "title": "Night keyframes per location"
+      }
+    ],
+    "checks": null,
+    "error": null,
+    "frames": [],
+    "id": "showcase_chart_night_by_location",
+    "kind": "showcase",
+    "latency_s": 9.3,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Chart the number of night keyframes per location.",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT location, count(*) AS night_keyframes FROM samples WHERE is_night GROUP BY location ORDER BY night_keyframes DESC;"
+        },
+        "output": "2 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "columns": [
+            "location",
+            "night_keyframes"
+          ],
+          "kind": "bar",
+          "rows": [
+            [
+              "singapore-hollandvillage",
+              15942
+            ],
+            [
+              "singapore-queenstown",
+              7980
+            ]
+          ],
+          "title": "Night keyframes per location"
+        },
+        "output": "charted: Night keyframes per location",
+        "tool": "make_chart"
+      }
+    ]
+  },
+  {
+    "answer": "**30 keyframes** have hard braking (ego `accel_long_min \u2264 \u22123.0 m/s\u00b2`) with at least one pedestrian within 10 m (bird's-eye distance).\n\nCypher used:\n\n```cypher\nMATCH (e:EgoPose {is_hard_braking: true})<-[:AT_POSE]-(s:Sample)\n      -[:HAS_OBJECT]->(o:ObjectObservation)\n      -[:OF_CATEGORY]->(:Category {group: 'pedestrian'})\nWHERE o.distance_to_ego_m < 10\nRETURN count(DISTINCT s) AS n\n```",
+    "charts": [],
+    "checks": null,
+    "error": null,
+    "frames": [],
+    "id": "showcase_cypher_hard_braking",
+    "kind": "showcase",
+    "latency_s": 5.92,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Using the graph, how many keyframes have hard braking with a pedestrian within 10 m? Show the Cypher.",
+    "steps": [
+      {
+        "input": {
+          "cypher": "MATCH (e:EgoPose {is_hard_braking: true})<-[:AT_POSE]-(s:Sample)\n      -[:HAS_OBJECT]->(o:ObjectObservation)\n      -[:OF_CATEGORY]->(:Category {group: 'pedestrian'})\nWHERE o.distance_to_ego_m < 10\nRETURN count(DISTINCT s) AS n"
+        },
+        "output": "1 rows",
+        "tool": "run_cypher"
+      }
+    ]
+  },
+  {
+    "answer": "I found several strong matches. I attached 6 CAM_FRONT frames, all flagged by the VLM auto-labels with poor-visibility conditions:\n\n| Frame | Scene | Weather / conditions |\n|---|---|---|\n| cf1b8214\u2026 | scene-1104 (night, truck, rain) | rain \u2014 \"raindrops on lens, difficult visibility due to rain and light reflections\", blurred vision |\n| e5dc5e76\u2026 | scene-1102 (night, rain, high speed) | rain \u2014 \"poor visibility due to rain\", raindrops on lens, blurred motion |\n| 73ca06d2\u2026 | scene-1104 | rain \u2014 \"poor visibility\", wet road, blurred motion |\n| 278dd7b7\u2026 | scene-1104 | rain \u2014 \"foggy\", reflective surfaces, blurred motion |\n| 39849bb6\u2026 | scene-1101 (night, rain) | labeled \"foggy\", wet road |\n| 9d1d60de\u2026 | scene-1104 | rain \u2014 headlights, raindrops on lens, light reflections |\n\nNotes and caveats:\n- These are the best available \"foggy/rainy + poor visibility\" front-camera frames. All are **night-time rain in singapore-hollandvillage** \u2014 that's where the worst-visibility CAM_FRONT frames cluster.\n- The weather comes from **VLM auto-labels** (only 5,000 CAM_FRONT frames are labeled), and every match carries `label_confidence = 'low'` \u2014 fitting, since the model itself struggles to see in these conditions.\n- True dense fog is rare in nuScenes; most \"foggy\" tags are really rain-haze + lens droplets. The dataset's `is_rain` flag confirms rain, and all rain in nuScenes is originally Boston, but these specific labeled frames are Singapore night-rain scenes.",
+    "charts": [],
+    "checks": null,
+    "error": null,
+    "frames": [
+      {
+        "channel": "CAM_BACK",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "67924cdda5014a1dbf77d0c3db63f406",
+        "scene_name": "scene-0589",
+        "score": 0.1672039031982422
+      },
+      {
+        "channel": "CAM_BACK",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "74c1d457a1f747cab14c551b816dc1bb",
+        "scene_name": "scene-0908",
+        "score": 0.16505897045135498
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "f183b472ab544f59ac2da78d8ed83c66",
+        "scene_name": "scene-0638",
+        "score": 0.1640552282333374
+      },
+      {
+        "channel": "CAM_BACK_RIGHT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "da3a8a6b8aee40d599ed204164246699",
+        "scene_name": "scene-0646",
+        "score": 0.1628757119178772
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "a3a7802380464f579c75e6e7136850ab",
+        "scene_name": "scene-0847",
+        "score": 0.16084009408950806
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "77080738e0ab4bfb93776d7a8d3e01ad",
+        "scene_name": "scene-0445",
+        "score": 0.1603069305419922
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "d5ed58dd85d1410087d6d0397280b860",
+        "scene_name": "scene-0445",
+        "score": 0.159936785697937
+      },
+      {
+        "channel": "CAM_BACK",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "52b61c955fb2434ab9b681c2239ac61d",
+        "scene_name": "scene-1074",
+        "score": 0.15944427251815796
+      },
+      {
+        "channel": "CAM_BACK",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "28b3b2a5730f4d32b87c13911101e2c9",
+        "scene_name": "scene-0908",
+        "score": 0.15914559364318848
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "a36d8217f0134d199ae10e8c32d87035",
+        "scene_name": "scene-0638",
+        "score": 0.15898597240447998
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "39849bb6dc114cc5aaa027723f0daa00",
+        "scene_name": "scene-1101",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "e5dc5e76ce9f4c55978dcf84e7cdae28",
+        "scene_name": "scene-1102",
+        "score": 1.0
+      }
+    ],
+    "id": "showcase_search_fog",
+    "kind": "showcase",
+    "latency_s": 22.85,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Find me a few foggy or rainy front-camera frames with poor visibility and show them.",
+    "steps": [
+      {
+        "input": {
+          "k": 10,
+          "query": "foggy rainy road low visibility front camera, wet windshield haze"
+        },
+        "output": "10 frames found",
+        "tool": "search_frames"
+      },
+      {
+        "input": {
+          "sql": "SELECT l.sample_data_token, l.weather, l.time_of_day, l.hazards, l.notable_conditions, l.label_confidence\nFROM labels l\nJOIN samples s ON s.sample_data_token = l.sample_data_token\nWHERE l.parse_status='ok' AND s.channel='CAM_FRONT'\n  AND (lower(l.weather) LIKE '%rain%' OR lower(l.weather) LIKE '%fog%'\n       OR lower(l.notable_conditions) LIKE '%fog%' OR lower(l.notable_conditions) LIKE '%low visib%'\n       OR lower(l.notable_conditions) LIKE '%wet%' OR lower(l.hazards) LIKE '%visib%')\nORDER BY l.label_confidence DESC\nLIMIT 12;"
+        },
+        "output": "12 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sample_data_tokens": [
+            "cf1b82148a174f408507800df5011b93",
+            "e5dc5e76ce9f4c55978dcf84e7cdae28",
+            "73ca06d21ddc48cb8adf2d52b9d198fb",
+            "278dd7b7fcb842e6acabb2ffe6d816aa",
+            "39849bb6dc114cc5aaa027723f0daa00",
+            "9d1d60de3e224c12be6167e7d9694ecf"
+          ]
+        },
+        "output": "6 frames attached",
+        "tool": "show_frames"
+      }
+    ]
+  },
+  {
+    "answer": "Here are the three most crowded night keyframes (by number of annotated boxes). Examples are attached.\n\n| # | Scene | Channel | Objects (n_boxes) |\n|---|-------|---------|-------------------|\n| 1 | scene-1016 | CAM_FRONT | 28 |\n| 2 | scene-1016 | CAM_FRONT | 27 |\n| 3 | scene-1016 | CAM_FRONT | 26 |\n\nAll three come from **scene-1016** (singapore-queenstown), described as *\"Night, peds, bus stop, bump, ped crossing crosswalk, bus\"* \u2014 a busy nighttime bus-stop/crosswalk scene, which explains the high object density. All are CAM_FRONT views.",
+    "charts": [],
+    "checks": null,
+    "error": null,
+    "frames": [
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "28488d800c414fcebd946af393753b4f",
+        "scene_name": "scene-1016",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "7ea0186c81e74fc881855b4fc210248e",
+        "scene_name": "scene-1016",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "ff030ec0bfdb4911b9185ac2b17ebb8d",
+        "scene_name": "scene-1016",
+        "score": 1.0
+      }
+    ],
+    "id": "showcase_frames_crowded_night",
+    "kind": "showcase",
+    "latency_s": 8.8,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Show three of the most crowded night keyframes (most annotated objects) with their scene names.",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT sample_data_token, scene_name, channel, n_boxes\nFROM samples\nWHERE is_night\nORDER BY n_boxes DESC\nLIMIT 3;"
+        },
+        "output": "3 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sample_data_tokens": [
+            "7ea0186c81e74fc881855b4fc210248e",
+            "ff030ec0bfdb4911b9185ac2b17ebb8d",
+            "28488d800c414fcebd946af393753b4f"
+          ]
+        },
+        "output": "3 frames attached",
+        "tool": "show_frames"
+      }
+    ]
+  },
+  {
+    "answer": "Here's the breakdown of rain keyframes by location:\n\n| Location | Keyframes | Rain | % Rain |\n|---|---|---|---|\n| boston-seaport | 112,710 | 36,168 | **32.1%** |\n| singapore-hollandvillage | 20,562 | 3,852 | **18.7%** |\n| singapore-onenorth | 43,848 | 0 | 0.0% |\n| singapore-queenstown | 27,774 | 0 | 0.0% |\n\n**Boston vs. Singapore overall:**\n- Boston (seaport): **32.1%** of keyframes are flagged rain.\n- Singapore (all three locations combined): 3,852 / 92,184 = **4.2%** rain \u2014 driven entirely by hollandvillage; onenorth and queenstown have none.\n\nSo Boston has a far higher share of rain keyframes (~32%) than Singapore as a whole (~4%). One caveat: the dataset documentation states \"all rain is in Boston,\" but the scene-level `is_rain` flag actually marks ~19% of singapore-hollandvillage keyframes as rain \u2014 a minor discrepancy worth noting, likely from the scene-description-derived flag.",
+    "charts": [
+      {
+        "columns": [
+          "location",
+          "pct_rain"
+        ],
+        "kind": "bar",
+        "rows": [
+          [
+            "boston-seaport",
+            32.1
+          ],
+          [
+            "singapore-hollandvillage",
+            18.7
+          ],
+          [
+            "singapore-onenorth",
+            0.0
+          ],
+          [
+            "singapore-queenstown",
+            0.0
+          ]
+        ],
+        "title": "Share of rain keyframes by location"
+      }
+    ],
+    "checks": null,
+    "error": null,
+    "frames": [],
+    "id": "showcase_slices_rain",
+    "kind": "showcase",
+    "latency_s": 13.41,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How does the share of rain keyframes compare between Boston and Singapore locations?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT location,\n       count(*) AS keyframes,\n       count(*) FILTER (WHERE is_rain) AS rain_keyframes,\n       round(100.0 * count(*) FILTER (WHERE is_rain) / count(*), 1) AS pct_rain\nFROM samples\nGROUP BY location\nORDER BY location;"
+        },
+        "output": "4 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "columns": [
+            "location",
+            "pct_rain"
+          ],
+          "kind": "bar",
+          "rows": [
+            [
+              "boston-seaport",
+              32.1
+            ],
+            [
+              "singapore-hollandvillage",
+              18.7
+            ],
+            [
+              "singapore-onenorth",
+              0.0
+            ],
+            [
+              "singapore-queenstown",
+              0.0
+            ]
+          ],
+          "title": "Share of rain keyframes by location"
+        },
+        "output": "charted: Share of rain keyframes by location",
+        "tool": "make_chart"
+      }
+    ]
+  },
+  {
+    "answer": "There are **66 night scenes** in singapore-hollandvillage.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 66.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "night_scenes_hollandvillage",
+    "kind": "eval",
+    "latency_s": 3.07,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many night scenes are there in singapore-hollandvillage?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT scene_token) FROM samples WHERE is_night AND location = 'singapore-hollandvillage';"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "There are **33 night scenes** in singapore-queenstown.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 33.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "night_scenes_queenstown",
+    "kind": "eval",
+    "latency_s": 3.71,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many night scenes are there in singapore-queenstown?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT scene_token) AS night_scenes FROM samples WHERE is_night AND location = 'singapore-queenstown';"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "There are **149 rainy scenes** in boston-seaport.\n\n(Note: all rain in the dataset is in Boston, so this is essentially the full rainy-scene count.)",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 149.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "rain_scenes_boston",
+    "kind": "eval",
+    "latency_s": 4.49,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many rainy scenes are there in boston-seaport?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT scene_token) FROM samples WHERE is_rain AND location = 'boston-seaport';"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**2.1%** of camera frames have 20 or more annotated objects \u2014 4,310 out of 204,894 keyframes.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 2.103526701611565,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "crowded_frames_share_pct",
+    "kind": "eval",
+    "latency_s": 4.0,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "What share of camera frames (as a percentage) have 20 or more annotated objects?\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(*) AS total, count(*) FILTER (WHERE n_boxes >= 20) AS crowded, round(100.0 * count(*) FILTER (WHERE n_boxes >= 20) / count(*), 2) AS pct FROM samples"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**341 distinct scenes** have at least one bicycle annotation (using the detector taxonomy `category_group = 'bicycle'`).",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 341.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "bicycle_scenes_count",
+    "kind": "eval",
+    "latency_s": 3.52,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many distinct scenes have at least one bicycle annotation?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT scene_token) AS n FROM annotations WHERE category_group='bicycle';"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "The average visibility of pedestrian annotations at night is **\u22483.64** on the 1\u20134 scale (across 13,267 nighttime pedestrian 2D annotations) \u2014 so nighttime pedestrians are, on average, fairly well visible (closer to 4 = fully visible).",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 3.6407627949046506,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "avg_visibility_pedestrian_night",
+    "kind": "eval",
+    "latency_s": 4.44,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Using the 2D annotations table, what is the average visibility (on the 1-4 scale) of pedestrian annotations at night?\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT avg(CAST(visibility_token AS INTEGER)) AS avg_vis, count(*) AS n FROM annotations WHERE category_group='pedestrian' AND is_night"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**79 camera frames** in Singapore night scenes contain both a bicycle and a bus annotation.\n\n(These are individual camera images across the six cameras; the count reflects distinct frames where at least one bicycle box and one bus box both appear.)",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 79.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "bike_bus_singapore_night_count",
+    "kind": "eval",
+    "latency_s": 6.04,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many camera frames in Singapore night scenes contain both a bicycle and a bus annotation?\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT a.sample_data_token) AS frames\nFROM annotations a\nWHERE a.location LIKE 'singapore%' AND a.is_night\n  AND a.sample_data_token IN (\n    SELECT sample_data_token FROM annotations WHERE category_group='bicycle')\n  AND a.sample_data_token IN (\n    SELECT sample_data_token FROM annotations WHERE category_group='bus');"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "A pedestrian and a traffic cone both appear in **13,823 camera frames**.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 13823.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "pedestrian_cone_cooccurrence_count",
+    "kind": "eval",
+    "latency_s": 4.62,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "In how many camera frames do a pedestrian and a traffic cone both appear?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(*) FROM (\n  SELECT sample_data_token\n  FROM annotations\n  GROUP BY sample_data_token\n  HAVING count(*) FILTER (WHERE category_group='pedestrian') > 0\n     AND count(*) FILTER (WHERE category_name='movable_object.trafficcone') > 0\n)"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "Of the 5,000 VLM-labeled CAM_FRONT frames, **4,986** parsed successfully (`parse_status = 'ok'`) \u2014 meaning 14 failed to parse.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 4986.0,
+      "grounded": false,
+      "numeric": true,
+      "passed": false,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "labels_parse_ok_count",
+    "kind": "eval",
+    "latency_s": 3.93,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many of the VLM-labeled frames parsed successfully (parse_status = 'ok')?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(*) FROM labels WHERE parse_status = 'ok'"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "The VLM labels agree with the ground-truth night flag **99.66%** of the time.\n\n- Frames compared (parse_status = 'ok'): **4,986**\n- Agreements: **4,969** (VLM `time_of_day='night'` matching `samples.is_night`)\n- Disagreements: **17**\n\nNote: I treated the VLM label as \"night\" only when `time_of_day = 'night'` (the 16 `dusk_dawn` frames count as not-night, matching the boolean ground truth). Agreement is high largely because most frames are daytime and both sources agree they aren't night.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 99.65904532691536,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "labels_night_agreement_pct",
+    "kind": "eval",
+    "latency_s": 10.85,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Using the labels table joined to samples, how often do the VLM labels agree with ground truth that a frame is night? Give the agreement rate as a percentage.\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT time_of_day, count(*) FROM labels WHERE parse_status='ok' GROUP BY 1 ORDER BY 2 DESC"
+        },
+        "output": "3 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sql": "SELECT\n  count(*) AS total,\n  sum(CASE WHEN (l.time_of_day='night') = s.is_night THEN 1 ELSE 0 END) AS agree,\n  100.0*sum(CASE WHEN (l.time_of_day='night') = s.is_night THEN 1 ELSE 0 END)/count(*) AS agreement_pct\nFROM labels l JOIN samples s USING (sample_data_token)\nWHERE l.parse_status='ok'"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**94 keyframes** show hard braking (accel_long_min \u2264 \u22123.0 m/s\u00b2) in the CAN-bus data.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 94.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "canbus_hard_braking_count",
+    "kind": "eval",
+    "latency_s": 4.28,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many keyframes show hard braking (is_hard_braking)?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(*) FROM canbus WHERE is_hard_braking"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "The average CAN-bus vehicle speed in **boston-seaport** is **\u224816.3 km/h** (16.25 km/h), computed over 18,188 keyframes with CAN-bus data.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 16.25118931104633,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "canbus_avg_speed_boston_kmh",
+    "kind": "eval",
+    "latency_s": 5.6,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "What is the average CAN-bus vehicle speed (km/h) in boston-seaport?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT AVG(can_speed_kmh) AS avg_speed_kmh, COUNT(*) AS n FROM canbus WHERE location='boston-seaport' AND has_canbus;"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "The average ego-vehicle speed in **singapore-onenorth** is **\u22485.10 m/s** (about 18.4 km/h), computed across 7,308 keyframe ego poses.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 5.104916902905238,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "ego_pose_avg_speed_onenorth",
+    "kind": "eval",
+    "latency_s": 3.61,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "What is the average ego-vehicle speed (m/s) in singapore-onenorth, based on the ego pose?\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT avg(speed_mps) AS avg_speed_mps, count(*) AS n FROM ego_pose WHERE location = 'singapore-onenorth'"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**78** distinct pedestrians (183 total observations across keyframes) come within 5 m of the ego vehicle at night.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 183.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "pedestrians_within_5m_night",
+    "kind": "eval",
+    "latency_s": 5.26,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "how many pedestrians come within 5 meters of the ego vehicle at night? just the number.",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(*) AS obs, count(DISTINCT instance_token) AS distinct_peds FROM annotations_3d WHERE category_group='pedestrian' AND distance_to_ego_m < 5 AND is_night;"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**30 keyframes** show hard braking (ego longitudinal deceleration \u2264 \u22123.0 m/s\u00b2) with at least one pedestrian within 10 m of the ego vehicle.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 30.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "hard_braking_near_pedestrian_10m",
+    "kind": "eval",
+    "latency_s": 5.56,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "How many keyframes show hard braking with a pedestrian within 10 meters of the ego vehicle?\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT count(DISTINCT c.sample_token) AS n\nFROM canbus c\nJOIN annotations_3d a ON a.sample_token = c.sample_token\nWHERE c.is_hard_braking\n  AND a.category_group = 'pedestrian'\n  AND a.distance_to_ego_m < 10;"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "**Summary:** The maximum track length is **41 keyframes** (the full length of a nuScenes scene, ~20 s). A total of **1,893 objects** are tracked across all 41 keyframes of their scene \u2014 meaning they stay in view the entire time.\n\nWhich categories dominate these fully-tracked objects:\n\n| category | objects tracked in all 41 keyframes |\n|---|---|\n| vehicle.car | 875 |\n| movable_object.barrier | 289 |\n| pedestrian (adult) | 277 |\n| vehicle.truck | 176 |\n| movable_object.trafficcone | 79 |\n| vehicle.trailer | 49 |\n| vehicle.bus.rigid | 44 |\n| vehicle.construction | 36 |\n| others | ~68 |\n\nCars are by far the most commonly tracked object across an entire scene, followed by static roadside objects (barriers, traffic cones) and pedestrians \u2014 which makes sense, since those tend to remain in the ego vehicle's field of view for long stretches.\n\nNote: no single object exceeds 41 keyframes because instances don't persist across scene boundaries in nuScenes.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 41.0,
+      "grounded": false,
+      "numeric": true,
+      "passed": false,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "max_instance_keyframes",
+    "kind": "eval",
+    "latency_s": 15.09,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "which objects are tracked across the most keyframes?",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT instance_token, category_name, category_group, scene_token, n_annotations\nFROM instances\nORDER BY n_annotations DESC\nLIMIT 15;"
+        },
+        "output": "15 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sql": "SELECT category_name, count(*) AS n_objects_at_41\nFROM instances\nWHERE n_annotations = 41\nGROUP BY 1\nORDER BY 2 DESC;"
+        },
+        "output": "17 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "No missing camera files \u2014 the manifest is complete. Every referenced CAM file is present on disk across all six camera channels:\n\n| Channel | Total files | Missing |\n|---|---|---|\n| CAM_FRONT | 198,315 | 0 |\n| CAM_FRONT_LEFT | 198,423 | 0 |\n| CAM_FRONT_RIGHT | 198,030 | 0 |\n| CAM_BACK | 195,602 | 0 |\n| CAM_BACK_LEFT | 195,005 | 0 |\n| CAM_BACK_RIGHT | 198,415 | 0 |\n\n**Total: 1,183,790 referenced CAM files, 0 missing (100% present).** File integrity is clean for all camera channels.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "expected": 0.0,
+      "grounded": true,
+      "numeric": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [],
+    "id": "missing_cam_files",
+    "kind": "eval",
+    "latency_s": 5.95,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Are any referenced camera files missing from disk? Check the availability manifest for CAM channels only.\n",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT channel,\n       count(*) AS total_files,\n       count(*) FILTER (WHERE NOT present) AS missing_files,\n       count(*) FILTER (WHERE present) AS present_files\nFROM availability\nWHERE channel LIKE 'CAM%'\nGROUP BY channel\nORDER BY channel"
+        },
+        "output": "6 rows",
+        "tool": "run_sql"
+      }
+    ]
+  },
+  {
+    "answer": "Here are a few nighttime frames with traffic cones and construction context \u2014 all attached above.\n\nThe strongest matches, ranked by cone count at night:\n\n| Frame | Location | Cones | Scene |\n|---|---|---|---|\n| 924be204\u2026 | singapore-queenstown | 12 | scene-1004 (night, parking lots) |\n| bafb82a0\u2026 | singapore-queenstown | 10 | scene-1004 |\n| 86351a04\u2026 | singapore-queenstown | 10 | scene-1004 |\n| 646d9a4b\u2026 | singapore-queenstown | 9 | scene-1004 |\n| d0116eba\u2026 | singapore-hollandvillage | \u2014 | scene-1062 (night, construction) |\n| 8afcbca8\u2026 | singapore-queenstown | \u2014 | scene-0992 (night) |\n\nNotes/limitations:\n- All night driving in nuScenes is in Singapore, so every result is Singapore (mostly Queenstown).\n- The top-cone-count frames come from the 2D `annotations` table (traffic cones at night). The scene-1062 frame is a semantic-search hit explicitly described as \"construction\" at night \u2014 a good example of an actual construction zone, though its cone count wasn't among the highest.\n- The classic large-cone-group construction scene (scene-0303) is daytime Boston, so it's excluded here.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "frames": true,
+      "grounded": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "46d8abd3d2b646a6bffec5b25911b853",
+        "scene_name": "scene-0303",
+        "score": 0.1694169044494629
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "8afcbca8a9c9462eb61bb71caa644127",
+        "scene_name": "scene-0992",
+        "score": 0.16712963581085205
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "d15fba8ce91e424381f74310ad7dcf39",
+        "scene_name": "scene-1018",
+        "score": 0.16093754768371582
+      },
+      {
+        "channel": "CAM_BACK_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "c67f405cc3444525ae3dff9239349f98",
+        "scene_name": "scene-0992",
+        "score": 0.1530243158340454
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "d0116ebaf74c4b7581f2be2d0619ae4d",
+        "scene_name": "scene-1062",
+        "score": 0.15299969911575317
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "48068b995d694545b97e5fd7347dff0b",
+        "scene_name": "scene-1000",
+        "score": 0.1516062617301941
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "86351a0430bf484ba7b22f26c6930327",
+        "scene_name": "scene-1004",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "646d9a4b35ec4baf936b99d8c8825600",
+        "scene_name": "scene-1004",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "924be204a42f4c9b8704acb3088e10cd",
+        "scene_name": "scene-1004",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "bafb82a07462486695ae2c4f5879fa3e",
+        "scene_name": "scene-1004",
+        "score": 1.0
+      }
+    ],
+    "id": "construction_cones_night_frames",
+    "kind": "eval",
+    "latency_s": 15.98,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Show me a few frames of construction zones with traffic cones at night.",
+    "steps": [
+      {
+        "input": {
+          "sql": "SELECT a.sample_data_token, a.location, count(*) AS cones\nFROM annotations a\nWHERE a.category_name LIKE '%trafficcone%' AND a.is_night\nGROUP BY 1,2\nORDER BY cones DESC\nLIMIT 6;"
+        },
+        "output": "6 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "k": 6,
+          "query": "nighttime construction zone with traffic cones"
+        },
+        "output": "6 frames found",
+        "tool": "search_frames"
+      },
+      {
+        "input": {
+          "sample_data_tokens": [
+            "924be204a42f4c9b8704acb3088e10cd",
+            "bafb82a07462486695ae2c4f5879fa3e",
+            "86351a0430bf484ba7b22f26c6930327",
+            "d0116ebaf74c4b7581f2be2d0619ae4d",
+            "8afcbca8a9c9462eb61bb71caa644127",
+            "646d9a4b35ec4baf936b99d8c8825600"
+          ]
+        },
+        "output": "6 frames attached",
+        "tool": "show_frames"
+      }
+    ]
+  },
+  {
+    "answer": "Found them. The dataset has no explicit weather sensor, but the **VLM auto-labels** (5,000 CAM_FRONT frames) flag these conditions reliably \u2014 far better than pure visual search here.\n\n**Counts among the 5,000 labeled frames:**\n- **17** frames with `weather = fog`\n- **88** frames whose notable conditions mention fog / mist / haze\n- **8** frames flagged for lens/light glare\n\n**Attached 6 examples:**\n- `ced52f...` (scene-0444, Boston, rain) \u2014 weather=fog, \"wet road, buildings on both sides\"\n- `d15116...` (scene-1107, Singapore, night+rain) \u2014 fog, \"blurred image due to fog, poor visibility\"\n- `4df6f7...` (scene-0444, Boston) \u2014 weather=fog, low-visibility empty road\n- `cd0b86...` (scene-0185, Singapore, day) \u2014 \"sunlight glare on the camera lens\"\n- `d8d032...` (scene-0700, Boston, day) \u2014 \"sunlight glare\"\n- `519d7f...` (scene-1104, Singapore, night+rain) \u2014 \"light glare\" + \"blurred motion\"\n\nNotes/limitations: fog frames cluster in Boston rain scenes and Singapore night-rain scenes; glare shows up in bright daytime or night light-source frames. Labels cover only CAM_FRONT keyframes, so foggy/glary frames in other cameras or unlabeled scenes aren't captured here. The pure SigLIP image search returned weaker, less reliable matches, so I leaned on the VLM labels.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "frames": true,
+      "grounded": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [
+      {
+        "channel": "CAM_BACK_RIGHT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "da3a8a6b8aee40d599ed204164246699",
+        "scene_name": "scene-0646",
+        "score": 0.14325112104415894
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "76a190ba0f6441d39757e4bbc6c4d404",
+        "scene_name": "scene-0633",
+        "score": 0.1410151720046997
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "e965ec72b29a48b2a9a44ac45ed17154",
+        "scene_name": "scene-0424",
+        "score": 0.1405775547027588
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "a00dc322560d4262bd8e4217480c6b6f",
+        "scene_name": "scene-0430",
+        "score": 0.13934767246246338
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "c76a25375152466d9f9ab3b7bf6e24e2",
+        "scene_name": "scene-0633",
+        "score": 0.13931798934936523
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "92ac6f1183a24b88a613398464ebd7a8",
+        "scene_name": "scene-0431",
+        "score": 0.1391097903251648
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "singapore-queenstown",
+        "sample_data_token": "ee374d6704424557bb9c5f2cccdf2ad4",
+        "scene_name": "scene-0860",
+        "score": 0.13910865783691406
+      },
+      {
+        "channel": "CAM_FRONT_RIGHT",
+        "is_night": false,
+        "is_rain": true,
+        "location": "boston-seaport",
+        "sample_data_token": "44025c7060334202b45b277225eb9196",
+        "scene_name": "scene-0633",
+        "score": 0.13880068063735962
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "bad50b7185ea489796ad1b0cc25f2bad",
+        "scene_name": "scene-0678",
+        "score": 0.18198144435882568
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "4fb1ef71c17c404981c153f46dc462fb",
+        "scene_name": "scene-0678",
+        "score": 0.1814805269241333
+      },
+      {
+        "channel": "CAM_FRONT_LEFT",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "554da6ca60fa4c44a66b44c1e18b6639",
+        "scene_name": "scene-0678",
+        "score": 0.1791934370994568
+      },
+      {
+        "channel": "CAM_BACK",
+        "is_night": false,
+        "is_rain": false,
+        "location": "boston-seaport",
+        "sample_data_token": "da16f6f6e43343e6823c47721e20bcf1",
+        "scene_name": "scene-0736",
+        "score": 0.17683833837509155
+      }
+    ],
+    "id": "foggy_misty_glare_frames",
+    "kind": "eval",
+    "latency_s": 27.35,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "Find frames that look foggy, misty or have heavy lens glare, and attach a few examples.",
+    "steps": [
+      {
+        "input": {
+          "k": 8,
+          "query": "foggy misty hazy low visibility scene"
+        },
+        "output": "8 frames found",
+        "tool": "search_frames"
+      },
+      {
+        "input": {
+          "k": 8,
+          "query": "heavy lens glare sun flare bright washed out windshield"
+        },
+        "output": "8 frames found",
+        "tool": "search_frames"
+      },
+      {
+        "input": {
+          "sql": "SELECT sample_data_token, weather, hazards, notable_conditions, time_of_day\nFROM labels\nWHERE parse_status='ok' AND (\n  lower(weather) LIKE '%fog%' OR lower(weather) LIKE '%mist%' OR lower(weather) LIKE '%haze%'\n  OR lower(notable_conditions) LIKE '%glare%' OR lower(notable_conditions) LIKE '%fog%'\n  OR lower(notable_conditions) LIKE '%mist%' OR lower(notable_conditions) LIKE '%haze%'\n  OR lower(hazards) LIKE '%glare%' OR lower(hazards) LIKE '%fog%')\nLIMIT 30;"
+        },
+        "output": "30 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sql": "SELECT\n  count(*) FILTER (WHERE lower(weather) LIKE '%fog%') AS weather_fog,\n  count(*) FILTER (WHERE lower(notable_conditions) LIKE '%fog%' OR lower(notable_conditions) LIKE '%mist%' OR lower(notable_conditions) LIKE '%haze%') AS cond_fog_mist,\n  count(*) FILTER (WHERE lower(notable_conditions) LIKE '%glare%' OR lower(hazards) LIKE '%glare%') AS glare\nFROM labels WHERE parse_status='ok';"
+        },
+        "output": "1 rows",
+        "tool": "run_sql"
+      },
+      {
+        "input": {
+          "sample_data_tokens": [
+            "ced52f88d78242818d353f12c5036d4b",
+            "d1511637a63d4c8db9d3997842869ec2",
+            "4df6f7c9a6574a70a7977ff17325cec5",
+            "cd0b8625dee84833a9f76bc93231919b",
+            "d8d03214c68b4c21b4c34c3ef86ef50a",
+            "519d7f8e1f3f42d3b20cbb87d02dd21f"
+          ]
+        },
+        "output": "6 frames attached",
+        "tool": "show_frames"
+      }
+    ]
+  },
+  {
+    "answer": "I've attached 6 example frames. Here's what the data shows:\n\n- **All matches are in singapore-hollandvillage** \u2014 the only Singapore location with night frames containing both a bicycle and a bus.\n- The examples come from two scenes:\n  - **scene-1094** \u2014 \"Night, after rain, many peds, PMD, ped with bag, jaywalker, truck, scooter\" (rainy night, CAM_BACK_RIGHT views)\n  - **scene-1099** \u2014 \"Night, wait at busy intersection, peds, scooter on sidewalk, attempt to turn right\" (dry night, CAM_FRONT views)\n\nNote: these are 2D detection co-occurrences within a single camera frame, so the \"bus\" and \"bicycle\" appear in the same image. If you'd like, I can broaden this to keyframe-level (both objects anywhere across the 6 cameras of the same timestamp) or count how many distinct scenes/frames qualify in total.",
+    "charts": [],
+    "checks": {
+      "english": true,
+      "frames": true,
+      "grounded": true,
+      "passed": true,
+      "tool_use": true
+    },
+    "error": null,
+    "frames": [
+      {
+        "channel": "CAM_BACK_RIGHT",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "c4112e5be44f49feb8a6ad9c03b989ca",
+        "scene_name": "scene-1094",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_BACK_RIGHT",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "6fb3f6eb2e084bd0b912aeb4d7009ae4",
+        "scene_name": "scene-1094",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_BACK_RIGHT",
+        "is_night": true,
+        "is_rain": true,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "42931b4781cd4c9ca791575893fae500",
+        "scene_name": "scene-1094",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "163a451d930a4e0593b1f6407de14735",
+        "scene_name": "scene-1099",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "edd81356ed5f4af8860ea384efca6dae",
+        "scene_name": "scene-1099",
+        "score": 1.0
+      },
+      {
+        "channel": "CAM_FRONT",
+        "is_night": true,
+        "is_rain": false,
+        "location": "singapore-hollandvillage",
+        "sample_data_token": "fd081ec23b0c4a01b61d8d638401524a",
+        "scene_name": "scene-1099",
+        "score": 1.0
+      }
+    ],
+    "id": "bike_bus_singapore_night_frames",
+    "kind": "eval",
+    "latency_s": 12.16,
+    "model": "claude-opus-4-8",
+    "provider": "anthropic",
+    "question": "show me frames where bicycles and buses appear together in Singapore night scenes",
+    "steps": [
+      {
+        "input": {
+          "cypher": "MATCH (f:Frame)-[:CONTAINS]->(:Category {group:'bicycle'}),\n      (f)-[:CONTAINS]->(bus:Category)\nWHERE bus.group='bus' AND f.is_night AND f.location STARTS WITH 'singapore'\nRETURN f.token AS sample_data_token, f.channel AS channel, f.location AS location, f.n_boxes AS n_boxes\nLIMIT 12"
+        },
+        "output": "12 rows",
+        "tool": "run_cypher"
+      },
+      {
+        "input": {
+          "sample_data_tokens": [
+            "163a451d930a4e0593b1f6407de14735",
+            "edd81356ed5f4af8860ea384efca6dae",
+            "6fb3f6eb2e084bd0b912aeb4d7009ae4",
+            "42931b4781cd4c9ca791575893fae500",
+            "fd081ec23b0c4a01b61d8d638401524a",
+            "c4112e5be44f49feb8a6ad9c03b989ca"
+          ]
+        },
+        "output": "6 frames attached",
+        "tool": "show_frames"
+      }
+    ]
+  }
+]

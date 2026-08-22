@@ -40,7 +40,7 @@ output, row counts). It **fails loudly** — no manifest is written — if:
   not sum to `n_mine`,
 - a staged `al_explain/` group is partial, belongs to another arm, or did not record
   `selected_match` and `communities_match` as true, or
-- the package exceeds the size budget (100 MB; currently 25.03 MB).
+- the package exceeds the size budget (100 MB; currently 25.43 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -67,7 +67,7 @@ Rebuilds are deterministic: identical inputs produce byte-identical outputs —
 commit: a package can't contain the sha of the commit that adds it, so the committed
 manifest always names the commit it was built from, not the one that carries it.
 
-## Package layout (Phases 1-7)
+## Package layout (Phases 1-8)
 
 | file | contents |
 |---|---|
@@ -87,10 +87,12 @@ manifest always names the commit it was built from, not the one that carries it.
 | `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
-| `sample_frames/thumbs/` | 617 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch) |
+| `sample_frames/thumbs/` | 659 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch + 42 frames retrieved in the recorded chat session) |
 | `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set` |
 | `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, sample_data_token, score, k — k drives the gallery's "n of k" caption) |
 | `graph_subgraphs/<preset>.json` | 6 presets × per-event subgraphs from the live graph: nodes (`on_path` flag + properties), edges, the matched path (nearest matching object first), off-path observations capped at the nearest 12; plus the preset's count Cypher and `sql_count` / `cypher_count` / `parity` on the full keyframe population (model presets: `cypher_count` null — their verdict comes from predictions, not the graph) |
+| `chat_replays.json` | recorded chat session (`demo chat-record`): per replay `{id, kind (eval/showcase), question, answer, model, provider, steps [{tool, input, output}], frames (7 projected columns, no thumbnail bytes), charts, checks (graded cases only), latency_s, error}` |
+| `chat_replay_summary.json` | that recording's provenance: model, provider, `recorded_at`, `git_sha`, `n_eval`, `n_passed`, `n_showcase`, `search_available`, `graph_available`, `max_turns` |
 
 ## Picking the hero token
 
@@ -125,7 +127,15 @@ dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
 (streamlit ≥ 1.59 — `st.altair_chart(width="stretch")` — pandas, pyarrow, pillow,
 altair (already a Streamlit dependency, declared explicitly because the Phase-7 pages
 import it), streamlit-agraph — the latter imported lazily inside the graph panel, so
-its absence degrades to a warning, not a crash). Bare-venv smoke check:
+its absence degrades to a warning, not a crash). That file is also the one
+Community Cloud installs: Cloud searches the **entrypoint's directory first** and only
+then the repository root, taking the first of `uv.lock`, `Pipfile`, `environment.yml`,
+`requirements.txt`, `pyproject.toml` it finds — and `app/demo/requirements.txt` sits
+next to `app/demo/main.py`. The repo's root `uv.lock` (the full project, torch
+included) is therefore never consulted, and there is deliberately **no root
+`requirements.txt`**. Both halves of that are pinned by
+`test_streamlit_config_and_requirements_for_cloud` in `tests/test_demo_app.py`.
+Bare-venv smoke check:
 
 ```bash
 uv venv "$TMPDIR/demo-venv" --python 3.11
@@ -289,6 +299,168 @@ itself compared those counts to the detector's, which the package does not carry
 (`data/autolabel/labels.parquet` + `data/active_learning/autolabel_weak/labels.parquet`)
 and covers every curated frame with a verdict.
 
+## Ask the Dataset (recorded) (Phase 8)
+
+The public app never calls an LLM. `app/demo/views/chat_replay.py` replays **one
+recorded session** with the real tool-calling chat agent
+([DATASET_CHAT.md](DATASET_CHAT.md)), exported into the package. Recording is a
+paid, one-off run against a live provider:
+
+```bash
+docker compose up -d neo4j                    # so the agent is offered run_cypher
+# dry run first — --limit caps the TOTAL questions, showcase first, so 5 = exactly
+# the five showcase questions (the ones whose `expect` is asserted):
+uv run nuscenes-data-engine demo chat-record --provider anthropic --limit 5
+uv run nuscenes-data-engine demo chat-record --provider anthropic   # full run
+uv run nuscenes-data-engine demo build                              # package v0.7
+```
+
+The full run is ≈25 Claude answers — the graded eval cases plus the five showcase
+questions — at **≈ $4 at Opus list price**. It stages
+`data/demo_curation/chat_replays/`; `demo build` validates and copies both files into
+`demo_data/` and exports a thumbnail for every retrieved frame.
+
+**The shipped recording** (`chat_replay_summary.json`, 2026-08-21, `claude-opus-4-8`):
+25 replays — 5 showcase (chart, Cypher, semantic search, frames, slices; every
+expectation met) and 20 graded, **18/20 passed**; the two misses
+(`labels_parse_ok_count`, `max_instance_keyframes`) failed the `grounded` check, the
+same failure mode the earlier documented run had, and are shown on the page as such.
+42 distinct frames were retrieved, 210 s of agent time, no errors. It was recorded
+twice: the first run (19/20) exposed a Phase-4 bug in the agent's step summary (every
+successful `make_chart` step read "repeat (skipped)"), fixed in this phase, and the
+run was repeated so the shipped steps read "charted: …" as they should — roughly
+$8 of Claude API in total. `docs/DATASET_CHAT.md`'s 17/20 is the earlier
+pre-registered run of the same 20 cases (re-graded under grounding v2); this is a
+fresh session, so the two figures are different runs, not a contradiction.
+
+**What gets recorded.** Two question sets, answered in one session:
+
+- **Graded** — the cases of `configs/chat_eval.yaml`, run and graded by the chat-eval
+  harness's *own* `grade_case`, so the `checks` dict on the page (`english`,
+  `tool_use`, `grounded`, `numeric`/`expected`, `frames`) is the harness's verdict,
+  not the demo's. The **stored question is the one the model was actually sent** — a
+  config question reworded after a recording would otherwise show a viewer a question
+  the model never saw.
+- **Showcase** — `configs/demo.yaml` `chat_replay.showcase`: five hand-written
+  questions, each declaring an `expect` (`chart` / `cypher` / `frames` / `search` /
+  `none`) that the recorder **asserts** against the result. A missed expectation
+  fails the whole run: a dud showcase is re-worded and re-recorded, never shipped.
+
+One replay is `{id, kind, question, answer, model, provider, steps, frames, charts,
+checks, latency_s, error}` — the frames keep seven projected columns and drop the
+thumbnail bytes (the package ships the JPEGs as ordinary 256×144 thumbs instead). A
+question the provider errors on is recorded with its `error` and the run continues.
+
+**What the page shows, and its honesty rules.** Header cards (model, questions
+recorded, graded pass rate, tools exercised), then every showcase replay in full —
+answer, charts, retrieved-frame gallery, and an "Agent steps" expander with the SQL
+and Cypher it ran — then a selectbox over the graded cases labelled ✓ / ✗. The rules
+the page is built around:
+
+- Nothing is generated at view time. The word-by-word reveal of an answer is
+  **cosmetic**; the recording stores finished text, not a token stream. The first
+  showcase answer types out once per browser session; every other answer renders
+  statically.
+- **Raw SQL result rows are not stored.** A step shows the query and its row count —
+  exactly what the live chat UI shows — and the page never reconstructs a table the
+  package does not carry.
+- **Failed cases are shown, not hidden**: a ✗ names the check it failed and the
+  reference value it was graded against ("reference 66").
+- The summary's `search_available` / `graph_available` flags are stated on the page
+  when false, so a recording made without the search engine or the graph says so
+  rather than looking like an agent that chose not to use them.
+- No recording in the package (a fresh clone, or any pre-0.7 package) is an ordinary
+  state, not an error: the page says "no recorded sessions in this package".
+
+## Deploy (Streamlit Community Cloud)
+
+The demo is a static-artifact app: no secrets, no backend, no GPU. Deploying it is a
+form, filled in once.
+
+1. Sign in with GitHub at [share.streamlit.io](https://share.streamlit.io).
+2. **New app** → **Deploy a public app from GitHub**.
+3. Repository `Sahilpatkar/nuscenes-data-engine`, branch `main`, **Main file path**
+   `app/demo/main.py`.
+4. **Advanced settings** → **Python version 3.11** (matches `.python-version`; Cloud
+   defaults to 3.12). Leave **Secrets** empty — the app reads nothing from
+   `st.secrets`.
+5. Deploy, then paste the resulting URL into the README's **Live demo** line and into
+   the "Live URL" note at the end of this section.
+
+**Which dependency file Cloud installs.** Community Cloud searches the **entrypoint's
+directory first** and only then the repository root, taking the first of `uv.lock`,
+`Pipfile`, `environment.yml`, `requirements.txt`, `pyproject.toml` it finds — and it
+uses **one** dependency file, not a merge of several. `app/demo/requirements.txt` sits
+next to `app/demo/main.py`, so that is the file Cloud installs (six light wheels; see
+"Streamlit-Cloud contract" above). The repo's root `uv.lock` — the full project,
+torch included — is never consulted while that file exists, which is exactly why the
+test suite asserts its presence *and* asserts that no root `requirements.txt` was
+added (a second dependency file Cloud would never read).
+
+**Footprint.** Cloud clones the whole repository (≈55 MB, of which `demo_data/` is
+25 MB) and installs the six wheels above; nothing else is downloaded at runtime. The
+loaders in `app/demo/data.py` are `st.cache_data`-wrapped, and the biggest table in
+memory is a frame parquet of a few MB — comfortably inside the free tier's 1 GB.
+Expect a cold start of roughly 30 s (clone + pip install + first script run), then
+sub-second page switches.
+
+**Redeploying.** Cloud watches the deployed branch: pushing to `main` redeploys.
+After a package rebuild, remember that `manifest.json`'s `git_sha` names the *parent*
+commit by design (a package cannot contain the sha of the commit that adds it) — that
+is not a stale deploy.
+
+**What the deployment claims.** Overview's footer renders
+[DEMO_PLAN.md](DEMO_PLAN.md)'s credibility statement verbatim — *"Results shown here
+were generated by the full offline pipeline. The public application serves curated
+experiment outputs for reproducibility and demonstration."* — which is the honest
+description of this deployment: it serves artifacts, it does not run the pipeline.
+
+**Live URL:** _pending deploy_ (record it here and in README.md's "Live demo" line).
+
+### Screenshots
+
+The README gallery's six PNGs are produced by `scripts/demo_screenshots.py`, a manual
+Playwright tool that is deliberately **not** a project dependency:
+
+```bash
+uv pip install playwright                     # temporary, into .venv
+uv run streamlit run app/demo/main.py --server.headless true --server.port 8599  # another shell
+.venv/bin/python scripts/demo_screenshots.py  # -> docs/img/demo-*.png
+uv pip uninstall playwright
+```
+
+It drives the machine's installed Google Chrome (`channel="chrome"`, so no browser
+download), shoots a 1200×900 viewport per page, opens the first frame-detail panel
+where a page has one — the Active learning and Weak supervision pages have none, so
+those two are captured at the top of the page (scroll position 0, title visible)
+instead — and **exits non-zero if any page rendered a Streamlit exception** — a
+broken page cannot quietly become a README screenshot. Re-run it whenever a page
+changes visibly; any capture over 300 KB is quantized to a 256-colour palette PNG by
+the script itself, no manual compression step needed.
+
+These PNGs contain nuScenes-derived imagery and are covered by the attribution
+section below, exactly as the packaged frames are.
+
+## Success-criteria walk
+
+[DEMO_PLAN.md](DEMO_PLAN.md)'s ten questions, and the page and on-screen section that
+answers each. Status is filled in when the walk is actually performed: the local
+column after a browser pass over the committed package, the live column against the
+deployed URL.
+
+| # | Question (DEMO_PLAN.md) | Page | Section / element that answers it | Status |
+|---|---|---|---|---|
+| 1 | What problem does the project solve? | Overview | the mission blockquote under the title, then **Scale** and **Headline results** cards | local: 2026-08-21 · live: pending |
+| 2 | Where does the baseline perception model fail? | Failure Explorer (+ Overview) | the sidebar filters (lighting, rain, model, class, size bucket, distance, failure type, curation bucket) over the 125 val frames, and **Detail**'s GT / Predictions / Overlay toggle; Overview's **The model at work** hero shows one such miss | local: 2026-08-21 · live: pending |
+| 3 | How does the system find difficult data? | Scenario Search | the six **preset** buttons + ranked card grid, and **Recorded semantic search** | local: 2026-08-21 · live: pending |
+| 4 | Why is the graph useful? | Scenario Search | each preset header's SQL/Cypher **parity line** (flagship 30 = 30), and the event viewer's **Interactive graph** panel with the matched path | local: 2026-08-21 · live: pending |
+| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r) | local: 2026-08-21 · live: pending |
+| 6 | How does active learning choose frames? | Active Learning | **How `graph_rate_night` chooses: community mass → quota**, then **Why was this frame selected?** per-frame factor panel | local: 2026-08-21 · live: pending |
+| 7 | Did targeted retraining improve performance? | Active Learning | the story's **Result** beat, **Every arm, one chart** (13 arms in round order), and **Before / after** exemplars | local: 2026-08-21 · live: pending |
+| 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: 2026-08-21 · live: pending |
+| 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-21 · live: pending |
+| 10 | How does the project form a closed model-improvement loop? | Active Learning + Weak Supervision (+ Overview) | the two story-arrow narratives — Problem → Hypothesis → Acquisition → Training → Evaluation → Result, and Hypothesis → Labelling → Verification → Training → Result — closed by Overview's footer credibility statement | local: 2026-08-21 · live: pending |
+
 ## Dataset attribution & license
 
 The demo package (`demo_data/sample_frames/`) contains imagery **derived from the
@@ -312,4 +484,4 @@ is **not** redistributed by this repository.
 | 5 | scenario search + synchronized event viewer | **shipped** |
 | 6 | interactive graph (subgraph export + agraph) | **shipped** |
 | 7 | active-learning + weak-supervision pages | **shipped** |
-| 8 | chat replay gallery, licensing gate, deployment | pending |
+| 8 | recorded chat replay, deployment scaffolding, README + screenshots | **shipped** |

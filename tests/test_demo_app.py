@@ -15,7 +15,8 @@ import pytest
 import yaml
 
 FORBIDDEN = ("nuscenes_data_engine", "requests", "torch", "lancedb", "neo4j", "duckdb")
-DEMO_DIR = Path(__file__).resolve().parents[1] / "app" / "demo"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEMO_DIR = REPO_ROOT / "app" / "demo"
 
 # Phase 6 (Task 3): the six scenario presets subgraph_export.py exports one JSON
 # per -- mirrors tests/test_demo_export.py's own module-level tuple of the same
@@ -70,6 +71,43 @@ def test_demo_requirements_stay_minimal() -> None:
     # not-disallowed. Same for altair and the Phase-7 charts.
     assert any(line.startswith("streamlit-agraph") for line in raw_lines)
     assert any(line.startswith("altair") for line in raw_lines)
+
+
+def test_streamlit_config_and_requirements_for_cloud() -> None:
+    """The Community-Cloud deployment scaffolding, as Cloud actually reads it.
+
+    Cloud looks for a dependency file in the ENTRYPOINT's directory first and only
+    then at the repository root, recognising ``uv.lock``, ``Pipfile``,
+    ``environment.yml``, ``requirements.txt``, ``pyproject.toml`` in that order --
+    and installs exactly one of them. ``app/demo/requirements.txt`` sits next to the
+    entrypoint ``app/demo/main.py``, so that is the file Cloud installs. Two
+    consequences this test pins:
+
+    - the demo requirements file must EXIST next to main.py -- if it ever vanished,
+      the search would fall through to the repo root and Cloud would install the
+      root ``uv.lock``, i.e. the whole project including torch, on a free tier that
+      cannot hold it;
+    - the repo root must have NO ``requirements.txt`` -- a second dependency file
+      that Cloud never reads (the entrypoint directory wins) but that a contributor
+      would reasonably believe is the deployed one.
+
+    ``.streamlit/config.toml`` is shared by Cloud and a local ``streamlit run``.
+    """
+    import tomllib
+
+    config = tomllib.loads((REPO_ROOT / ".streamlit" / "config.toml").read_text())
+    assert config["server"]["headless"] is True
+    assert config["browser"]["gatherUsageStats"] is False
+
+    assert (DEMO_DIR / "main.py").is_file(), "the Cloud entrypoint moved"
+    assert (DEMO_DIR / "requirements.txt").is_file(), (
+        "app/demo/requirements.txt is the file Streamlit Cloud installs -- without it "
+        "the dependency search falls through to the root uv.lock (the full project)"
+    )
+    assert not (REPO_ROOT / "requirements.txt").exists(), (
+        "a root requirements.txt would never be read (Cloud takes the entrypoint "
+        "directory's file first) but would read as the deployed dependency set"
+    )
 
 
 def _stage_subgraphs_with_event(staging_dir: Path) -> None:
@@ -267,6 +305,174 @@ def _stage_al_explain(staging_dir: Path) -> None:
             "route_k": 10, "seed": 64, "top_k": 1000,
         },
     }))
+
+
+# The two frame tokens the staged showcase replay retrieved -- thumbs for both are
+# written by hand after the build (this fixture stages no LanceDB store, so the
+# builder's own thumbnail export skips with a warning, exactly as it does for the
+# curation/event/semsearch galleries).
+_CHAT_REPLAY_TOKENS = ("cr1", "cr2")
+
+
+def _chat_replay_frame(token: str, **overrides: Any) -> dict[str, Any]:
+    """One retrieved frame as `demo chat-record` stores it.
+
+    `demo build`'s ``_validate_chat_replays`` requires EXACTLY the keys of
+    ``chat_record.FRAME_COLUMNS``, so this mirrors tests/test_demo_export.py's own
+    ``_chat_frame`` helper (Task 2) rather than importing it -- pytest fixtures and
+    helpers are not shared across modules, and that file exercises the builder's
+    validation side while this one exercises the page's rendering side.
+    """
+    frame: dict[str, Any] = {
+        "sample_data_token": token,
+        "scene_name": "scene-0916",
+        "location": "singapore-onenorth",
+        "is_night": True,
+        "is_rain": True,
+        "channel": "CAM_FRONT",
+        "score": 0.87,
+    }
+    frame.update(overrides)
+    return frame
+
+
+def _stage_chat_replays(staging_dir: Path) -> None:
+    """Stage a recorded chat session (``chat_replays.json`` +
+    ``chat_replay_summary.json``) under ``staging_dir``, mirroring `demo
+    chat-record`'s output (Task 1) closely enough for `demo build`'s copy +
+    validation and for the "Ask the Dataset" page's own rendering.
+
+    Four replays, one per state the page has to render:
+
+    - one SHOWCASE replay (array order puts showcase first, as the recorder writes
+      it) with a bar chart, two retrieved frames and three steps -- a SQL query
+      (code block), a show_frames call and a make_chart call;
+    - one PASSED eval replay with a numeric check graded against reference 66;
+    - one FAILED eval replay whose numeric check missed reference 2.91, carrying a
+      Cypher step and a semantic-search step (so the tool-count card and
+      ``step_detail``'s cypher/search branches are exercised on a real package);
+    - one ERRORED eval replay: no answer, ``checks == {"passed": False}``, and the
+      provider error the recorder stored (`demo chat-record` records the failure
+      and continues, exactly as `chat-eval`'s ``run_eval`` does).
+
+    The summary's ``n_eval``/``n_passed``/``n_showcase`` must agree with the
+    records or the build refuses them.
+    """
+    records: list[dict[str, Any]] = [
+        {
+            "id": "show_night_locations",
+            "kind": "showcase",
+            "question": "Which locations have the most night frames?",
+            "answer": "Singapore-onenorth has the most night frames, five of them.",
+            "model": "claude-test",
+            "provider": "anthropic",
+            "steps": [
+                {
+                    "tool": "run_sql",
+                    "input": {"sql": "SELECT location, count(*) FROM scenes GROUP BY location"},
+                    "output": "2 rows",
+                },
+                {
+                    "tool": "show_frames",
+                    "input": {"sample_data_tokens": list(_CHAT_REPLAY_TOKENS)},
+                    "output": "2 frames attached",
+                },
+                {
+                    "tool": "make_chart",
+                    "input": {"kind": "bar", "title": "Night frames per location"},
+                    "output": "charted: Night frames per location",
+                },
+            ],
+            "frames": [
+                _chat_replay_frame(_CHAT_REPLAY_TOKENS[0]),
+                _chat_replay_frame(
+                    _CHAT_REPLAY_TOKENS[1], scene_name="scene-0001",
+                    location="boston-seaport", is_night=False, is_rain=False, score=0.71,
+                ),
+            ],
+            "charts": [{
+                "kind": "bar",
+                "title": "Night frames per location",
+                "columns": ["location", "n"],
+                "rows": [["boston-seaport", 3], ["singapore-onenorth", 5]],
+            }],
+            "checks": None,
+            "latency_s": 4.2,
+            "error": None,
+        },
+        {
+            "id": "eval_scene_count",
+            "kind": "eval",
+            "question": "How many scenes are in the dataset?",
+            "answer": "There are 66 scenes.",
+            "model": "claude-test",
+            "provider": "anthropic",
+            "steps": [
+                {"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM scenes"},
+                 "output": "1 rows"},
+            ],
+            "frames": [],
+            "charts": [],
+            "checks": {
+                "english": True, "tool_use": True, "grounded": True, "numeric": True,
+                "expected": 66, "passed": True,
+            },
+            "latency_s": 3.1,
+            "error": None,
+        },
+        {
+            "id": "eval_mean_speed",
+            "kind": "eval",
+            "question": "What is the mean ego speed?",
+            "answer": "About 3.1 m/s across the logged keyframes.",
+            "model": "claude-test",
+            "provider": "anthropic",
+            "steps": [
+                {"tool": "run_cypher", "input": {"cypher": "MATCH (e:EgoState) RETURN avg(e.speed_mps)"},
+                 "output": "1 rows"},
+                {"tool": "search_frames", "input": {"query": "fast highway driving", "k": 6},
+                 "output": "6 frames found"},
+            ],
+            "frames": [],
+            "charts": [],
+            "checks": {
+                "english": True, "tool_use": True, "grounded": True, "numeric": False,
+                "expected": 2.91, "passed": False,
+            },
+            "latency_s": 5.4,
+            "error": None,
+        },
+        {
+            "id": "eval_night_pedestrians",
+            "kind": "eval",
+            "question": "Which scenes have the most pedestrians at night?",
+            "answer": None,
+            "model": "claude-test",
+            "provider": "anthropic",
+            "steps": [],
+            "frames": [],
+            "charts": [],
+            "checks": {"passed": False},
+            "latency_s": 0.4,
+            "error": "overloaded_error: the provider dropped the session",
+        },
+    ]
+    summary = {
+        "model": "claude-test",
+        "provider": "anthropic",
+        "recorded_at": "2026-08-21T09:15:00+00:00",
+        "git_sha": "deadbeef",
+        "n_eval": 3,
+        "n_passed": 1,
+        "n_showcase": 1,
+        "search_available": True,
+        "graph_available": True,
+        "max_turns": 8,
+    }
+    out = staging_dir / "chat_replays"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "chat_replays.json").write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+    (out / "chat_replay_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
 @pytest.fixture()
@@ -654,6 +860,11 @@ def built_demo_data(tmp_path: Path) -> Path:
     # other five presets' sql_count/cypher_count are free (see that helper).
     _stage_subgraphs_with_event(staging)
     _stage_al_explain(staging)
+    # Staged BEFORE run_build so the package this fixture returns carries the
+    # recorded chat replays the "Ask the Dataset" page reads (the builder copies +
+    # re-validates them; a package without them is the
+    # built_demo_data_without_chat_replay variant below).
+    _stage_chat_replays(staging)
 
     run_build(config_path)
 
@@ -679,6 +890,14 @@ def built_demo_data(tmp_path: Path) -> Path:
         Image.new("RGB", (2, 2), color=color).save(buf, format="JPEG")
         (thumbs_dir / f"{token}.jpg").write_bytes(buf.getvalue())
 
+    # The staged showcase replay's two retrieved frames -- same skip-then-write-by-
+    # hand rationale as the tokens above (no LanceDB store here, so
+    # _include_chat_replay's own thumb export logged a warning and copied nothing).
+    for token in _CHAT_REPLAY_TOKENS:
+        buf = io.BytesIO()
+        Image.new("RGB", (2, 2), color=(120, 60, 60)).save(buf, format="JPEG")
+        (thumbs_dir / f"{token}.jpg").write_bytes(buf.getvalue())
+
     return out
 
 
@@ -700,6 +919,29 @@ def built_demo_data_without_explain(built_demo_data: Path) -> Path:
     manifest_path = built_demo_data / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["validation"]["al_explain"] = "absent"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
+
+
+@pytest.fixture()
+def built_demo_data_without_chat_replay(built_demo_data: Path) -> Path:
+    """The same package with the recorded chat group removed -- the ordinary state
+    of a fresh clone (`demo chat-record` is a paid, one-off run against a live
+    provider, so it never ran there).
+
+    Deletes the two files from an otherwise-normal built package rather than
+    rebuilding one without the staging, for the same reason
+    ``built_demo_data_without_explain`` does: the page's absent branch keys off
+    ``data.chat_replay_available()``, i.e. the files' presence, and the builder's
+    own absent/included recording is pinned on the builder side
+    (tests/test_demo_export.py::test_include_chat_replay_absent_returns_absent_
+    and_copies_nothing).
+    """
+    for name in ("chat_replays.json", "chat_replay_summary.json"):
+        (built_demo_data / name).unlink()
+    manifest_path = built_demo_data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"]["chat_replay"] = "absent"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return built_demo_data
 
@@ -743,6 +985,40 @@ def test_overview_page_renders_from_a_built_package(
     captions = [str(c.value) for c in at.caption]
     assert any("computed live against Neo4j at build time" in c for c in captions)
     assert not any("until the live-graph export lands" in c for c in captions)
+
+
+# docs/DEMO_PLAN.md:697's credibility statement, verbatim. The public app serves
+# artifacts, not a live pipeline, and Overview's footer has to say so in the plan's
+# own words -- paraphrasing it would quietly weaken the claim it is making.
+CREDIBILITY_STATEMENT = (
+    "Results shown here were generated by the full offline pipeline. The public "
+    "application serves curated experiment outputs for reproducibility and "
+    "demonstration."
+)
+
+
+def test_overview_footer_carries_the_credibility_statement(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The "how to read this demo" footer states where the results came from.
+
+    This is the one sentence a visitor needs to read the whole app correctly: the
+    numbers are the offline pipeline's, the deployment is only serving them.
+    """
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py")).run()
+
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any(CREDIBILITY_STATEMENT in caption for caption in captions), captions
+    # The footer's existing sentence stays: the credibility statement is added to it,
+    # not swapped in for it.
+    assert any("label recorded outputs as recorded" in caption for caption in captions)
 
 
 def test_overview_flagship_caption_when_the_cypher_twin_is_only_sourced(
@@ -1734,3 +2010,181 @@ def test_weak_supervision_page_on_a_pre_phase_7_package(
     assert any("needs demo_data >= 0.6" in str(i.value) for i in at.info)
     # the one thing the old package does carry is still on screen
     assert any(m.label == "Verifier retention — random" for m in at.metric)
+
+
+def _chat_replay_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="chat_replay" in main.py, same rationale as the other pages' explicit
+    # url_paths (switch_page resolves by hashing the filename-derived name).
+    at.switch_page("views/chat_replay.py").run(timeout=30)
+    return at
+
+
+def test_chat_replay_page_renders_showcase_and_graded(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's spine: the recorded banner and cards (every figure derived from
+    the staged session), the showcase replay in full (answer, chart, frames, steps),
+    and the graded selectbox -- including the failing case's verdict and the errored
+    case's provider error, both shown rather than hidden."""
+    pytest.importorskip("streamlit")
+    at = _chat_replay_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "Recorded answers from the dataset chat agent (claude-test, recorded "
+        "2026-08-21)" in caption
+        and "the live agent runs in the local stack" in caption
+        for caption in captions
+    )
+
+    # (1) cards: two cards only (a wider "Model"/"Tools exercised" value would
+    # truncate inside st.metric's large font -- consolidated review, real-browser
+    # finding) + counts derived from the staged records (4 replays: 1 showcase + 3
+    # eval, of which 1 passed; steps: 2 SQL, 1 Cypher, 1 search, 1 show_frames, 1
+    # chart).
+    metrics = {(str(m.label), str(m.value)) for m in at.metric}
+    assert ("Questions recorded", "4") in metrics
+    assert ("Graded pass rate", "1/3") in metrics
+    assert not any(label == "Model" for label, _ in metrics)
+    assert not any(label == "Tools exercised" for label, _ in metrics)
+    assert (
+        "Model `claude-test` · tools exercised: SQL 2 · Cypher 1 · "
+        "semantic search 1 · frames shown 1 · charts 1"
+    ) in captions
+
+    # (2) the showcase replay: question, answer text, its chart and both frames.
+    markdowns = [str(m.value) for m in at.markdown]
+    assert any("Which locations have the most night frames?" in text for text in markdowns)
+    assert any("Singapore-onenorth has the most night frames" in text for text in markdowns)
+    assert len(at.get("vega_lite_chart")) >= 1
+    assert len(at.image) >= 2
+    assert "scene-0916 · singapore-onenorth · night, rain" in captions
+    assert "scene-0001 · boston-seaport · day" in captions
+
+    # (2) the steps expander, its SQL code block, and the honesty line about what a
+    # step does NOT carry.
+    assert "Agent steps (3)" in [str(e.label) for e in at.get("expander")]
+    codes = {(str(c.value), c.language) for c in at.code}
+    assert ("SELECT location, count(*) FROM scenes GROUP BY location", "sql") in codes
+    assert any("Raw SQL result rows are not stored" in caption for caption in captions)
+
+    # (3) the graded selectbox: the eval replays, labelled by their own verdicts.
+    graded = at.selectbox(key="chat_replay_graded")
+    assert graded.options == [
+        "✓ How many scenes are in the dataset?",
+        "✗ What is the mean ego speed?",
+        "✗ Which scenes have the most pedestrians at night?",
+    ]
+    assert any(
+        "✓ passed (english, tool_use, grounded, numeric) · reference 66" in caption
+        for caption in captions
+    )
+
+    # (3) the failing case names its failing check and the reference it missed.
+    at.selectbox(key="chat_replay_graded").select("eval_mean_speed").run(timeout=30)
+    assert not at.exception
+    assert any(
+        "✗ failed: numeric · reference 2.91" in str(c.value) for c in at.caption
+    )
+    assert any("MATCH (e:EgoState)" in str(c.value) for c in at.code)
+    assert any(
+        "query: fast highway driving" in str(m.value) for m in at.markdown
+    )
+
+    # (4) the errored case renders the provider's error, not a blank answer.
+    at.selectbox(key="chat_replay_graded").select("eval_night_pedestrians").run(timeout=30)
+    assert not at.exception
+    assert any(
+        "overloaded_error: the provider dropped the session" in str(e.value) for e in at.error
+    )
+    assert any("✗ errored — overloaded_error" in str(c.value) for c in at.caption)
+
+
+def test_chat_replay_question_with_trailing_newline_renders_without_a_broken_bold_span(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Several of the real recorded questions are YAML folded scalars and end in a
+    literal trailing ``\\n``. Unstripped, that newline lands INSIDE the showcase
+    heading's bold span (``**question**``) and CommonMark never closes the ``**``
+    across it, so the page showed literal asterisks; the same trailing newline
+    also left the graded selectbox's option label multi-line. The fix is
+    display-only -- mutate the BUILT package's own `chat_replays.json` (as the
+    real recorder's YAML-folded-scalar output would already look) rather than the
+    staging fixture, so the record on disk stays exactly what `demo chat-record`
+    would have written."""
+    pytest.importorskip("streamlit")
+    replays_path = built_demo_data / "chat_replays.json"
+    records = json.loads(replays_path.read_text())
+    for record in records:
+        if record["id"] in ("show_night_locations", "eval_scene_count"):
+            record["question"] = record["question"] + "\n"
+    replays_path.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+
+    at = _chat_replay_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # The showcase heading's bold span closes right after the (stripped)
+    # question text -- no newline snuck inside it to leave the "**" unclosed.
+    markdowns = [str(m.value) for m in at.markdown]
+    assert "**Which locations have the most night frames?**" in markdowns
+
+    # The graded selectbox's label is a single line too.
+    graded = at.selectbox(key="chat_replay_graded")
+    assert "✓ How many scenes are in the dataset?" in graded.options
+    assert all("\n" not in option for option in graded.options)
+
+
+def test_chat_replay_page_absent_note(
+    built_demo_data_without_chat_replay: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No recorded session in the package (the fresh-clone state, since `demo
+    chat-record` is a paid run) -- one honest note naming the command that produces
+    one, and nothing else claimed."""
+    pytest.importorskip("streamlit")
+    at = _chat_replay_apptest(built_demo_data_without_chat_replay, monkeypatch)
+    assert not at.exception
+
+    assert "no recorded sessions in this package (demo chat-record)" in [
+        str(info.value) for info in at.info
+    ]
+    assert not at.get("vega_lite_chart")
+    assert not at.selectbox
+
+
+def test_chat_replay_page_on_a_pre_0_7_package(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before package_version 0.7 carries no chat group at all --
+    and no manifest key for it either. The page keys on the FILES' presence, not on
+    the manifest, so it draws the same note (here the manifest is deliberately left
+    claiming "included")."""
+    pytest.importorskip("streamlit")
+    for name in ("chat_replays.json", "chat_replay_summary.json"):
+        (built_demo_data / name).unlink()
+
+    at = _chat_replay_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert "no recorded sessions in this package (demo chat-record)" in [
+        str(info.value) for info in at.info
+    ]
+    manifest = json.loads((built_demo_data / "manifest.json").read_text())
+    assert manifest["validation"]["chat_replay"] == "included"
+
+
+def test_demo_no_longer_promises_phase_8() -> None:
+    """The last stub is gone: no placeholder module, no import of one, and no page
+    still promising a future phase."""
+    assert not (DEMO_DIR / "views" / "stubs.py").exists()
+    assert "stubs" not in (DEMO_DIR / "main.py").read_text()
+    promises = [
+        path.name for path in sorted(DEMO_DIR.rglob("*.py")) if "Phase 8" in path.read_text()
+    ]
+    assert not promises

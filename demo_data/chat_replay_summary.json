@@ -1,0 +1,12 @@
+{
+  "git_sha": "c46ebada35fa22ea21690d3c6ac058470130bc03",
+  "graph_available": true,
+  "max_turns": 8,
+  "model": "claude-opus-4-8",
+  "n_eval": 20,
+  "n_passed": 18,
+  "n_showcase": 5,
+  "provider": "anthropic",
+  "recorded_at": "2026-08-21T19:13:25-07:00",
+  "search_available": true
+}

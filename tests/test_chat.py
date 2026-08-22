@@ -470,6 +470,25 @@ def test_agent_breaks_repeated_tool_call_loop(con: Any) -> None:
     assert len(engine.calls) == 1
 
 
+def test_summarize_reports_a_successful_chart_not_a_repeat() -> None:
+    """``_make_chart``'s success payload carries both ``charted`` and ``note`` (the
+    note tells the model not to embed the image) -- ``_summarize`` must check
+    ``charted`` before ``note``, or every successful chart step reads as
+    "repeat (skipped)" in the UI/log/Phase-8 recording (regression since Phase 4)."""
+    result = agent.ChatResult(answer="", model="stub")
+    output = agent._make_chart(
+        {
+            "kind": "bar",
+            "title": "Night frames per location",
+            "columns": ["location", "n"],
+            "rows": [["boston-seaport", 3]],
+        },
+        result,
+    )
+    assert "charted" in output and "note" in output  # both keys really are present
+    assert agent._summarize(output) == "charted: Night frames per location"
+
+
 def test_agent_max_turns(con: Any) -> None:
     looping = {
         "role": "assistant",

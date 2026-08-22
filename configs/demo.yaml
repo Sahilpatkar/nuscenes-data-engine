@@ -112,3 +112,27 @@ al:                               # Phase 7: Active Learning page
     - 1ee6165c9091483bb384d02b78e92c5a   # day crosswalk: pedestrian 19 m 0.16 -> 0.62
     - 524d443c501a4f98a14508c3fb6f6de3   # day campus: pedestrian 26 m 0.33 -> 0.64 (champion only 0.35)
     - 9a662c4898d14a6c9246f504c3a7d835   # day cafe: pedestrian 22 m 0.39 -> 0.63 (champion 0.36)
+
+chat_replay:                      # Phase 8: recorded "Ask the Dataset" page
+                                   # (docs/superpowers/specs/2026-08-21-demo-phase8-design.md
+                                   # §1). `demo chat-record` answers these through the
+                                   # real agent; `demo build` copies the staged replays
+                                   # into the package. The public app never calls an LLM.
+  cases: configs/chat_eval.yaml   # graded questions (the eval harness's cases)
+  max_turns: 8
+  showcase:                       # hand-written; each `expect` is ASSERTED by demo chat-record
+    - id: showcase_chart_night_by_location
+      question: "Chart the number of night keyframes per location."
+      expect: chart
+    - id: showcase_cypher_hard_braking
+      question: "Using the graph, how many keyframes have hard braking with a pedestrian within 10 m? Show the Cypher."
+      expect: cypher
+    - id: showcase_search_fog
+      question: "Find me a few foggy or rainy front-camera frames with poor visibility and show them."
+      expect: search
+    - id: showcase_frames_crowded_night
+      question: "Show three of the most crowded night keyframes (most annotated objects) with their scene names."
+      expect: frames
+    - id: showcase_slices_rain
+      question: "How does the share of rain keyframes compare between Boston and Singapore locations?"
+      expect: none

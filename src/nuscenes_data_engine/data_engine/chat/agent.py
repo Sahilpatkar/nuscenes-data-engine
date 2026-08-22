@@ -382,6 +382,8 @@ def _summarize(output: dict[str, Any]) -> str:
     """Compact, human-readable step summary for the UI/log (not the model)."""
     if "error" in output:
         return f"error: {output['error']}"
+    if "charted" in output:
+        return f"charted: {output['title']}"
     if "note" in output:
         return "repeat (skipped)"
     if "rows" in output:
@@ -390,8 +392,6 @@ def _summarize(output: dict[str, Any]) -> str:
         return f"{len(output['results'])} frames found"
     if "attached" in output:
         return f"{len(output['attached'])} frames attached"
-    if "charted" in output:
-        return f"charted: {output['title']}"
     return "ok"
 
 

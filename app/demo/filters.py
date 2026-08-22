@@ -888,3 +888,121 @@ def crowding_long(results: pd.DataFrame) -> pd.DataFrame:
         for side in ("accepted", "rejected")
     ]
     return pd.DataFrame.from_records(records, columns=_CROWDING_COLUMNS)
+
+
+# --- the recorded chat replays ----------------------------------------------------
+#
+# The page reads `demo chat-record`'s own records (chat_record.RECORD_KEYS /
+# FRAME_COLUMNS) and the agent's step summaries verbatim; these helpers only turn
+# them into display text, so every claim on screen traces back to a stored value.
+
+# The agent's tools, in the order the "tools exercised" card names them (agent.py's
+# TOOL_SPECS plus the graph tool, which is offered only when Neo4j was reachable).
+_REPLAY_TOOLS = ("run_sql", "run_cypher", "search_frames", "show_frames", "make_chart")
+
+# Every check `evaluate.grade_case` can emit, in the order the verdict line lists
+# them. A check that did NOT apply to a case is absent from the record's `checks`
+# dict (never False), so this order filters rather than fills.
+_CHECK_ORDER = ("english", "tool_use", "grounded", "numeric", "frames")
+
+# The two query tools, mapped to (the step-input key holding the query, the language
+# its code block is highlighted in) -- equal today, but they are two different things.
+# Every other tool carries no code block at all.
+_STEP_CODE = {"run_sql": ("sql", "sql"), "run_cypher": ("cypher", "cypher")}
+
+
+def replay_tool_counts(replays: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """How many times each agent tool ran across ``replays``, plus ``charts`` (the
+    total number of charts recorded).
+
+    An errored replay's steps are counted like any other: the agent really did run
+    those tools before the session broke, and dropping them would understate what
+    the recording exercised. Every ``_REPLAY_TOOLS`` key is always present (the card
+    reads them straight), and an unknown tool name is counted under its own key
+    rather than dropped.
+    """
+    counts = dict.fromkeys(_REPLAY_TOOLS, 0)
+    counts["charts"] = 0
+    for replay in replays:
+        for step in replay.get("steps") or []:
+            tool = str(step.get("tool", ""))
+            counts[tool] = counts.get(tool, 0) + 1
+        counts["charts"] += len(replay.get("charts") or [])
+    return counts
+
+
+def _reference_text(value: Any) -> str:
+    """A stored reference value as display text: an integral one without decimals
+    ("66", however JSON typed it), a fractional one exactly as recorded ("2.91").
+    Never re-rounded — the number is the eval harness's own reference."""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    return str(value)
+
+
+def verdict_line(replay: Mapping[str, Any]) -> str:
+    """The graded verdict for one replay: which checks applied and passed, or which
+    ones failed by name, plus the reference value the numeric check was graded
+    against.
+
+    The reference is stated; the model's own number is NOT extracted from its prose
+    — the answer is on screen in full above this line, and picking "the" number out
+    of a sentence would be the page inventing a fact the package does not carry.
+    A showcase replay was never graded and says so rather than borrowing a verdict.
+    """
+    checks = replay.get("checks")
+    if replay.get("kind") == "showcase" or not isinstance(checks, dict):
+        return "showcase — not graded"
+    error = replay.get("error")
+    if error:
+        return f"✗ errored — {error}"
+
+    applicable = [name for name in _CHECK_ORDER if isinstance(checks.get(name), bool)]
+    reference = (
+        f" · reference {_reference_text(checks['expected'])}" if "expected" in checks else ""
+    )
+    if checks.get("passed"):
+        return f"✓ passed ({', '.join(applicable)}){reference}"
+    failed = [name for name in applicable if not checks[name]]
+    return f"✗ failed: {', '.join(failed)}{reference}"
+
+
+def frame_caption(frame: Mapping[str, Any]) -> str:
+    """One retrieved frame's caption: scene, location, and the conditions the
+    package recorded for it. Rain is named only when it rained — a "no rain" label
+    on every dry frame is noise, not information."""
+    conditions = "night" if frame.get("is_night") else "day"
+    if frame.get("is_rain"):
+        conditions += ", rain"
+    parts = [str(frame[key]) for key in ("scene_name", "location") if frame.get(key)]
+    parts.append(conditions)
+    return " · ".join(parts)
+
+
+def step_detail(step: Mapping[str, Any]) -> tuple[str, str | None, str | None]:
+    """One agent step as (outcome line, code block, code language).
+
+    The outcome passes the recorder's own summary through VERBATIM (the agent wrote
+    it with ``agent._summarize``, including an ``error: …`` one), with the step's
+    input adding what the summary alone does not say: the query a search ran, how
+    many tokens a show_frames call named. SQL and Cypher come back as code so they
+    can be read (and copied) as queries; the other tools carry no code.
+    """
+    tool = str(step.get("tool", ""))
+    step_input = step.get("input") or {}
+    outcome = f"`{tool}` → {step.get('output', '')}"
+
+    if tool in _STEP_CODE:
+        key, language = _STEP_CODE[tool]
+        code = step_input.get(key)
+        return outcome, (None if code is None else str(code)), (None if code is None else language)
+    if tool == "search_frames" and step_input.get("query"):
+        return f"{outcome} · query: {step_input['query']}", None, None
+    if tool == "show_frames":
+        tokens = step_input.get("sample_data_tokens") or []
+        return f"{outcome} · {len(tokens)} tokens", None, None
+    return outcome, None, None
