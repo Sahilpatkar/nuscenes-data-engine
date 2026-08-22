@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Capture one screenshot per public-demo page for the README gallery.
+"""Capture one screenshot per public-demo page (seven, including the guided tour)
+for the README gallery.
 
 MANUAL TOOL. Playwright is deliberately not a project dependency and nothing
 imports this module: `docs/img/demo-*.png` is refreshed by hand whenever a page
@@ -26,7 +27,7 @@ Usage
 
 Each page is loaded, given time to finish its first run, and -- where the page has
 a frame gallery -- has its first "View" button clicked so the detail panel is open
-in the shot rather than an empty placeholder. The two pages in `NO_CLICK` have no
+in the shot rather than an empty placeholder. The three pages in `NO_CLICK` have no
 such gallery on their first screen; those are captured at scroll position 0 instead,
 so the title is visible rather than whatever the click would have landed on. Exits
 non-zero if any page rendered a Streamlit exception, so a broken page cannot quietly
@@ -57,6 +58,7 @@ if TYPE_CHECKING:  # playwright is not installed in the project venv by default
 # explicit `url_path=` values each st.Page carries in app/demo/main.py.
 PAGES: tuple[tuple[str, str], ...] = (
     ("", "demo-overview"),
+    ("tour", "demo-tour"),
     ("failures", "demo-failures"),
     ("scenarios", "demo-scenarios"),
     ("active_learning", "demo-active-learning"),
@@ -66,7 +68,7 @@ PAGES: tuple[tuple[str, str], ...] = (
 
 # Pages with no frame gallery on their first screen: skip the "View" click and
 # capture at scroll position 0 (title visible) instead of clicking blind.
-NO_CLICK: frozenset[str] = frozenset({"active_learning", "weak_supervision"})
+NO_CLICK: frozenset[str] = frozenset({"tour", "active_learning", "weak_supervision"})
 
 VIEWPORT = {"width": 1200, "height": 900}
 STATUS_WIDGET = '[data-testid="stStatusWidget"]'  # Streamlit's "Running..." indicator

@@ -14,6 +14,105 @@ uv run streamlit run app/demo/main.py
 The app reads only `demo_data/`. If the package is missing, the app says so and
 points at the builder.
 
+## Guided tour (Phase 9a)
+
+The demo's default path. `views/tour.py` (`url_path="tour"`) is a seven-screen walk
+through the whole model-improvement loop — one weakness, one frame, one mining pass,
+one selection reason, one retrain, one after-shot, one result — reachable from the
+Overview page's `st.button("Explore a model failure →", key="overview_start_tour")`
+CTA, or directly from the "Start here" nav section. It is built for a 2-3 minute
+pace: each step is one visual, at most a few sentences, and a provenance line, inside
+a bordered container; `st.session_state["tour_step"]` is the page's only state, moved
+by the `tour_back` / `tour_next` buttons (mutated *before* the step renders, never via
+`st.rerun()`), with `tour_restart` returning to step 1 from the result screen.
+
+| # | Step | Stage | What it shows | Deep-links to |
+|---|---|---|---|---|
+| 1 | The weakness: night | Diagnose | baseline overall / night / night-pedestrian mAP50-95, and how many night val frames carry a baseline miss | Failure Explorer |
+| 2 | One missed pedestrian | Diagnose | the hero crop, a baseline/arm model toggle (`tour_hero_model`), and what each model claimed about the pedestrian baseline missed | Failure Explorer |
+| 3 | Find more like it | Mine | the flagship scenario preset's top-ranked event, its severity facts, filmstrip, and how many matching events are at night | Scenario Search |
+| 4 | Why this frame was picked | Mine | one AL-selected frame's `selection_factors` — community mass → quota, pick pass, degree rank — reproduced by `demo al-explain` | Active Learning |
+| 5 | Retrain on what was found | Train | what the mining bought the training set (frames, scenes, night share) and every arm's night Δ, this arm highlighted | Active Learning |
+| 6 | Same kind of frame, after | Evaluate | a hand-approved before/after exemplar, a model toggle (`tour_exemplar_model`), the upgraded-boxes table, and the night mAP result | Active Learning |
+| 7 | What we found, added, gained — and what failed | Evaluate (all four stages lit) | four bordered answers restating steps 1-6's numbers, and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
+
+Honesty notes (verified against package v0.7, restated from the design spec):
+
+- The hero frame (`5994f34b836043b3b5be191bceba2e3e`) is the only night val frame
+  where a pedestrian goes miss → hit, and the hit is a **low-confidence claim (conf
+  0.135)** that the matching rule counts as a hit — the tour says so at steps 2 and 7
+  and never calls it an exemplar (`fixed_boxes` returns no row for it; the hand-
+  approved exemplars at step 6 are the confident recoveries).
+- No per-frame "failure rate" exists for pool frames (1,249 of the arm's 1,500
+  selected frames received no routed failure mass) — step 4's selection facts are
+  `selection_factors` only: night, community size / night members / mass rank /
+  quota, pick pass, and degree rank within the community.
+- Every number on every step is read from the package, the same tables the deep
+  pages read; nothing is computed only for the tour.
+- The tour degrades honestly when an optional group is missing: without
+  `scenario_events.parquet` step 3 shows "needs demo_data >= 0.4 — rerun demo
+  build" instead of an event; without a staged `al_explain/` group step 4 shows
+  "per-frame community and routed mass are not included in this package (demo
+  al-explain)" instead of a selection reason. Neither case raises.
+
+Widget/state keys, for contributors extending the tour: `tour_step` (session state,
+the current step index) and buttons `tour_back` / `tour_next` / `tour_restart` /
+`tour_hero_model` (step 2's model radio) / `tour_exemplar_model` (step 6's model
+radio) / `tour_open_event` / `tour_open_al_frame` / `tour_open_exemplar`.
+
+Three buttons pre-select an item on the page they open, rather than just linking to
+it (unlike the "Go deeper" `st.page_link` row, which carries no state):
+`tour_open_event` (step 3) sets `scenario_preset` + `scenario_token` and opens
+Scenario Search on that event; `tour_open_al_frame` (step 4) sets `al_frame_token`
+and opens Active Learning on that frame; `tour_open_exemplar` (step 6) sets
+`al_exemplar` and opens Active Learning on that exemplar.
+
+### Trust chrome
+
+Loop breadcrumb (`render.loop_breadcrumb`, `LOOP_STAGES = ("Diagnose", "Mine",
+"Train", "Evaluate")`): every page carries it, lighting the stage(s) it belongs to.
+
+| Page | Stage(s) lit |
+|---|---|
+| Overview | none (whole loop; caption "Detect weakness → Find useful data → Retrain → Measure impact") |
+| Guided tour | the current step's stage — all four together on the result screen |
+| Failure Explorer | Diagnose |
+| Scenario Search | Mine |
+| Active Learning | Mine, Train, Evaluate |
+| Weak Supervision | Train, Evaluate |
+| Ask the Dataset | Diagnose |
+
+Provenance captions (`render.provenance`) name where a number on screen came from,
+one of three kinds:
+
+- **recomputed** — derived live in this app from the package's own tables (e.g. an
+  overlay drawn from `gt_boxes.parquet` + `predictions.parquet`).
+- **recorded** — the offline pipeline's own output, shipped and shown as-is (e.g.
+  `active_learning_results.parquet` rows).
+- **reproduced** — re-derived by `demo al-explain` and validated equal to the run
+  that actually selected the frames (the "why selected" panels).
+
+The Scenario event viewer's header now also carries `filters.parity_short` — a
+one-line trust indicator ("30 events found · SQL 30 / Graph 30 ✓") next to the
+existing full parity caption (the preset header's pinned "N matching keyframes
+dataset-wide — Cypher C · SQL S" wording, unchanged); shown for dynamics presets
+only, since a model-result preset's verdict isn't graph-derivable.
+
+"What we learned" callouts (`render.learned`, a bordered container, not `st.info`)
+on Active Learning and Weak Supervision, each a sentence that interpolates real
+table values and is skipped outright when the arm it names is absent from this
+package's arm table:
+
+- **Active Learning** — the night-inversion sentence, e.g. "Targeting night bought
+  night: `graph_rate_night` (+0.0101 night mAP50-95) is the best night arm of 13,
+  while its weak-supervised twin `weak_graph_rate_night` (−0.0262) is the worst —
+  the night gain came from the frames, not from cheaper labels."
+- **Weak Supervision** — the loss-split sentence, e.g. "Free labels kept 18.2% of
+  the ground-truth gain for the `random` pair: 49.7% was lost with the frames the
+  verifier dropped and 32.1% to label noise on the ones it kept." (a second clause
+  is added only when a second weak/GT pair's arm is genuinely the worst night arm
+  in the whole table).
+
 ## The artifact builder
 
 ```bash
@@ -95,6 +194,18 @@ manifest always names the commit it was built from, not the one that carries it.
 | `chat_replay_summary.json` | that recording's provenance: model, provider, `recorded_at`, `git_sha`, `n_eval`, `n_passed`, `n_showcase`, `search_available`, `graph_available`, `max_turns` |
 
 ## Picking the hero token
+
+Phase 9a made the page outcome-first (spec §4): title + mission → the guided-tour CTA
+→ the loop strip (an unlit `loop_breadcrumb` plus four one-line beats: detect
+weakness, find useful data, retrain, measure impact) → exactly four flagship metrics
+(best night gain; night pedestrian mAP or, absent that slice, the CAN-speed
+correlation; weak-sup share of GT gain; graph = SQL flagship) → the hero image below
+that. The dataset-scale cards (camera keyframes, 2D boxes, 3D object observations,
+CAN-bus rows) moved into a collapsed `st.expander("Dataset scale")`, and a second
+`st.expander("Architecture (for technical reviewers)")` restates
+[PROJECT.md](PROJECT.md) §2 (the two-machine topology, component map, CI) and
+carries the flagship/retention captions that used to sit in the open. Nothing left
+the page — it just stopped competing with the loop for the first screenful.
 
 The Overview page's hero image is a hand-picked exemplar crop, not a mosaic or an
 algorithmically-chosen frame. To change it: pick a `sample_data_token` from
@@ -419,8 +530,8 @@ description of this deployment: it serves artifacts, it does not run the pipelin
 
 ### Screenshots
 
-The README gallery's six PNGs are produced by `scripts/demo_screenshots.py`, a manual
-Playwright tool that is deliberately **not** a project dependency:
+The README gallery's seven PNGs are produced by `scripts/demo_screenshots.py`, a
+manual Playwright tool that is deliberately **not** a project dependency:
 
 ```bash
 uv pip install playwright                     # temporary, into .venv
@@ -431,12 +542,12 @@ uv pip uninstall playwright
 
 It drives the machine's installed Google Chrome (`channel="chrome"`, so no browser
 download), shoots a 1200×900 viewport per page, opens the first frame-detail panel
-where a page has one — the Active learning and Weak supervision pages have none, so
-those two are captured at the top of the page (scroll position 0, title visible)
-instead — and **exits non-zero if any page rendered a Streamlit exception** — a
-broken page cannot quietly become a README screenshot. Re-run it whenever a page
-changes visibly; any capture over 300 KB is quantized to a 256-colour palette PNG by
-the script itself, no manual compression step needed.
+where a page has one — the Guided tour, Active learning, and Weak supervision pages
+have none, so those three are captured at the top of the page (scroll position 0,
+title visible) instead — and **exits non-zero if any page rendered a Streamlit
+exception** — a broken page cannot quietly become a README screenshot. Re-run it
+whenever a page changes visibly; any capture over 300 KB is quantized to a
+256-colour palette PNG by the script itself, no manual compression step needed.
 
 These PNGs contain nuScenes-derived imagery and are covered by the attribution
 section below, exactly as the packaged frames are.
@@ -450,16 +561,16 @@ deployed URL.
 
 | # | Question (DEMO_PLAN.md) | Page | Section / element that answers it | Status |
 |---|---|---|---|---|
-| 1 | What problem does the project solve? | Overview | the mission blockquote under the title, then **Scale** and **Headline results** cards | local: 2026-08-21 · live: pending |
-| 2 | Where does the baseline perception model fail? | Failure Explorer (+ Overview) | the sidebar filters (lighting, rain, model, class, size bucket, distance, failure type, curation bucket) over the 125 val frames, and **Detail**'s GT / Predictions / Overlay toggle; Overview's **The model at work** hero shows one such miss | local: 2026-08-21 · live: pending |
-| 3 | How does the system find difficult data? | Scenario Search | the six **preset** buttons + ranked card grid, and **Recorded semantic search** | local: 2026-08-21 · live: pending |
-| 4 | Why is the graph useful? | Scenario Search | each preset header's SQL/Cypher **parity line** (flagship 30 = 30), and the event viewer's **Interactive graph** panel with the matched path | local: 2026-08-21 · live: pending |
+| 1 | What problem does the project solve? | Overview + Guided tour | the loop strip ("Detect weakness → Find useful data → Retrain → Measure impact") and tour step 1, **The weakness: night** | local: pending · live: pending |
+| 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** GT / Predictions / Overlay toggle | local: pending · live: pending |
+| 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Find more like it** (the flagship event), and the six **preset** buttons + ranked card grid | local: pending · live: pending |
+| 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line next to each dynamics preset's parity caption (flagship 30 events found · SQL 30 / Graph 30 ✓), and the event viewer's **Interactive graph** panel with the matched path | local: pending · live: pending |
 | 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r) | local: 2026-08-21 · live: pending |
-| 6 | How does active learning choose frames? | Active Learning | **How `graph_rate_night` chooses: community mass → quota**, then **Why was this frame selected?** per-frame factor panel | local: 2026-08-21 · live: pending |
-| 7 | Did targeted retraining improve performance? | Active Learning | the story's **Result** beat, **Every arm, one chart** (13 arms in round order), and **Before / after** exemplars | local: 2026-08-21 · live: pending |
+| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Why was this frame selected?** per-frame factor panel | local: pending · live: pending |
+| 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **Retrain on what was found** / **Same kind of frame, after**, plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: pending · live: pending |
 | 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: 2026-08-21 · live: pending |
 | 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-21 · live: pending |
-| 10 | How does the project form a closed model-improvement loop? | Active Learning + Weak Supervision (+ Overview) | the two story-arrow narratives — Problem → Hypothesis → Acquisition → Training → Evaluation → Result, and Hypothesis → Labelling → Verification → Training → Result — closed by Overview's footer credibility statement | local: 2026-08-21 · live: pending |
+| 10 | How does the project form a closed model-improvement loop? | Guided tour + Active Learning + Weak Supervision | tour step 7, **What we found, added, gained — and what failed**, closed by the persistent loop breadcrumb on every page | local: pending · live: pending |
 
 ## Dataset attribution & license
 
@@ -485,3 +596,5 @@ is **not** redistributed by this repository.
 | 6 | interactive graph (subgraph export + agraph) | **shipped** |
 | 7 | active-learning + weak-supervision pages | **shipped** |
 | 8 | recorded chat replay, deployment scaffolding, README + screenshots | **shipped** |
+| 9a | guided tour, outcome-first Overview, loop breadcrumb + provenance + lessons | **shipped** |
+| 9b | Failure Explorer hook, one-screen Scenario Search (CAN curve, progressive graph path), acquisition-strategy chart + reason chips, Weak Supervision three views + crowding trend, package 0.8 | pending |
