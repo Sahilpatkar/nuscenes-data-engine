@@ -52,12 +52,15 @@ def _require(path: Path) -> Path:
     return path
 
 
-def write_json(path: Path, payload: dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any] | list[Any]) -> None:
     """Write ``payload`` as sorted, indented JSON, creating parent dirs as needed.
 
     Public since Phase 3: ``build.py`` reuses it to patch ``hero_token`` into
     overview_metrics.json after curation/hero resolution, which runs after this
-    module's own export_overview call has already written the file once.
+    module's own export_overview call has already written the file once. A top-level
+    list is accepted since Phase 8: ``chat_record.py`` stages chat_replays.json as a
+    JSON array, and every staged artifact must go through this one writer so the
+    package's formatting (sorted keys, indent 2, trailing newline) stays identical.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
