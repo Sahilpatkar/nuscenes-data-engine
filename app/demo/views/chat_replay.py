@@ -10,8 +10,9 @@ prose is written here.
 Three honesty rules this page is built around:
 
 - Nothing is generated at view time. The word-by-word reveal of an answer is
-  COSMETIC — the recording stores finished text, not a token stream — and it runs
-  once per browser session; after that the same stored text renders statically.
+  COSMETIC — the recording stores finished text, not a token stream — and the
+  first showcase answer types out once per browser session; every other answer
+  renders statically.
 - Raw result rows are not stored. A step shows the query the agent ran and the row
   count it got back, which is exactly what the live chat UI shows; the page never
   reconstructs a table the package does not carry.

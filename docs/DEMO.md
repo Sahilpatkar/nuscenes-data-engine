@@ -329,7 +329,9 @@ same failure mode the earlier documented run had, and are shown on the page as s
 twice: the first run (19/20) exposed a Phase-4 bug in the agent's step summary (every
 successful `make_chart` step read "repeat (skipped)"), fixed in this phase, and the
 run was repeated so the shipped steps read "charted: …" as they should — roughly
-$8 of Claude API in total.
+$8 of Claude API in total. `docs/DATASET_CHAT.md`'s 17/20 is the earlier
+pre-registered run of the same 20 cases (re-graded under grounding v2); this is a
+fresh session, so the two figures are different runs, not a contradiction.
 
 **What gets recorded.** Two question sets, answered in one session:
 
@@ -356,8 +358,9 @@ and Cypher it ran — then a selectbox over the graded cases labelled ✓ / ✗.
 the page is built around:
 
 - Nothing is generated at view time. The word-by-word reveal of an answer is
-  **cosmetic** and runs once per browser session; the recording stores finished text,
-  not a token stream.
+  **cosmetic**; the recording stores finished text, not a token stream. The first
+  showcase answer types out once per browser session; every other answer renders
+  statically.
 - **Raw SQL result rows are not stored.** A step shows the query and its row count —
   exactly what the live chat UI shows — and the page never reconstructs a table the
   package does not carry.
@@ -394,7 +397,7 @@ torch included — is never consulted while that file exists, which is exactly w
 test suite asserts its presence *and* asserts that no root `requirements.txt` was
 added (a second dependency file Cloud would never read).
 
-**Footprint.** Cloud clones the whole repository (≈70 MB, of which `demo_data/` is
+**Footprint.** Cloud clones the whole repository (≈55 MB, of which `demo_data/` is
 25 MB) and installs the six wheels above; nothing else is downloaded at runtime. The
 loaders in `app/demo/data.py` are `st.cache_data`-wrapped, and the biggest table in
 memory is a frame parquet of a few MB — comfortably inside the free tier's 1 GB.
@@ -428,9 +431,12 @@ uv pip uninstall playwright
 
 It drives the machine's installed Google Chrome (`channel="chrome"`, so no browser
 download), shoots a 1200×900 viewport per page, opens the first frame-detail panel
-where a page has one, and **exits non-zero if any page rendered a Streamlit
-exception** — a broken page cannot quietly become a README screenshot. Re-run it
-whenever a page changes visibly; keep each PNG ≤ 300 KB.
+where a page has one — the Active learning and Weak supervision pages have none, so
+those two are captured at the top of the page (scroll position 0, title visible)
+instead — and **exits non-zero if any page rendered a Streamlit exception** — a
+broken page cannot quietly become a README screenshot. Re-run it whenever a page
+changes visibly; any capture over 300 KB is quantized to a 256-colour palette PNG by
+the script itself, no manual compression step needed.
 
 These PNGs contain nuScenes-derived imagery and are covered by the attribution
 section below, exactly as the packaged frames are.

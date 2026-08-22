@@ -67,7 +67,7 @@ flowchart LR
     subgraph INFRA["Infra machine (Docker)"]
         MLS[MLflow server + registry]
         API[FastAPI /predict] --> CAP[(requests.jsonl)]
-        ST[Streamlit demo] --> API
+        ST[Streamlit serving UI] --> API
         CAP --> DRIFT[Evidently drift report]
         REFP[(reference parquet)] --> DRIFT
     end
@@ -201,7 +201,7 @@ uv run nuscenes-data-engine train [--camera CAM_FRONT] [--limit-scenes N] \
 
 ## Serving (Phase 4)
 
-The promoted model is served by a FastAPI app; a Streamlit demo calls it over HTTP
+The promoted model is served by a FastAPI app; the Streamlit serving UI calls it over HTTP
 (the demo never loads the model itself — the same topology `docker compose up` runs).
 
 ```bash
@@ -258,7 +258,7 @@ gitignored JSONL (`SERVING_CAPTURE_PATH`, blank to disable). The night-vs-day de
 ## Scene search (Phase 6a)
 
 Every camera keyframe is embedded with SigLIP2 into a LanceDB store; the API serves
-text, image, and similar-frame queries over it, and the Streamlit demo gets a
+text, image, and similar-frame queries over it, and the Streamlit serving UI gets a
 **Scene search** tab (results render from thumbnails stored alongside the vectors, so
 the demo needs no dataset access).
 
@@ -336,7 +336,7 @@ picker after the first PR run).
 | 1 ✅ | Data engineering | `make ingest` → validated Parquet dataset (204,894 imgs / 1M boxes) |
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
-| 4 ✅ | Serving | FastAPI + Streamlit demo via `docker compose up` |
+| 4 ✅ | Serving | FastAPI + Streamlit serving UI via `docker compose up` |
 | 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
 | 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
 | 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
