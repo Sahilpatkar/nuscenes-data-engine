@@ -22,7 +22,7 @@ from data import crop_path, hero_path, load_gt_boxes, load_overview, load_predic
 # single miss where two dashed boxes render, and implied the visually-dominant
 # one (the far car) is the one that gets caught, when it's the one nothing
 # catches.
-_HERO_CAPTION = (
+HERO_CAPTION = (
     "baseline misses a shadowed car and a pedestrian; the night-targeted "
     "retrain recovers the pedestrian (a low-confidence hit) — the far car "
     "defeats all three models. Explore more in the Failure Explorer."
@@ -130,7 +130,7 @@ def render() -> None:
         hero_token = metrics.get("hero_token")
         overlay = _hero_overlay(hero_token) if hero_token else None
         if overlay is not None:
-            st.image(overlay, caption=_HERO_CAPTION)
+            st.image(overlay, caption=HERO_CAPTION)
         else:
             st.image(str(hero_path()), caption="Validation-batch predictions (baseline yolov8n)")
     st.divider()

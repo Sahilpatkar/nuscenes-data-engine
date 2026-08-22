@@ -588,7 +588,12 @@ def built_demo_data(tmp_path: Path) -> Path:
                 "baseline": {
                     "n_train_images": 100,
                     "overall": {"mAP50-95": 0.20},
-                    "night": {"mAP50-95": 0.10},
+                    # night.per_class (Phase 9a): the real baseline row carries a
+                    # night PEDESTRIAN mAP (0.0826) and the guided tour's first step
+                    # shows it as its own card -- without a per_class entry here the
+                    # exporter writes NA and the fixture would only ever exercise
+                    # that card's absent path.
+                    "night": {"mAP50-95": 0.10, "per_class": {"pedestrian": 0.05}},
                 },
                 "random": {
                     "n_train_images": 115,
@@ -2177,6 +2182,162 @@ def test_chat_replay_page_on_a_pre_0_7_package(
     ]
     manifest = json.loads((built_demo_data / "manifest.json").read_text())
     assert manifest["validation"]["chat_replay"] == "included"
+
+
+# --- the guided tour (Phase 9a) -----------------------------------------------------
+#
+# views/tour.py is one page walking seven steps out of st.session_state["tour_step"];
+# Task 2 implements steps 0 (the night weakness) and 1 (the hero frame's missed
+# pedestrian) and registers 2-6 as placeholders the next tasks fill in. It is reached
+# with switch_page("views/tour.py") -- an in-script st.switch_page is not sticky
+# across at.run() -- which resolves the page by hashing the filename-derived name
+# ("tour") against each st.Page's url_path, hence url_path="tour" in main.py.
+
+# Every page of the sectioned navigation, and the title each one renders. The
+# Overview is absent on purpose: it is the DEFAULT page (url_path "", script hash
+# calc_hash("render") from the callable's name), so switch_page("views/overview.py")
+# cannot address it -- the initial at.run() lands there instead, which is what
+# test_navigation_sections_keep_every_page_reachable asserts first.
+_SECTIONED_PAGES = (
+    ("views/tour.py", "Guided tour"),
+    ("views/failures.py", "Failure Explorer"),
+    ("views/scenarios.py", "Scenario Search"),
+    ("views/active_learning.py", "Active Learning"),
+    ("views/weak_supervision.py", "Weak Supervision"),
+    ("views/chat_replay.py", "Ask the Dataset (recorded)"),
+)
+
+
+def _tour_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    at.switch_page("views/tour.py").run(timeout=30)
+    return at
+
+
+def test_tour_walks_steps_0_and_1(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tour opens on step 0 (baseline's night weakness: recorded mAP cards plus
+    one recomputed frame count) and Next walks to step 1 (the hero frame's missed
+    pedestrian, with the model toggle) -- every number derived from the fixture
+    package, never written into the page."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(text.startswith("Step 1 of 7 · The weakness: night") for text in captions)
+
+    # The nav row is drawn FIRST, and Back is dead on the first step.
+    assert at.button(key="tour_back").disabled is True
+    assert at.button(key="tour_next").disabled is False
+
+    # (step 0) the baseline arm's three cards, straight off
+    # active_learning_results.parquet (fixture baseline: 0.20 / 0.10 / ped 0.05).
+    assert [str(metric.label) for metric in at.metric] == [
+        "Overall mAP50-95", "Night mAP50-95", "Night pedestrian mAP50-95",
+    ]
+    assert [str(metric.value) for metric in at.metric] == ["0.2000", "0.1000", "0.0500"]
+
+    markdowns = [str(block.value) for block in at.markdown]
+    # (step 0) the recomputed line: the fixture's only night val frame ("v0")
+    # carries baseline's miss of GT box a2 -> 1 of 1.
+    assert any(
+        "1 of 1 night validation frames carry at least one baseline miss" in text
+        for text in markdowns
+    )
+    # the breadcrumb lights this step's stage only
+    assert any(
+        ":orange-badge[Diagnose]" in text and ":gray-badge[Mine]" in text for text in markdowns
+    )
+    # both provenance claims, one per kind of number on the step
+    assert any("recorded experiment output" in text for text in captions)
+    assert any("recomputed in this app" in text for text in captions)
+    # "Go deeper" -> the Failure Explorer, resolved through the nav registry
+    # (AppTest has no typed accessor for page links, so they are fetched by element
+    # type and read off the proto).
+    links = [str(link.proto.label) for link in at.get("page_link")]
+    assert any("Failure Explorer" in label for label in links)
+
+    # --- Next -> step 1 ------------------------------------------------------------
+    at.button(key="tour_next").click().run(timeout=30)
+    assert not at.exception
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(text.startswith("Step 2 of 7 · One missed pedestrian") for text in captions)
+    # Back is live in the SAME run the click landed in: the buttons move tour_step in
+    # an on_click callback, which streamlit runs BEFORE the script redraws the nav row
+    # (mutating it inline after the row is drawn would leave Back greyed out on the
+    # step the viewer just walked into).
+    assert at.button(key="tour_back").disabled is False
+
+    assert at.radio(key="tour_hero_model").options == ["baseline", "graph_rate_night"]
+    assert len(at.image) == 1
+    assert any("defeats all three models" in text for text in captions)
+
+    markdowns = [str(block.value) for block in at.markdown]
+    # the derived fact line: baseline never claims v0's pedestrian (a2);
+    # graph_rate_night claims it at conf 0.80 (a plain tp in this fixture).
+    assert any(
+        "Pedestrian" in text and "baseline: no claim" in text
+        and "graph_rate_night: 0.800" in text
+        for text in markdowns
+    )
+    # and the counted (never assumed) miss -> hit claim
+    assert any("only night frame" in text for text in markdowns)
+    assert any("recomputed in this app" in text for text in captions)
+
+    # --- Back -> step 0 ------------------------------------------------------------
+    at.button(key="tour_back").click().run(timeout=30)
+    assert not at.exception
+    assert any(
+        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        for caption in at.caption
+    )
+
+
+def test_navigation_sections_keep_every_page_reachable(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Grouping the pages into sections must not change how any of them resolves:
+    the Overview is still the default page, and every other page (the new tour
+    included) is still reachable by its own pinned url_path."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    assert [str(title.value) for title in at.title] == ["nuScenes Perception Data Engine"]
+
+    for page_path, title in _SECTIONED_PAGES:
+        at.switch_page(page_path).run(timeout=30)
+        assert not at.exception, f"{page_path} raised"
+        assert [str(element.value) for element in at.title] == [title], page_path
+
+
+def test_nav_registry_names_the_path_it_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """nav.page's failure mode is a ValueError naming the path asked for -- a
+    deep link to a page that was renamed must fail loudly at the link, not render a
+    silent no-op."""
+    pytest.importorskip("streamlit")
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    _reset_demo_app_modules()
+    import nav
+
+    with pytest.raises(ValueError, match="not_a_page"):
+        nav.page("not_a_page")
 
 
 def test_demo_no_longer_promises_phase_8() -> None:
