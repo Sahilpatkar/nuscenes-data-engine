@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 
 from nuscenes_data_engine.config import get_settings, load_yaml
-from nuscenes_data_engine.demo import exporters
+from nuscenes_data_engine.demo import chat_record, exporters
 from nuscenes_data_engine.demo.events import build_events
 from nuscenes_data_engine.demo.exporters import write_json
 
@@ -47,7 +47,10 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # rejected_frame; weak_loss_decomposition.parquet and weak_verifier_by_class.
 # parquet join the package unconditionally; weak_labels.parquet and vlm_counts.
 # parquet join it when curation is included.
-_PACKAGE_VERSION = "0.6"
+# 0.7 (Phase 8, Task 2): chat_replays.json + chat_replay_summary.json (validated
+# against chat_record.RECORD_KEYS/FRAME_COLUMNS, curation-gated) join the package
+# when `demo chat-record` staged them, plus their frame thumbnails.
+_PACKAGE_VERSION = "0.7"
 
 # Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
 # edges, so every token collection over these columns must drop the NA entries.
@@ -72,6 +75,18 @@ _SUBGRAPH_PRESETS = (
 # build.py's OWN contract about what a complete al_explain staging must hold, not a
 # re-export of the exporter's internals.
 _AL_EXPLAIN_FILES = ("al_selection_explain.parquet", "al_explain_validation.json")
+
+# The two files `demo chat-record` stages under curation.staging_dir/chat_replays/
+# (demo/chat_record.py::write_staging). Same reasoning as _AL_EXPLAIN_FILES above.
+_CHAT_REPLAY_FILES = ("chat_replays.json", "chat_replay_summary.json")
+
+# chat_replay_summary.json's required keys -- chat_record.record_session's own
+# summary dict shape (see its docstring). Kept as build.py's own contract rather
+# than a re-export, same reasoning _SUBGRAPH_PRESETS/_AL_EXPLAIN_FILES give.
+_CHAT_REPLAY_SUMMARY_KEYS = (
+    "model", "provider", "recorded_at", "git_sha", "n_eval", "n_passed",
+    "n_showcase", "search_available", "graph_available", "max_turns",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -600,6 +615,172 @@ def _include_al_explain(config: dict[str, Any], out_dir: Path) -> str:
     return "included"
 
 
+def _validate_chat_replays(
+    records: Any, summary: Any, path: Path
+) -> None:
+    """Reject a malformed/stale staged chat-replay group BEFORE it's copied into
+    the package -- ``chat_record.record_session``/``write_staging`` already build
+    this exact shape (Task 1), but a staging dir left behind by an older schema, or
+    hand-edited, must never ship silently (same rationale ``_include_al_explain``
+    gives for re-validating its own staged files even though the recorder already
+    validated them once).
+    """
+    if not isinstance(records, list):
+        raise ValueError(f"demo build: {path} must be a JSON list of chat replays, got {type(records)}")
+
+    expected_record_keys = set(chat_record.RECORD_KEYS)
+    expected_frame_keys = set(chat_record.FRAME_COLUMNS)
+    seen_ids: set[Any] = set()
+    n_eval = 0
+    n_showcase = 0
+    n_passed = 0
+    for index, record in enumerate(records):
+        record_id = (
+            record.get("id", f"<record {index}>") if isinstance(record, dict) else f"<record {index}>"
+        )
+        if not isinstance(record, dict) or set(record) != expected_record_keys:
+            got = sorted(record) if isinstance(record, dict) else record
+            raise ValueError(
+                f"demo build: {path} replay {record_id!r} has keys {got!r}, expected "
+                f"{sorted(expected_record_keys)}"
+            )
+        if record_id in seen_ids:
+            raise ValueError(f"demo build: {path} has a duplicate replay id {record_id!r}")
+        seen_ids.add(record_id)
+
+        kind = record["kind"]
+        if kind not in chat_record.KINDS:
+            raise ValueError(
+                f"demo build: {path} replay {record_id!r} has unknown kind {kind!r} "
+                f"(expected one of {list(chat_record.KINDS)})"
+            )
+        if kind == "eval":
+            n_eval += 1
+            checks = record["checks"]
+            if not isinstance(checks, dict) or "passed" not in checks:
+                raise ValueError(
+                    f"demo build: {path} eval replay {record_id!r} has invalid checks "
+                    f"{checks!r} (must be a dict with a 'passed' key)"
+                )
+            if checks.get("passed") is True:
+                n_passed += 1
+        else:
+            n_showcase += 1
+
+        for frame in record["frames"]:
+            if not isinstance(frame, dict) or set(frame) != expected_frame_keys:
+                got = sorted(frame) if isinstance(frame, dict) else frame
+                raise ValueError(
+                    f"demo build: {path} replay {record_id!r} has a frame with keys "
+                    f"{got!r}, expected {sorted(expected_frame_keys)}"
+                )
+            token = frame["sample_data_token"]
+            if not isinstance(token, str) or not token.replace("-", "").isalnum():
+                raise ValueError(
+                    f"demo build: {path} replay {record_id!r} has a malformed frame "
+                    f"token {token!r} (expected hex-like, as export_thumbs requires)"
+                )
+
+        for chart in record["charts"]:
+            if not isinstance(chart, dict) or chart.get("kind") not in ("bar", "line"):
+                bad_kind = chart.get("kind") if isinstance(chart, dict) else chart
+                raise ValueError(
+                    f"demo build: {path} replay {record_id!r} has a chart with "
+                    f"unknown kind {bad_kind!r} (expected 'bar' or 'line')"
+                )
+            columns = chart.get("columns")
+            rows = chart.get("rows")
+            if (
+                not isinstance(columns, list)
+                or not isinstance(rows, list)
+                or any(not isinstance(row, list) or len(row) != len(columns) for row in rows)
+            ):
+                raise ValueError(
+                    f"demo build: {path} replay {record_id!r} has a chart with ragged "
+                    f"rows (columns={columns!r}, rows={rows!r})"
+                )
+
+    if not isinstance(summary, dict):
+        raise ValueError(f"demo build: {path} summary must be a JSON object, got {type(summary)}")
+    missing_summary = sorted(set(_CHAT_REPLAY_SUMMARY_KEYS) - set(summary))
+    if missing_summary:
+        raise ValueError(f"demo build: {path} summary is missing keys {missing_summary}")
+    if summary["n_eval"] != n_eval:
+        raise ValueError(
+            f"demo build: {path} summary n_eval={summary['n_eval']!r} but the records "
+            f"hold {n_eval} eval replay(s)"
+        )
+    if summary["n_showcase"] != n_showcase:
+        raise ValueError(
+            f"demo build: {path} summary n_showcase={summary['n_showcase']!r} but the "
+            f"records hold {n_showcase} showcase replay(s)"
+        )
+    if summary["n_passed"] != n_passed:
+        raise ValueError(
+            f"demo build: {path} summary n_passed={summary['n_passed']!r} but {n_passed} "
+            "eval replay(s) have checks.passed == True"
+        )
+
+
+def _include_chat_replay(config: dict[str, Any], out_dir: Path) -> str:
+    """Copy the staged recorded chat-replay group into the package, or note absence.
+
+    Phase 8 (Task 2, spec §2). Same declared-optional input-group shape as
+    ``_include_al_explain``: the public demo never calls an LLM, so this never
+    records anything itself -- it only copies + re-validates what ``demo
+    chat-record`` already staged at ``curation.staging_dir/chat_replays/``. No
+    ``curation:`` section, or no ``chat_replays/`` staging dir at all, is "absent" --
+    the ordinary state on a fresh clone (chat recording is a paid, one-off run), a
+    warning rather than a build failure, and the "Ask the Dataset" page degrades
+    honestly without it (Task 3).
+
+    A staging dir that EXISTS but holds only one of the two files is an operator
+    mid-flow (an interrupted ``demo chat-record``), not a no-replay machine: a
+    ``ValueError`` naming the missing file, exactly as a partial al_explain/
+    subgraphs staging raises.
+    """
+    curation_cfg = config.get("curation")
+    if not curation_cfg:
+        logger.warning(
+            "demo build: no `curation:` config section — shipping without the "
+            "recorded chat replays (see docs/DEMO.md)"
+        )
+        return "absent"
+    staging_dir = Path(curation_cfg["staging_dir"]) / "chat_replays"
+    present = [name for name in _CHAT_REPLAY_FILES if (staging_dir / name).is_file()]
+    if not present:
+        logger.warning(
+            "demo build: no chat_replays staging at %s — shipping without the "
+            "recorded chat replays (run `demo chat-record` first, see docs/DEMO.md)",
+            staging_dir,
+        )
+        return "absent"
+    missing = [name for name in _CHAT_REPLAY_FILES if name not in present]
+    if missing:
+        raise ValueError(
+            f"demo build: chat_replays staging at {staging_dir} is missing {missing} — "
+            "re-run `demo chat-record` (see docs/DEMO.md)"
+        )
+
+    records_path = staging_dir / "chat_replays.json"
+    summary_path = staging_dir / "chat_replay_summary.json"
+    records = json.loads(records_path.read_text())
+    summary = json.loads(summary_path.read_text())
+    _validate_chat_replays(records, summary, records_path)
+
+    for name in _CHAT_REPLAY_FILES:
+        shutil.copy2(staging_dir / name, out_dir / name)
+
+    frame_tokens = {
+        frame["sample_data_token"] for record in records for frame in record["frames"]
+    }
+    if frame_tokens:
+        _export_thumbs_deduped(
+            config=config, out_dir=out_dir, tokens=frame_tokens, context="chat_replay"
+        )
+    return "included"
+
+
 def _al_section(config: dict[str, Any]) -> dict[str, Any]:
     """``configs/demo.yaml``'s ``al:`` section, or a directive error.
 
@@ -927,6 +1108,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
     # outputs hash sweep below, so its two files count toward both).
     al_explain_status = _include_al_explain(config, out_dir)
 
+    # Phase 8 (Task 2): the recorded chat-replay group is now the last optional
+    # group, same slot as al_explain (before the size-budget check and the outputs
+    # hash sweep below, so its two files count toward both).
+    chat_replay_status = _include_chat_replay(config, out_dir)
+
     package_bytes = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
     package_mb = package_bytes / 1e6
     if package_mb > config["budgets"]["max_package_mb"]:
@@ -1016,6 +1202,11 @@ def run_build(config_path: Path) -> dict[str, Any]:
         for name in _AL_EXPLAIN_FILES:
             path = al_explain_staging / name
             inputs[str(path)] = _sha256(path)
+    if chat_replay_status == "included":
+        chat_replay_staging = Path(config["curation"]["staging_dir"]) / "chat_replays"
+        for name in _CHAT_REPLAY_FILES:
+            path = chat_replay_staging / name
+            inputs[str(path)] = _sha256(path)
 
     manifest: dict[str, Any] = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -1039,10 +1230,26 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "semsearch": semsearch_status,
             "subgraphs": subgraphs_result["status"],
             "al_explain": al_explain_status,
+            "chat_replay": chat_replay_status,
         },
     }
     if subgraphs_result["status"] == "included":
         manifest["validation"]["flagship_cypher"] = subgraphs_result["flagship_cypher"]
+    if chat_replay_status == "included":
+        chat_replay_records = json.loads((out_dir / "chat_replays.json").read_text())
+        manifest["validation"]["n_replays"] = len(chat_replay_records)
+        manifest["validation"]["n_replay_passed"] = sum(
+            1
+            for record in chat_replay_records
+            if record["kind"] == "eval" and (record["checks"] or {}).get("passed") is True
+        )
+        manifest["validation"]["n_replay_frames"] = len(
+            {
+                frame["sample_data_token"]
+                for record in chat_replay_records
+                for frame in record["frames"]
+            }
+        )
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     logger.info("demo build: %d outputs, %.2f MB -> %s", len(outputs), package_mb, out_dir)
     return manifest

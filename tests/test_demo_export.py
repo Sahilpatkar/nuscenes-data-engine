@@ -1414,7 +1414,7 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
-    assert manifest["package_version"] == "0.6"
+    assert manifest["package_version"] == "0.7"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:
@@ -1592,12 +1592,14 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
     weak_arm/al_arm ones above, since "random" != "graph_rate_night") + graph_
     rate_night_pseudo_labels.parquet (export_weak_labels' input, curation included)
     + autolabel_weak/labels.parquet (export_vlm_counts' input, curation included)
-    = 19."""
+    = 19. Phase 8 (Task 2) adds 2 more when a chat-replay group is staged:
+    chat_replays.json + chat_replay_summary.json = 21."""
     from nuscenes_data_engine.demo.build import run_build
 
-    _stage_and_pick_hero(build_config)
+    config = _stage_and_pick_hero(build_config)
+    _stage_chat_replays(Path(config["curation"]["staging_dir"]) / "chat_replays")
     manifest = run_build(build_config)
-    assert len(manifest["inputs"]) == 19
+    assert len(manifest["inputs"]) == 21
     assert any(key.endswith("canbus.parquet") for key in manifest["inputs"])
     assert any(key.endswith("graph_rate_night_pseudo_labels.parquet") for key in manifest["inputs"])
     assert any(key.endswith("autolabel_weak/labels.parquet") for key in manifest["inputs"])
@@ -1606,6 +1608,8 @@ def test_build_hashes_all_real_inputs(build_config: Path) -> None:
         for key in manifest["inputs"]
     )
     assert any(key.endswith("random_accepted.parquet") for key in manifest["inputs"])
+    assert any(key.endswith("chat_replays.json") for key in manifest["inputs"])
+    assert any(key.endswith("chat_replay_summary.json") for key in manifest["inputs"])
 
 
 def test_build_vlm_counts_cover_every_weak_verdict_frame_from_both_label_tables(
@@ -2575,3 +2579,326 @@ def test_build_accepts_subgraph_staging_matching_the_events_frame(build_config: 
     out = Path(config["paths"]["out_dir"])
     shipped = json.loads((out / "graph_subgraphs" / "hard_braking_near_pedestrians.json").read_text())
     assert set(shipped["events"]) == {"s1"}
+
+
+# --- Phase 8 (Task 2): recorded chat replays --------------------------------------
+
+
+def _chat_frame(token: str, **overrides: Any) -> dict[str, Any]:
+    """A frame dict shaped exactly like ``chat_record.FRAME_COLUMNS`` (the package's
+    projected shape -- no thumbnail bytes, filename, or scene_description)."""
+    frame: dict[str, Any] = {
+        "sample_data_token": token,
+        "scene_name": "scene-0916",
+        "location": "singapore-onenorth",
+        "is_night": True,
+        "is_rain": True,
+        "channel": "CAM_FRONT",
+        "score": 0.87,
+    }
+    frame.update(overrides)
+    return frame
+
+
+def _chat_record_entry(
+    *,
+    id: str,
+    kind: str = "showcase",
+    question: str = "What happened?",
+    answer: str | None = "An answer.",
+    model: str | None = "claude-test",
+    provider: str = "anthropic",
+    steps: list[dict[str, Any]] | None = None,
+    frames: list[dict[str, Any]] | None = None,
+    charts: list[dict[str, Any]] | None = None,
+    checks: dict[str, Any] | None = None,
+    latency_s: float = 1.23,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """A replay dict shaped exactly like ``chat_record.RECORD_KEYS``."""
+    return {
+        "id": id,
+        "kind": kind,
+        "question": question,
+        "answer": answer,
+        "model": model,
+        "provider": provider,
+        "steps": steps or [],
+        "frames": frames or [],
+        "charts": charts or [],
+        "checks": checks,
+        "latency_s": latency_s,
+        "error": error,
+    }
+
+
+def _default_chat_replays() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """A fresh, valid (records, summary) pair each call: one showcase replay (1
+    chart, 2 frames, 3 steps) plus two eval replays (one passed, one failed with a
+    numeric-check miss) -- mirrors ``chat_record.record_session``'s real output
+    shape closely enough for ``_validate_chat_replays``/``_include_chat_replay`` to
+    exercise, without a live agent session."""
+    records = [
+        _chat_record_entry(
+            id="show1",
+            kind="showcase",
+            steps=[
+                {"tool": "search_frames", "input": {"query": "fog"}, "output": "2 rows"},
+                {"tool": "search_frames", "input": {"query": "fog"}, "output": "2 rows"},
+                {"tool": "make_chart", "input": {"kind": "bar"}, "output": "charted"},
+            ],
+            frames=[_chat_frame("f1"), _chat_frame("f2")],
+            charts=[
+                {
+                    "kind": "bar",
+                    "title": "Night frames per location",
+                    "columns": ["location", "n"],
+                    "rows": [["boston-seaport", 3], ["singapore-onenorth", 5]],
+                }
+            ],
+        ),
+        _chat_record_entry(
+            id="eval_pass",
+            kind="eval",
+            question="How many samples are there?",
+            checks={"passed": True, "numeric": True},
+        ),
+        _chat_record_entry(
+            id="eval_fail",
+            kind="eval",
+            question="How many samples are in boston-seaport?",
+            checks={"passed": False, "numeric": False},
+        ),
+    ]
+    summary = {
+        "model": "claude-test",
+        "provider": "anthropic",
+        "recorded_at": "2026-08-21T00:00:00+00:00",
+        "git_sha": "deadbeef",
+        "n_eval": 2,
+        "n_passed": 1,
+        "n_showcase": 1,
+        "search_available": True,
+        "graph_available": True,
+        "max_turns": 8,
+    }
+    return records, summary
+
+
+def _stage_chat_replays(
+    staging_dir: Path,
+    *,
+    records: list[dict[str, Any]] | None = None,
+    summary: dict[str, Any] | None = None,
+) -> None:
+    """Stage ``chat_replays.json`` + ``chat_replay_summary.json`` under
+    ``staging_dir``, mirroring ``demo chat-record``'s ``write_staging`` output shape
+    (Task 1) -- sorted keys, indent 2, newline-terminated."""
+    default_records, default_summary = _default_chat_replays()
+    if records is None:
+        records = default_records
+    if summary is None:
+        summary = default_summary
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "chat_replays.json").write_text(
+        json.dumps(records, indent=2, sort_keys=True) + "\n"
+    )
+    (staging_dir / "chat_replay_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def test_include_chat_replay_absent_returns_absent_and_copies_nothing(
+    build_config: Path,
+) -> None:
+    """No `demo chat-record` staging (build_config's default) must not fail the
+    build -- mirrors _include_al_explain's own absent-staging fallback."""
+    from nuscenes_data_engine.demo.build import _include_chat_replay
+
+    config = yaml.safe_load(build_config.read_text())
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+
+    assert _include_chat_replay(config, out_dir) == "absent"
+    assert not (out_dir / "chat_replays.json").exists()
+    assert not (out_dir / "chat_replay_summary.json").exists()
+
+    # No `curation:` section at all is also "absent", same as every other optional
+    # group.
+    assert _include_chat_replay({}, out_dir) == "absent"
+
+
+def test_include_chat_replay_partial_staging_raises_naming_the_missing_file(
+    build_config: Path,
+) -> None:
+    """A staging dir holding only one of the two files is an operator mid-flow (an
+    interrupted `demo chat-record`), not a no-replay machine."""
+    from nuscenes_data_engine.demo.build import _include_chat_replay
+
+    config = yaml.safe_load(build_config.read_text())
+    staging_dir = Path(config["curation"]["staging_dir"]) / "chat_replays"
+    staging_dir.mkdir(parents=True)
+    (staging_dir / "chat_replays.json").write_text("[]")
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match=r"chat_replay_summary\.json"):
+        _include_chat_replay(config, out_dir)
+    assert not (out_dir / "chat_replays.json").exists()
+
+
+def test_include_chat_replay_copies_files_and_records_validation(
+    build_config: Path,
+) -> None:
+    """A fully-staged chat-replay group is copied flat into the package, hashed as
+    an input, and its record-derived counts land in manifest['validation']."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    _stage_chat_replays(Path(config["curation"]["staging_dir"]) / "chat_replays")
+
+    manifest = run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "chat_replays.json").is_file()
+    assert (out / "chat_replay_summary.json").is_file()
+    assert "chat_replays.json" in manifest["outputs"]
+    assert "chat_replay_summary.json" in manifest["outputs"]
+    assert any(Path(key).name == "chat_replays.json" for key in manifest["inputs"])
+    assert any(Path(key).name == "chat_replay_summary.json" for key in manifest["inputs"])
+    assert manifest["validation"]["chat_replay"] == "included"
+    assert manifest["validation"]["n_replays"] == 3
+    assert manifest["validation"]["n_replay_passed"] == 1
+    assert manifest["validation"]["n_replay_frames"] == 2
+
+
+def test_include_chat_replay_exports_frame_thumbs_deduped(
+    build_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The distinct frame tokens across every staged replay are exported as
+    thumbnails, deduped through the same helper every other optional group uses."""
+    from nuscenes_data_engine.demo import build as build_module
+
+    config = yaml.safe_load(build_config.read_text())
+    _stage_chat_replays(Path(config["curation"]["staging_dir"]) / "chat_replays")
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+
+    captured: dict[str, Any] = {}
+
+    def fake_export_thumbs_deduped(*, config: Any, out_dir: Path, tokens: set, context: str) -> None:
+        captured["tokens"] = tokens
+        captured["context"] = context
+
+    monkeypatch.setattr(build_module, "_export_thumbs_deduped", fake_export_thumbs_deduped)
+
+    assert build_module._include_chat_replay(config, out_dir) == "included"
+    assert captured == {"tokens": {"f1", "f2"}, "context": "chat_replay"}
+
+
+def test_include_chat_replay_skips_thumb_export_when_no_frames(
+    build_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A staged replay group with no frames at all (every showcase answer was
+    text/chart/cypher-only) must not call the thumb exporter."""
+    from nuscenes_data_engine.demo import build as build_module
+
+    config = yaml.safe_load(build_config.read_text())
+    records = [_chat_record_entry(id="eval_only", kind="eval", checks={"passed": True})]
+    summary = {
+        "model": "claude-test", "provider": "anthropic",
+        "recorded_at": "2026-08-21T00:00:00+00:00", "git_sha": "deadbeef",
+        "n_eval": 1, "n_passed": 1, "n_showcase": 0,
+        "search_available": True, "graph_available": True, "max_turns": 8,
+    }
+    _stage_chat_replays(
+        Path(config["curation"]["staging_dir"]) / "chat_replays", records=records, summary=summary
+    )
+    out_dir = Path(config["paths"]["out_dir"])
+    out_dir.mkdir(parents=True)
+
+    called = False
+
+    def fake_export_thumbs_deduped(**kwargs: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(build_module, "_export_thumbs_deduped", fake_export_thumbs_deduped)
+
+    assert build_module._include_chat_replay(config, out_dir) == "included"
+    assert called is False
+
+
+def test_validate_chat_replays_rejects_bad_staging(tmp_path: Path) -> None:
+    """Every documented malformed-staging case must raise ValueError, naming the
+    staged path -- a schema drift or hand-edited staging dir must never ship."""
+    from nuscenes_data_engine.demo.build import _validate_chat_replays
+
+    path = tmp_path / "chat_replays.json"
+
+    records, summary = _default_chat_replays()
+    records[1]["id"] = records[0]["id"]  # duplicate id
+    with pytest.raises(ValueError, match="duplicate"):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    records[0]["frames"][0]["sample_data_token"] = "../x"  # non-alphanumeric token
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    records[0]["charts"][0]["rows"] = [["boston-seaport"]]  # ragged (columns has 2)
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    records[1]["checks"] = None  # eval record with no checks
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    del records[0]["latency_s"]  # missing a RECORD_KEYS key
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    records[0]["kind"] = "bogus"  # unknown kind
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    summary["n_eval"] = 99  # disagrees with the records
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    summary["n_showcase"] = 99  # disagrees with the records
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    records, summary = _default_chat_replays()
+    del summary["max_turns"]  # missing a summary key
+    with pytest.raises(ValueError):
+        _validate_chat_replays(records, summary, path)
+
+    # sanity: the unmodified fixture is valid and raises nothing.
+    records, summary = _default_chat_replays()
+    _validate_chat_replays(records, summary, path)
+
+
+def test_build_is_deterministic_with_chat_replays_staged(build_config: Path) -> None:
+    """Same guarantee as test_build_is_deterministic, extended to a staged chat-
+    replay group (Phase 8, Task 2) -- the copied JSONs are byte-identical inputs, so
+    the outputs stay byte-stable across rebuilds same as every other optional
+    group's."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    _stage_subgraphs(Path(config["curation"]["staging_dir"]))
+    _stage_chat_replays(Path(config["curation"]["staging_dir"]) / "chat_replays")
+    out = Path(config["paths"]["out_dir"])
+    run_build(build_config)
+    first = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
+    run_build(build_config)
+    second = {p.name: p.read_bytes() for p in out.rglob("*") if p.is_file() and p.name != "manifest.json"}
+    assert first == second
