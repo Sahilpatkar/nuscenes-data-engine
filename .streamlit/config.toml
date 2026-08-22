@@ -1,0 +1,6 @@
+# Streamlit Community Cloud + local `streamlit run app/demo/main.py` share this file.
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

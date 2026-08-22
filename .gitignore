@@ -19,6 +19,9 @@ htmlcov/
 
 # Env / secrets
 .env
+# Streamlit's local secrets file: the public demo needs none (nothing under
+# app/demo reads st.secrets) -- this guards a local experiment from committing one.
+.streamlit/secrets.toml
 
 # Logs
 *.log

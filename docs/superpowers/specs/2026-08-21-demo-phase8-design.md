@@ -106,7 +106,8 @@ tuple[str, str | None, str | None]` (outcome line, code, language) — unit-test
 
 - Root `requirements.txt` containing `-r app/demo/requirements.txt` (Community Cloud
   installs from the repo root; pip resolves the relative include), with a comment that
-  it exists only for Cloud and that `uv sync` is the developer path.
+  it exists only for Cloud and that `uv sync` is the developer path. **Superseded — see the
+  amendment at the end of this section.**
 - `.streamlit/config.toml`: `[server] headless = true`, `[browser]
   gatherUsageStats = false`; `.gitignore` += `.streamlit/secrets.toml`.
 - Overview's "how to read this demo" footer gains the master plan's credibility
@@ -120,6 +121,12 @@ tuple[str, str | None, str | None]` (outcome line, code, language) — unit-test
   package rebuild. The tests' bare-venv smoke stays the local proxy for Cloud.
 - After the user deploys and sends the URL, the README link is filled in (one small
   follow-up commit); until then the README shows `live link: pending deploy`.
+
+**Amendment (2026-08-21, deploy scaffolding):** no root `requirements.txt` — Community
+Cloud reads dependency files from the entrypoint's directory first, so
+`app/demo/requirements.txt` is the one it uses; the root `uv.lock` is never consulted
+while that file exists. Python 3.11 is selected in the deploy form's advanced settings
+(Cloud defaults to 3.12).
 
 ## 5. README, screenshots, success-criteria walk
 
