@@ -1978,6 +1978,81 @@ def test_overview_no_longer_promises_phase_7(
     )
 
 
+def test_overview_outcome_first(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 9a (spec §4): the Overview leads with the CTA into the guided tour,
+    the loop strip, and four flagship metrics; the Scale cards and the
+    architecture restatement move into collapsed expanders rather than
+    disappearing -- every pre-existing pinned string/metric must still be present
+    (AppTest walks into expanders, so moving content there keeps it reachable)."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py")).run(timeout=30)
+
+    assert not at.exception
+    assert at.button(key="overview_start_tour")
+
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        ":orange-badge[" in text or ":gray-badge[Diagnose]" in text for text in markdowns
+    )
+    captions = [str(c.value) for c in at.caption]
+    assert any("System loop" in c for c in captions)
+
+    # exactly the four flagship metric labels (a superset check -- the Dataset
+    # scale expander's own cards, incl. "Camera keyframes", are additional metrics
+    # elsewhere on the page).
+    labels = {str(m.label) for m in at.metric}
+    assert {
+        "Best night gain",
+        "Night pedestrian mAP50-95",
+        "Weak-sup share of GT gain",
+        "Graph = SQL flagship",
+    } <= labels
+    metric_values = {str(m.label): str(m.value) for m in at.metric}
+    assert metric_values["Camera keyframes"] == "3"   # still reachable, inside the expander
+
+    expander_labels = [str(e.label) for e in at.get("expander")]
+    assert "Architecture (for technical reviewers)" in expander_labels
+    assert any("TRINITY" in text for text in markdowns)
+
+    # the flagship/retention captions -- test_overview_page_renders_from_a_built_
+    # package's and test_overview_footer_carries_the_credibility_statement's own
+    # pinned substrings, still present once moved inside the expander.
+    assert any("computed live against Neo4j at build time" in c for c in captions)
+    assert any(
+        "of the ground-truth mAP gain for the" in c and "headline)." in c for c in captions
+    )
+
+    # both footer sentences, unmoved.
+    assert any(CREDIBILITY_STATEMENT in c for c in captions)
+    assert any("label recorded outputs as recorded" in c for c in captions)
+
+
+def test_overview_cta_switches_to_the_tour(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clicking the CTA sends the visitor into the guided tour at step 0."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py")).run(timeout=30)
+    assert not at.exception
+
+    at.button(key="overview_start_tour").click().run(timeout=30)
+    assert not at.exception
+    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    assert at.session_state["tour_step"] == 0
+
+
 def test_weak_supervision_page_on_a_pre_phase_7_package(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

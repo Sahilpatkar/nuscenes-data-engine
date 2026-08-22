@@ -6,7 +6,8 @@ view can then deep-link to another page (``st.page_link(nav.page("failures"))``,
 do anyway, since ``main.py`` is the Streamlit entrypoint and importing it would
 re-execute the whole app.
 
-Streamlit is the only import: this module holds page objects, never data.
+Streamlit is the only import: this module holds page objects (and the one
+navigation-adjacent session-state key below), never package data.
 """
 
 from __future__ import annotations
@@ -19,6 +20,14 @@ from streamlit.navigation.page import StreamlitPage
 # for it), so it is keyed under the name every other page uses -- its own filename
 # stem -- and callers ask for "overview" like they ask for "failures".
 _DEFAULT_PAGE_KEY = "overview"
+
+# Phase 9a (Task 5): the tour's step-index session-state key, shared by
+# ``views/tour.py`` (which owns it) and the Overview page's CTA (which resets it to
+# 0 before switching pages). Lives here, not in ``views/tour.py``, so the Overview
+# module can read it without a views -> views import: ``tour.py`` already imports
+# this module, and an ``overview.py`` -> ``tour.py`` import the other way would
+# cycle back (``tour.py`` also imports ``views.overview`` for ``HERO_CAPTION``).
+TOUR_STEP_KEY = "tour_step"
 
 _REGISTRY: dict[str, StreamlitPage] = {}
 

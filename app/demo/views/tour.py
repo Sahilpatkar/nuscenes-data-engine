@@ -33,6 +33,7 @@ from filters import (
     tour_frame_candidates,
     visible_gt,
 )
+from nav import TOUR_STEP_KEY
 from PIL import Image
 from render import (
     LOOP_STAGES,
@@ -66,8 +67,6 @@ from data import (
     thumb_path,
 )
 from views.overview import HERO_CAPTION
-
-TOUR_STEP_KEY = "tour_step"
 
 # The matching rule's confidence floor: a prediction that claims a GT box with
 # conf below it is a "low_conf" hit -- still a hit (the box's matched_<model> is
