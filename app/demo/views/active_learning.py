@@ -36,7 +36,15 @@ from filters import (
     visible_gt,
 )
 from PIL import Image
-from render import bar_chart, draw_overlay, metric_cards, story_arrows
+from render import (
+    bar_chart,
+    draw_overlay,
+    learned,
+    loop_breadcrumb,
+    metric_cards,
+    provenance,
+    story_arrows,
+)
 
 from data import (
     STALE_PACKAGE_NOTE as _STALE_PACKAGE_NOTE,
@@ -52,6 +60,7 @@ from data import (
     load_al_results,
     load_frame_manifest,
     load_gt_boxes,
+    load_overview,
     load_predictions,
     thumb_path,
 )
@@ -158,6 +167,36 @@ def _render_story(
     ])
 
 
+def _render_night_inversion_callout(arms: pd.DataFrame) -> None:
+    """Phase 9a (Task 6): the "what we learned" sentence for the arm chart -- the
+    best NIGHT arm's own weak-supervised twin is (in the real package) the WORST
+    night arm in the table, which is the point: the night gain came from the
+    mined FRAMES, not from training on cheaper (weak) labels.
+
+    ``best_night_arm`` is read from overview_metrics.json (the same night-only,
+    weak-excluded winner the Overview headline uses), never recomputed here --
+    the two must always name the same arm. Skipped whenever that arm or its
+    ``weak_<arm>`` twin isn't a row in THIS package's arm table, rather than
+    guessed at.
+    """
+    night_arm = (load_overview().get("results") or {}).get("best_night_arm")
+    if night_arm is None:
+        return
+    weak_arm = f"weak_{night_arm}"
+    night_rows = arms.loc[arms["arm"] == night_arm]
+    weak_rows = arms.loc[arms["arm"] == weak_arm]
+    if night_rows.empty or weak_rows.empty:
+        return
+    delta_night = float(night_rows.iloc[0]["delta_night"])
+    weak_delta_night = float(weak_rows.iloc[0]["delta_night"])
+    learned(
+        f"Targeting night bought night: `{night_arm}` ({delta_night:+.4f} night "
+        f"mAP50-95) is the best night arm of {len(arms)}, while its "
+        f"weak-supervised twin `{weak_arm}` ({weak_delta_night:+.4f}) is the "
+        "worst — the night gain came from the frames, not from cheaper labels."
+    )
+
+
 def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
     """(b) All arms in the order the experiment ran them, night first."""
     st.subheader("Every arm, one chart")
@@ -182,6 +221,7 @@ def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
         ),
         width="stretch",
     )
+    provenance("recorded", "active_learning_results.parquet")
 
     best_overall = ordered.loc[ordered["delta_overall"].idxmax()]
     arm_row = ordered.loc[ordered["arm"] == arm].iloc[0]
@@ -192,6 +232,7 @@ def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
         "performance, and that is the trade it makes. Weak-supervision arms are greyed: "
         "they are pseudo-label training runs, shown on the Weak Supervision page."
     )
+    _render_night_inversion_callout(arms)
     with st.expander("Per-arm table"):
         columns = [column for column in _ARM_TABLE_COLUMNS if column in ordered.columns]
         st.dataframe(ordered[columns], hide_index=True)
@@ -297,6 +338,7 @@ def _render_selected_frame(
     explain: pd.DataFrame,
     n_communities: int,
     night_floor: int | None,
+    validation: dict[str, Any],
 ) -> None:
     """(d) One selected frame: its crop with GT, its facts, and why it was picked."""
     token = str(frame_row["sample_data_token"])
@@ -335,6 +377,19 @@ def _render_selected_frame(
     for label, value, flag in factors:
         mark = "" if flag is None else (" ✓" if flag else " ✗")
         st.markdown(f"**{label}:** {value}{mark}")
+
+    # Phase 9a (Task 6): the re-derivation's own validation record, not the
+    # n_communities/night_floor this function was already handed above (those come
+    # from the community table, with the validation JSON only as ITS fallback) --
+    # this line is specifically about what `demo al-explain` itself validated.
+    n_selected = validation.get("n_selected")
+    n_communities_validated = validation.get("n_communities")
+    if n_selected is not None and n_communities_validated is not None:
+        provenance(
+            "reproduced",
+            f"demo al-explain reproduced the run: {n_selected} frames, "
+            f"{n_communities_validated} communities",
+        )
 
 
 def _render_gallery(
@@ -415,7 +470,7 @@ def _render_gallery(
     _render_selected_frame(
         frame_row, gt,
         arm=arm, explain=load_al_explain(), n_communities=n_communities,
-        night_floor=_night_floor(validation),
+        night_floor=_night_floor(validation), validation=validation,
     )
 
 
@@ -483,6 +538,7 @@ def _render_before_after(
                 scale=0.6,
             )
         )
+        provenance("recomputed", "per-box claims from predictions.parquet")
     st.caption(
         "Green = ground truth, orange dashed = a GT box this model missed, white = its "
         "true positives, yellow dotted = a claim below the confidence floor, red = a "
@@ -531,6 +587,7 @@ def _render_before_after(
 
 def render() -> None:
     st.title("Active Learning")
+    loop_breadcrumb(["Mine", "Train", "Evaluate"])
     st.caption(
         "Which frames the system asks to have labelled next, why, and what "
         "retraining on them bought. Every number here is read from the package."

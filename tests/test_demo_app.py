@@ -1061,6 +1061,20 @@ def test_overview_flagship_caption_when_the_cypher_twin_is_only_sourced(
     assert not any("computed live against Neo4j" in c for c in captions)
 
 
+def _failures_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="failures" in main.py, same rationale as the other pages' explicit
+    # url_paths (switch_page resolves by hashing the filename-derived name).
+    at.switch_page("views/failures.py").run(timeout=30)
+    return at
+
+
 def test_failure_explorer_renders_grid_and_detail(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2663,3 +2677,168 @@ def test_demo_no_longer_promises_phase_8() -> None:
         path.name for path in sorted(DEMO_DIR.rglob("*.py")) if "Phase 8" in path.read_text()
     ]
     assert not promises
+
+
+# --- Phase 9a (Task 6): trust chrome on every page ------------------------------
+#
+# The tour and Overview already carry a loop breadcrumb and provenance captions
+# (Tasks 1-5). This task puts the same chrome — the breadcrumb, provenance labels,
+# the Scenario event viewer's compact SQL<->Graph parity line, and the "What we
+# learned" callouts — on the five existing loop pages (spec
+# docs/superpowers/specs/2026-08-22-demo-phase9a-design.md sec3).
+
+_ALL_LOOP_STAGES = ("Diagnose", "Mine", "Train", "Evaluate")
+
+
+def test_every_page_carries_the_loop_breadcrumb(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every page below the tour/Overview carries the breadcrumb directly under
+    its title, with exactly the stages the spec's "Page -> stages" table pins lit
+    orange and the rest grey."""
+    pytest.importorskip("streamlit")
+    cases = (
+        (_failures_apptest, ("Diagnose",)),
+        (_scenarios_apptest, ("Mine",)),
+        (_active_learning_apptest, ("Mine", "Train", "Evaluate")),
+        (_weak_supervision_apptest, ("Train", "Evaluate")),
+        (_chat_replay_apptest, ("Diagnose",)),
+    )
+    for apptest_fn, lit in cases:
+        at = apptest_fn(built_demo_data, monkeypatch)
+        assert not at.exception, apptest_fn.__name__
+        markdowns = [str(m.value) for m in at.markdown]
+        breadcrumb = next(
+            (text for text in markdowns if ":orange-badge[" in text or ":gray-badge[" in text),
+            None,
+        )
+        assert breadcrumb is not None, apptest_fn.__name__
+        for stage in _ALL_LOOP_STAGES:
+            badge = f":orange-badge[{stage}]" if stage in lit else f":gray-badge[{stage}]"
+            assert badge in breadcrumb, (apptest_fn.__name__, stage, breadcrumb)
+
+
+def test_provenance_captions_present(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every page's provenance captions read the fixed PROVENANCE wording (spec
+    sec3) at the spot the "Provenance placement" paragraph pins."""
+    pytest.importorskip("streamlit")
+
+    # Failure Explorer: the detail overlay, once a frame is selected.
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert any("recomputed in this app" in str(c.value) for c in at.caption)
+
+    # Scenario Search: the flagship (dynamics) preset header's parity caption,
+    # present on the very first load (the flagship is the default preset).
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("recorded experiment output" in str(c.value) for c in at.caption)
+
+    # Active Learning: "reproduced selection" needs the why-selected panel open on
+    # a frame the al-explain group covers ("wA"); the arm chart's "recorded" is
+    # present on the default load already.
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any("reproduced selection" in c for c in captions)
+    assert any("recorded experiment output" in c for c in captions)
+
+    # Weak Supervision: the cards'/crowding chart's "recorded" is on the default
+    # load; the frame panel's "recomputed" needs a frame selected.
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    at.session_state["ws_accepted_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any("recorded experiment output" in c for c in captions)
+    assert any("recomputed in this app" in c for c in captions)
+
+    # Ask the Dataset: the header caption's "recorded".
+    at = _chat_replay_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("recorded experiment output" in str(c.value) for c in at.caption)
+
+
+def test_scenario_viewer_shows_compact_parity_line(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The event viewer header gets its own compact SQL<->Graph parity line
+    (filters.parity_short) for a dynamics preset with subgraphs staged — the
+    preset header's own pinned parity_caption line
+    (test_scenario_flagship_badge) is unaffected. The flagship fixture's own
+    subgraph payload has sql_count == cypher_count == 1 (parity True), so the
+    noun is singular: "event", not "events"."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    captions = [str(c.value) for c in at.caption]
+    assert any("1 event found · SQL 1 / Graph 1 ✓" in c for c in captions)
+
+
+def _add_weak_night_twin_arm(built_demo_data: Path) -> None:
+    """Give the built package a ``weak_graph_rate_night`` row in
+    ``active_learning_results.parquet`` — deliberately absent from the base
+    fixture (see ``_add_second_weak_pair``'s own docstring, just above): the
+    real package's own weak twin of the best-night arm, set here to the worst
+    night result in the table, mirroring the real package's shape (spec's
+    honesty rules: "weak_graph_rate_night is the worst night arm").
+
+    Only the columns the AL page's night-inversion callout and arm chart
+    actually read are set; the rest come back NaN for this row via
+    ``pd.concat``'s own column-align fill, the same idiom
+    ``test_active_learning_gallery_pages_night_frames_first`` uses to widen
+    ``frame_manifest.parquet`` with synthetic rows.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    extra = pd.DataFrame({
+        "arm": ["weak_graph_rate_night"],
+        "family": ["weak"],
+        "round_order": [int(arms["round_order"].max()) + 1],
+        "n_train_images": [120],
+        "overall_map5095": [0.19],
+        "night_map5095": [0.09],
+        "delta_overall": [-0.01],
+        "delta_night": [-0.01],
+    })
+    pd.concat([arms, extra], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_learned_callouts_interpolate_numbers(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The "What we learned" callouts on the Active Learning and Weak Supervision
+    pages, every number interpolated from the package tables (spec sec3, "What
+    we learned" callouts)."""
+    pytest.importorskip("streamlit")
+
+    _add_weak_night_twin_arm(built_demo_data)
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    text = [str(m.value) for m in at.markdown]
+    # graph_rate_night is the fixture's own best-night arm (+0.0300 against
+    # baseline, active_learning_results.parquet) -- test_active_learning_page_
+    # renders_story_chart_and_exemplar_table pins the same figure.
+    assert any(
+        "What we learned" in t and "+0.0300" in t and "`weak_graph_rate_night`" in t
+        for t in text
+    )
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    text = [str(m.value) for m in at.markdown]
+    # the fixture's headline pair ("random"): 0.0018/0.0100 = 18.0% retained --
+    # test_weak_supervision_page_cards_decomposition_bias_and_tabs pins the same
+    # figure.
+    assert any("What we learned" in t and "18.0%" in t for t in text)

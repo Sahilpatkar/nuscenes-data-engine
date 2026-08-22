@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 from filters import failure_counts, filter_frames, sort_frames
 from PIL import Image
-from render import draw_overlay
+from render import draw_overlay, loop_breadcrumb, provenance
 
 from data import crop_path, load_frame_manifest, load_gt_boxes, load_predictions, thumb_path
 
@@ -60,6 +60,7 @@ def _frame_image_path(token: str) -> Path | None:
 
 def render() -> None:
     st.title("Failure Explorer")
+    loop_breadcrumb(["Diagnose"])
     st.caption(
         "GT vs prediction overlays for the held-out val split, filterable by "
         "condition, class, and failure type. The train pool carries no "
@@ -230,6 +231,7 @@ def render() -> None:
             Image.open(crop), gt_for_render, preds_token, mode=_MODE_LABELS[mode_label], scale=0.6
         )
         st.image(image)
+        provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
 
     meta_cols = st.columns(4)
     meta_cols[0].metric("Scene", str(frame_row.get("scene_name", "n/a")))

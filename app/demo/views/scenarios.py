@@ -20,13 +20,14 @@ import streamlit as st
 from filters import (
     graph_node_label,
     parity_caption,
+    parity_short,
     rank_events,
     severity_caption,
     speed_caption,
     subgraph_narrative,
 )
 from PIL import Image
-from render import draw_overlay, recorded_banner
+from render import draw_overlay, loop_breadcrumb, provenance, recorded_banner
 
 from data import (
     crop_path,
@@ -148,6 +149,14 @@ _GRAPH_ABSENT_NOTE = "graph export not included in this package"
 _GRAPH_EVENT_ABSENT_NOTE = "no subgraph staged for this event — re-run demo subgraphs"
 _MODEL_GT_ONLY_NOTE = "graph holds GT only — model verdict comes from the prediction set"
 
+# Phase 9a (Task 6): the event viewer's own overlay provenance -- every branch of
+# _render_viewer that actually draws an image (curated w/ crop, curated w/
+# thumb-fallback, non-curated) says the same thing about where it came from.
+_VIEWER_PROVENANCE_DETAIL = (
+    "overlay from gt_boxes.parquet / predictions.parquet; dynamics from "
+    "scenario_events.parquet"
+)
+
 # Filmstrip step order, before/after the current frame -- plain ASCII hyphens
 # (ruff RUF001 flags the design doc's typographic U+2212 minus sign as an
 # ambiguous character), matching the t_minus/t_plus column-name convention.
@@ -229,8 +238,12 @@ def _render_parity_line(preset_name: str, preset: _Preset, n_shown: int) -> None
     caption = parity_caption(sql_count, cypher_count, parity, n_shown)
     if parity is False:
         st.warning(caption)
-        return
-    st.caption(caption)
+    else:
+        st.caption(caption)
+    # Phase 9a (Task 6): the provenance for the counts the line above just showed --
+    # only reached once a real parity line (clean or a recorded mismatch) actually
+    # drew, never for the model-family/absent-package/absent-payload no-ops above.
+    provenance("recorded", "SQL and Cypher counts computed at build (demo subgraphs)")
 
 
 def _node_font(on_path: bool) -> dict[str, Any]:
@@ -398,6 +411,7 @@ def _render_viewer(row: pd.Series) -> None:
         if crop.is_file():
             image = draw_overlay(Image.open(crop), gt, preds_token, mode="overlay", scale=0.6)
             st.image(image)
+            provenance("recomputed", _VIEWER_PROVENANCE_DETAIL)
             return
         thumb = thumb_path(token)
         if thumb.is_file():
@@ -407,6 +421,7 @@ def _render_viewer(row: pd.Series) -> None:
             # below already has.
             image = draw_overlay(Image.open(thumb), gt, preds_token, mode="overlay", scale=0.16)
             st.image(image)
+            provenance("recomputed", _VIEWER_PROVENANCE_DETAIL)
         else:
             st.caption("no image available for this curated frame")
         return
@@ -421,6 +436,7 @@ def _render_viewer(row: pd.Series) -> None:
         # skipped by a hand-rolled bypass.
         image = draw_overlay(Image.open(thumb), gt, pd.DataFrame(), mode="gt", scale=0.16)
         st.image(image)
+        provenance("recomputed", _VIEWER_PROVENANCE_DETAIL)
     st.caption(_NOT_CURATED_CAPTION)
 
 
@@ -556,6 +572,7 @@ def _render_semantic_gallery() -> None:
 
 def render() -> None:
     st.title("Scenario Search")
+    loop_breadcrumb(["Mine"])
     st.caption(
         "Preset driving-scenario queries over the full dataset's CAN-bus + GT "
         "dynamics, plus two curated-val model-result presets. Pick a preset, then "
@@ -595,6 +612,20 @@ def render() -> None:
         row = ranked.loc[ranked["sample_data_token"] == selected_token].iloc[0]
         st.divider()
         st.subheader("Event viewer")
+        # Phase 9a (Task 6): the compact SQL<->Graph parity line -- a dynamics
+        # preset's own trust indicator, distinct from (and additional to) the
+        # preset header's pinned parity_caption line above. Model presets get
+        # nothing here (their GT-only note already covers it).
+        if preset["family"] == "dynamics":
+            subgraph_payload = load_subgraphs(preset_name) if subgraphs_available() else None
+            if subgraph_payload is not None:
+                st.caption(
+                    parity_short(
+                        int(subgraph_payload["sql_count"]),
+                        subgraph_payload["cypher_count"],
+                        subgraph_payload["parity"],
+                    )
+                )
         _render_viewer(row)
         _render_ego_panel(row)
         _render_context_panel(row)
