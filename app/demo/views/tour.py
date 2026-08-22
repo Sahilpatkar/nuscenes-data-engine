@@ -32,6 +32,7 @@ from filters import (
     severity_caption,
     tour_frame_candidates,
     visible_gt,
+    visible_gt_boxes,
 )
 from nav import TOUR_STEP_KEY
 from PIL import Image
@@ -199,22 +200,15 @@ def _load() -> _TourData:
     )
 
 
-def _visible(gt: pd.DataFrame) -> pd.DataFrame:
-    """``gt_boxes`` with the visibility-floor rows dropped -- the same slice the
-    Failure Explorer counts and draws, since a row under the floor was never scored
-    against and so was never missed by anyone."""
-    if "below_visibility_min" not in gt.columns:
-        return gt
-    return gt.loc[~gt["below_visibility_min"].fillna(False)]
-
-
 def _night_miss_counts(data: _TourData) -> tuple[int, int, int] | None:
     """``(night val frames, of those with >= 1 baseline miss, val frames)``, or
     ``None`` when this package carries no ``matched_<baseline>`` column to count
     misses from."""
     if f"matched_{data.baseline}" not in data.gt.columns:
         return None
-    flags = failure_flags(data.manifest, _visible(data.gt), data.preds, model=data.baseline)
+    flags = failure_flags(
+        data.manifest, visible_gt_boxes(data.gt), data.preds, model=data.baseline
+    )
     is_night = flags["is_night"].fillna(False).astype(bool)
     return int(is_night.sum()), int((is_night & flags["has_fn"]).sum()), len(flags)
 
@@ -338,7 +332,7 @@ def _pedestrian_miss_to_hit_frames(data: _TourData) -> set[str] | None:
     night = set(
         val.loc[val["is_night"].fillna(False).astype(bool), "sample_data_token"].astype(str)
     )
-    boxes = _visible(data.gt)
+    boxes = visible_gt_boxes(data.gt)
     upgraded = boxes.loc[
         (boxes["category_group"] == "pedestrian")
         & boxes["sample_data_token"].astype(str).isin(night)
@@ -428,9 +422,20 @@ def _open(page_url: str, **state: str) -> None:
 def _render_event_frame(data: _TourData, row: pd.Series) -> None:
     """The mined event's frame, GT boxes only: crop first, thumb second -- the two
     branches ``views/scenarios.py::_render_viewer`` uses for an event outside the
-    curated prediction set, and its caption for the same reason that page shows it
-    (predictions exist for curated val frames only). A curated event keeps the
-    boxes and drops the caption: it would be a false absence claim there."""
+    curated prediction set, and a caption saying WHY there are no predictions on it.
+
+    Three cases, because "no predictions here" has two different reasons (Phase 9a
+    review 5c) and a curated frame has neither:
+
+    * ``in_curated_set`` -- no caption at all; predictions exist for this frame, and
+      claiming otherwise would be a false absence claim.
+    * not curated, but the package's ``frame_manifest`` does carry the token as a
+      ``train_pool`` row -- ``_TRAIN_POOL_NOTE``: the frame IS in the package, it
+      just was never a test image, which is the more informative half of the story
+      (and the note the Active Learning page shows for the same kind of frame).
+    * not curated and not in the manifest at all -- ``_NOT_CURATED_CAPTION``: the
+      package carries this event's row and thumbs but not the frame itself.
+    """
     token = str(row["sample_data_token"])
     gt_rows = gt_for_render(visible_gt(data.gt, token))
     crop, thumb = crop_path(token), thumb_path(token)
@@ -438,8 +443,13 @@ def _render_event_frame(data: _TourData, row: pd.Series) -> None:
         st.image(draw_overlay(Image.open(crop), gt_rows, pd.DataFrame(), mode="gt", scale=0.6))
     elif thumb.is_file():
         st.image(draw_overlay(Image.open(thumb), gt_rows, pd.DataFrame(), mode="gt", scale=0.16))
-    if not bool(row.get("in_curated_set")):
-        st.caption(_NOT_CURATED_CAPTION)
+    if bool(row.get("in_curated_set")):
+        return
+    manifest_rows = data.manifest.loc[data.manifest["sample_data_token"].astype(str) == token]
+    train_pool = (
+        not manifest_rows.empty and str(manifest_rows.iloc[0].get("split")) == "train_pool"
+    )
+    st.caption(_TRAIN_POOL_NOTE if train_pool else _NOT_CURATED_CAPTION)
 
 
 def _render_event_filmstrip(row: pd.Series) -> None:
@@ -606,7 +616,7 @@ def _render_why_selected(data: _TourData) -> None:
     n_selected = int(data.validation.get("n_selected", len(data.explain)))
     provenance(
         "reproduced",
-        f"demo al-explain reproduced the run: {n_selected} frames, "
+        f"demo al-explain reproduced the run: {n_selected:,} frames, "
         f"{n_communities} communities",
     )
     if st.button("Open this frame in Active Learning →", key="tour_open_al_frame"):
@@ -639,7 +649,11 @@ def _render_retrain(data: _TourData) -> None:
     if bool(pd.notna(night_share)):
         cards.append(("Night share", f"{float(night_share):.0%}"))
     if sizes_known:
-        cards.append(("Training set", f"{int(base_n):,} → {int(arm_n):,} images"))
+        # "Training images", not "Training set" + a trailing " images": st.metric
+        # renders its VALUE in a narrow column and the 22-character
+        # "7,035 → 8,535 images" wrapped mid-arrow; moving the noun into the label
+        # leaves a 13-character value that fits (Phase 9a review 5a).
+        cards.append(("Training images", f"{int(base_n):,} → {int(arm_n):,}"))
     metric_cards(cards)
 
     ordered = (
@@ -917,14 +931,17 @@ def _result_improved(data: _TourData) -> None:
 
 def _result_failures(data: _TourData) -> None:
     """Answer 4 -- "What failed along the way?": the weak-supervision loss split,
-    the verifier's sparse-frame bias, the worst night arm, and (only when true)
-    the hero recovery's own low-confidence honesty line."""
+    the headline pair's sparse-frame bias, the worst night arm (only when that arm
+    really is a weak-supervision result), and (only when true) the hero recovery's
+    own low-confidence honesty line."""
     st.markdown("**What failed along the way?**")
     wrote_recorded = False
 
     headline_rows = data.loss.loc[data.loss["headline"]]
+    headline_base_arm: str | None = None
     if not headline_rows.empty:
         row = headline_rows.iloc[0]
+        headline_base_arm = str(row["base_arm"])
         st.markdown(
             f"Weak (VLM-verified) labels kept {float(row['retention']):.1%} of the "
             f"ground-truth gain for the `{row['base_arm']}` pair: "
@@ -934,32 +951,44 @@ def _result_failures(data: _TourData) -> None:
         )
         wrote_recorded = True
 
-    if {"gt_boxes_per_accepted_frame", "gt_boxes_per_rejected_frame"} <= set(
-        data.weaksup.columns
-    ):
-        for weak_row in data.weaksup.itertuples(index=False):
+    # ONE sparse-frames sentence, about the SAME pair the loss split above is about
+    # (Phase 9a review I7). The real package carries a weak_supervision_results row
+    # per weak arm, and looping them wrote the same sentence three times over on a
+    # screen whose whole job is to answer one question in a few lines; the headline
+    # pair is the one the rest of this answer already talks about.
+    if headline_base_arm is not None and {
+        "gt_boxes_per_accepted_frame",
+        "gt_boxes_per_rejected_frame",
+    } <= set(data.weaksup.columns):
+        headline_weak = data.weaksup.loc[data.weaksup["arm"] == headline_base_arm]
+        if not headline_weak.empty:
+            weak_row = headline_weak.iloc[0]
             st.markdown(
                 "The verifier kept sparse frames: "
-                f"{float(weak_row.gt_boxes_per_accepted_frame):.2f} vs "
-                f"{float(weak_row.gt_boxes_per_rejected_frame):.2f} GT boxes per accepted "
-                f"vs rejected frame ({weak_row.arm})."
+                f"{float(weak_row['gt_boxes_per_accepted_frame']):.2f} vs "
+                f"{float(weak_row['gt_boxes_per_rejected_frame']):.2f} GT boxes per accepted "
+                f"vs rejected frame ({weak_row['arm']})."
             )
             wrote_recorded = True
 
-    # The real weak-supervision arms only: "weak_<base>" trained on pseudo labels,
-    # never the "weak_<base>_gt" twin export_weak_loss_decomposition uses to
-    # compute the loss split above (that arm is GT-trained, not weak -- it is not
-    # a weak-supervision RESULT to call worst).
-    weak_arms = data.arms.loc[
-        data.arms["arm"].str.startswith("weak_") & ~data.arms["arm"].str.endswith("_gt")
-    ]
-    if not weak_arms.empty:
-        worst = weak_arms.loc[weak_arms["delta_night"].idxmin()]
-        st.markdown(
-            f"`{worst['arm']}` is the worst night result of the {len(data.arms)} arms "
-            f"({float(worst['delta_night']):+.4f})."
-        )
-        wrote_recorded = True
+    # The superlative is computed over EVERY arm, because that is what "of the N
+    # arms" claims (Phase 9a review I2): the worst night arm in the whole table is
+    # read first, and the sentence is written only when that arm really is a
+    # weak-supervision RESULT -- a "weak_<base>" arm trained on pseudo labels,
+    # never the GT-trained "weak_<base>_gt" twin export_weak_loss_decomposition
+    # uses to compute the loss split above, and never a non-weak arm. When some
+    # other arm is the worst there is no honest weak-supervision superlative to
+    # write, so this screen writes none.
+    night_ranked = data.arms.dropna(subset=["delta_night"])
+    if not night_ranked.empty:
+        worst = night_ranked.loc[night_ranked["delta_night"].idxmin()]
+        worst_arm = str(worst["arm"])
+        if worst_arm.startswith("weak_") and not worst_arm.endswith("_gt"):
+            st.markdown(
+                f"`{worst_arm}` is the worst night result of the {len(data.arms)} arms "
+                f"({float(worst['delta_night']):+.4f})."
+            )
+            wrote_recorded = True
 
     if wrote_recorded:
         provenance(
@@ -996,6 +1025,10 @@ def _render_result(data: _TourData) -> None:
         _result_failures(data)
 
 
+# Step numbering: 0-based in this module (the ``tour_step`` session key, ``_STEPS``
+# indices, ``_walk_to_step``) and 1-based in everything the viewer reads ("Step 4 of
+# 7", and the prose cross-references inside the steps themselves). "Step 4" in a
+# docstring or a rendered sentence therefore means ``_STEPS[3]``.
 _STEPS: tuple[_Step, ...] = (
     _Step(
         key="weakness",
@@ -1071,12 +1104,25 @@ def _current_step() -> int:
     return max(0, min(step, len(_STEPS) - 1))
 
 
+# At most three "Go deeper" links per row: the result screen carries six, and six
+# st.columns across the content width left each page_link ~150 px for a label like
+# "Active Learning — the whole mined set and its communities", which wrapped to four
+# lines of two words (Phase 9a review 5a). Rows of three give every label the width
+# of two of the old columns; a step with one or two links still gets a single row.
+_GO_DEEPER_PER_ROW = 3
+
+
 def _render_go_deeper(step: _Step) -> None:
     if not step.links:
         return
     st.markdown("**Go deeper**")
-    for column, (url_path, label) in zip(st.columns(len(step.links)), step.links, strict=True):
-        column.page_link(nav.page(url_path), label=label)
+    for start in range(0, len(step.links), _GO_DEEPER_PER_ROW):
+        row = step.links[start : start + _GO_DEEPER_PER_ROW]
+        # A short final row is laid out over the FULL row width (st.columns(len(row)))
+        # rather than padded to three, so two links never render as two thirds of a
+        # row with a hole where the third would be.
+        for column, (url_path, label) in zip(st.columns(len(row)), row, strict=True):
+            column.page_link(nav.page(url_path), label=label)
 
 
 def render() -> None:

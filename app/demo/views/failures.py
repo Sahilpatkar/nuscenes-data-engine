@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from filters import failure_counts, filter_frames, sort_frames
+from filters import failure_counts, filter_frames, sort_frames, visible_gt_boxes
 from PIL import Image
 from render import draw_overlay, loop_breadcrumb, provenance
 
@@ -79,8 +79,10 @@ def render() -> None:
     # today's ingested data is all-False (the visibility floor is already applied
     # at ingestion) and Phase 3's UI "should not build ghost-box rendering ...
     # without first confirming ghost rows occur in the data it is fed" -- so this
-    # page drops them instead of building that unconfirmed rendering mode.
-    gt = gt.loc[~gt["below_visibility_min"]].reset_index(drop=True)
+    # page drops them instead of building that unconfirmed rendering mode. The
+    # filter itself is filters.visible_gt_boxes -- one definition of the rule,
+    # shared with the guided tour and the per-frame filters.visible_gt.
+    gt = visible_gt_boxes(gt).reset_index(drop=True)
 
     val_manifest = manifest.loc[manifest["split"] == "val"]
     gt_models = _models_from_gt(gt)

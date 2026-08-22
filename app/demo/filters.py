@@ -532,21 +532,32 @@ def _claims(preds: pd.DataFrame, model: str) -> dict[str, tuple[str, float]]:
     return best
 
 
-def visible_gt(gt: pd.DataFrame, token: str) -> pd.DataFrame:
-    """One frame's GT rows, visibility-floor rows dropped.
+def visible_gt_boxes(gt: pd.DataFrame) -> pd.DataFrame:
+    """``gt_boxes`` (any number of frames) with the visibility-floor rows dropped.
 
     Rows under the visibility floor were never scored against, so no page counts
-    them, draws them, or explains them (the Failure Explorer drops them for the
-    same reason). The ``below_visibility_min`` column is checked for rather than
-    assumed: an older package predates it.
+    them, draws them, or explains them. The ``below_visibility_min`` column is
+    checked for rather than assumed (an older package predates it) and its NA is
+    read as "not below the floor" -- the column is a nullable boolean, and a plain
+    ``~column`` on it propagates NA into the mask instead of keeping the row.
+
+    THE definition of the visibility rule (Phase 9a review M10): the Failure
+    Explorer, the guided tour and ``visible_gt`` below all call this rather than
+    each spelling the same filter out, so the rule cannot drift between pages.
+    """
+    if "below_visibility_min" not in gt.columns:
+        return gt
+    return gt.loc[~gt["below_visibility_min"].fillna(False)]
+
+
+def visible_gt(gt: pd.DataFrame, token: str) -> pd.DataFrame:
+    """One frame's GT rows, visibility-floor rows dropped (``visible_gt_boxes``
+    narrowed to ``token``).
 
     Shared by the Active Learning and Weak Supervision pages (consolidated review
     M6 -- it was duplicated in both views).
     """
-    subset = gt.loc[gt["sample_data_token"] == token]
-    if "below_visibility_min" not in subset.columns:
-        return subset
-    return subset.loc[~subset["below_visibility_min"].fillna(False)]
+    return visible_gt_boxes(gt.loc[gt["sample_data_token"] == token])
 
 
 def gt_for_render(gt_rows: pd.DataFrame, model: str | None = None) -> pd.DataFrame:
@@ -1051,9 +1062,16 @@ def tour_frame_candidates(
     covered.
 
     Ranked night frames first -- the arm this tour walks is night-targeted, so the
-    frame it leads with must show what the arm was built to find -- then by how
-    many visible pedestrian GT boxes the frame carries (the sharpest "what
-    changed" story for a viewer), then by token for a stable tie-break.
+    frame it leads with must show what the arm was built to find -- then by the
+    frame's community's failure-mass rank ascending, then by how many visible
+    pedestrian GT boxes the frame carries, then by token for a stable tie-break.
+
+    The mass rank leads the two content keys (Phase 9a review I3) because the step
+    it feeds explains WHY a frame was selected, and the answer is the mass → quota
+    mechanism: the frame whose community carried the most routed failure mass is
+    the one that best exemplifies it. A frame whose explain row carries no
+    ``community_mass_rank`` (or a package whose explain group predates the column)
+    sorts after every ranked one rather than ahead of them.
     """
     if manifest.empty or explain.empty or "al_selected_by" not in manifest.columns:
         return []
@@ -1065,12 +1083,27 @@ def tour_frame_candidates(
     if selected.empty:
         return []
 
+    # A community's mass rank is 1-based over the communities, so it can never
+    # exceed the number of explain rows -- len(explain) + 1 is "unranked, last".
+    unranked = len(explain) + 1
+    mass_ranks: dict[str, int] = {}
+    if "community_mass_rank" in explain.columns:
+        for explain_row in explain.itertuples(index=False):
+            value = explain_row.community_mass_rank
+            if bool(pd.notna(value)):
+                mass_ranks[str(explain_row.sample_data_token)] = int(value)
+
     def _pedestrian_count(token: str) -> int:
         rows = visible_gt(gt, token)
         return int((rows["category_group"] == "pedestrian").sum())
 
     ranked = sorted(
-        (not bool(row.is_night), -_pedestrian_count(str(row.sample_data_token)), str(row.sample_data_token))
+        (
+            not bool(row.is_night),
+            mass_ranks.get(str(row.sample_data_token), unranked),
+            -_pedestrian_count(str(row.sample_data_token)),
+            str(row.sample_data_token),
+        )
         for row in selected.itertuples(index=False)
     )
-    return [token for _, _, token in ranked]
+    return [token for _night, _mass_rank, _peds, token in ranked]

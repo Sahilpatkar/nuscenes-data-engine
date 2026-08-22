@@ -35,14 +35,25 @@ _REGISTRY: dict[str, StreamlitPage] = {}
 def register(pages: Iterable[StreamlitPage]) -> None:
     """Replace the registry with ``pages``, keyed by ``url_path``.
 
-    Cleared first, not merged: ``main.py`` re-runs top to bottom on every rerun and
+    Replaced, not merged: ``main.py`` re-runs top to bottom on every rerun and
     builds FRESH ``st.Page`` objects each time, so a merged registry would keep
     handing out stale ones (streamlit only ordains the current run's page objects as
     runnable -- ``StreamlitPage._can_be_called``).
+
+    Rebound in one assignment rather than ``clear()`` + refill (Phase 9a review M3):
+    this module is imported once per PROCESS, while ``register`` is called once per
+    SCRIPT RUN, and a Streamlit server runs one script per connected session in its
+    own thread over the same module object. ``clear()`` leaves a window in which the
+    dict is empty or half-filled, and another session's ``nav.page(...)`` landing in
+    that window would raise "no page registered" for a page that plainly exists.
+    Building the new dict first and binding it in a single statement removes the
+    window: a concurrent reader sees either the previous mapping or the new one,
+    never a partial one.
     """
-    _REGISTRY.clear()
-    for page_object in pages:
-        _REGISTRY[page_object.url_path or _DEFAULT_PAGE_KEY] = page_object
+    global _REGISTRY
+    _REGISTRY = {
+        page_object.url_path or _DEFAULT_PAGE_KEY: page_object for page_object in pages
+    }
 
 
 def page(url_path: str) -> StreamlitPage:

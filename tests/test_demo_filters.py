@@ -1196,21 +1196,34 @@ def test_parity_short_wording() -> None:
 
 def _tour_manifest() -> pd.DataFrame:
     return pd.DataFrame({
-        "sample_data_token": ["day2", "night0", "night3", "noexplain", "otherarm"],
-        "al_selected_by": ["graph_rate_night"] * 4 + ["weak_random"],
-        "is_night": [False, True, True, True, True],
+        "sample_data_token": [
+            "day2", "night0", "night1", "night2", "night3", "noexplain", "otherarm",
+        ],
+        "al_selected_by": ["graph_rate_night"] * 6 + ["weak_random"],
+        "is_night": [False, True, True, True, True, True, True],
     })
 
 
 def _tour_explain() -> pd.DataFrame:
     # "noexplain" has no row here on purpose -- it must be dropped even though it
     # is otherwise arm-selected.
-    return pd.DataFrame({"sample_data_token": ["day2", "night0", "night3", "otherarm"]})
+    #
+    # community_mass_rank is the SECOND sort key (after night), so the ranks here
+    # are deliberately at odds with the pedestrian counts in _tour_gt below: the
+    # highest-pedestrian night frame ("night3", 3 pedestrians) sits in the
+    # worst-ranked community (5) and must therefore sort LAST among the night
+    # frames, which no pedestrian-first ordering could produce.
+    return pd.DataFrame({
+        "sample_data_token": ["day2", "night0", "night1", "night2", "night3", "otherarm"],
+        "community_mass_rank": pd.array([1, 2, 2, 2, 5, 1], dtype="Int64"),
+    })
 
 
 def _tour_gt() -> pd.DataFrame:
     tokens = (
         ["day2"] * 2
+        + ["night1"] * 1
+        + ["night2"] * 1
         + ["night3"] * 3
         # generously seeded with pedestrians on the two frames that must be
         # EXCLUDED regardless -- proves it's the arm/explain filter dropping
@@ -1224,17 +1237,55 @@ def _tour_gt() -> pd.DataFrame:
     })
 
 
-def test_tour_frame_candidates_orders_night_then_pedestrians_then_token() -> None:
-    """Ranked for the guided tour: night frames before day frames (the arm is
-    night-targeted), then by visible pedestrian GT count descending, then token --
-    dropping any frame the arm didn't select or that has no explain row."""
+def test_tour_frame_candidates_orders_night_then_mass_rank_then_pedestrians_then_token() -> None:
+    """Ranked for the guided tour (Phase 9a review I3): night frames before day
+    frames (the arm is night-targeted), then by the frame's community's failure-mass
+    rank ascending (the step explains the mass → quota mechanism, so it leads with
+    the frame whose community best exemplifies it), then by visible pedestrian GT
+    count descending, then token -- dropping any frame the arm didn't select or that
+    has no explain row.
+
+    All four keys are exercised: "night3" carries the most pedestrians of any night
+    frame and still sorts last among them (mass rank 5 beats its pedestrian count);
+    "night1"/"night2" tie "night0" on mass rank 2 and win on pedestrians; and
+    "night1"/"night2" tie on both and separate on token."""
     candidates = tour_frame_candidates(
         _tour_manifest(), _tour_explain(), _tour_gt(), arm="graph_rate_night"
     )
-    assert candidates == ["night3", "night0", "day2"]
+    assert candidates == ["night1", "night2", "night0", "night3", "day2"]
+
+
+def test_tour_frame_candidates_sorts_unranked_frames_after_ranked_ones() -> None:
+    """A frame whose explain row carries no ``community_mass_rank`` -- an NA cell,
+    or a package whose explain group predates the column -- sorts after every
+    ranked frame instead of ahead of them (rank 0 would have been the effect of
+    a naive ``fillna(0)``)."""
+    explain = _tour_explain()
+    explain.loc[explain["sample_data_token"] == "night1", "community_mass_rank"] = pd.NA
+    candidates = tour_frame_candidates(
+        _tour_manifest(), explain, _tour_gt(), arm="graph_rate_night"
+    )
+    assert candidates == ["night2", "night0", "night3", "night1", "day2"]
+
+    without_column = _tour_explain().drop(columns=["community_mass_rank"])
+    # No ranks at all -> every night frame is unranked and the old pedestrian-first
+    # ordering is what remains.
+    assert tour_frame_candidates(
+        _tour_manifest(), without_column, _tour_gt(), arm="graph_rate_night"
+    ) == ["night3", "night1", "night2", "night0", "day2"]
 
 
 def test_tour_frame_candidates_empty_manifest_or_explain_is_empty_list() -> None:
     manifest, explain, gt = _tour_manifest(), _tour_explain(), _tour_gt()
     assert tour_frame_candidates(manifest.iloc[0:0], explain, gt, arm="graph_rate_night") == []
     assert tour_frame_candidates(manifest, explain.iloc[0:0], gt, arm="graph_rate_night") == []
+
+
+def test_tour_frame_candidates_without_al_selected_by_is_empty_list() -> None:
+    """A package whose ``frame_manifest`` predates ``al_selected_by`` has no way to
+    say which arm curated a frame, so the tour's arm-selected steps get no
+    candidates at all (and say so) rather than falling back to every frame."""
+    manifest = _tour_manifest().drop(columns=["al_selected_by"])
+    assert tour_frame_candidates(
+        manifest, _tour_explain(), _tour_gt(), arm="graph_rate_night"
+    ) == []

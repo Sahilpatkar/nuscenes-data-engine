@@ -332,7 +332,12 @@ def bar_chart(
     underscores spaced) -- a melted long table's value column is called "value",
     which names nothing. ``label_angle`` tilts the x labels; x labels are never
     truncated (``labelLimit=0``), since a clipped arm name ("weak_graph_rate...")
-    is not an identifier.
+    is not an identifier, and never DROPPED either (``labelOverlap=False``):
+    Streamlit's own Vega theme sets ``labelOverlap: true``, the "parity" strategy
+    that thins a crowded categorical axis by hiding every other label -- so a
+    13-arm chart silently rendered six unlabelled bars, and a viewer has no way to
+    tell an unlabelled bar from a missing one. Both axis defaults are about the
+    same promise: every bar on these charts names the arm it belongs to.
 
     ``mark`` draws the same encoding as a line instead of bars (``"line"``) -- the
     recorded chat agent's ``make_chart`` tool emits either kind (its own enum is
@@ -349,7 +354,7 @@ def bar_chart(
     if mark not in _MARKS:
         raise ValueError(f"bar_chart: unknown mark {mark!r} — expected one of {list(_MARKS)}")
     data = frame.copy()
-    axis_kwargs: dict[str, Any] = {"labelLimit": 0}
+    axis_kwargs: dict[str, Any] = {"labelLimit": 0, "labelOverlap": False}
     if label_angle is not None:
         axis_kwargs["labelAngle"] = label_angle
     axis_title = y.replace("_", " ") if y_title is None else y_title

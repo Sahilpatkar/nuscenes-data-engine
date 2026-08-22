@@ -178,6 +178,14 @@ def _render_night_inversion_callout(arms: pd.DataFrame) -> None:
     the two must always name the same arm. Skipped whenever that arm or its
     ``weak_<arm>`` twin isn't a row in THIS package's arm table, rather than
     guessed at.
+
+    Both superlatives are CHECKED against this package's own table before they are
+    written (Phase 9a review I1, the ``_night_rank_caption`` convention on the Weak
+    Supervision page): "best ... worst" is claimed only when the two arms really do
+    hold the max and the min of ``delta_night``. On any other package the same two
+    numbers are contrasted with no superlative in the sentence at all -- the point
+    (targeting night bought night; cheaper labels did not) survives without a rank
+    claim the table does not support.
     """
     night_arm = (load_overview().get("results") or {}).get("best_night_arm")
     if night_arm is None:
@@ -189,11 +197,23 @@ def _render_night_inversion_callout(arms: pd.DataFrame) -> None:
         return
     delta_night = float(night_rows.iloc[0]["delta_night"])
     weak_delta_night = float(weak_rows.iloc[0]["delta_night"])
+
+    ranked = arms.dropna(subset=["delta_night"])
+    best = ranked.loc[ranked["delta_night"].idxmax()]
+    worst = ranked.loc[ranked["delta_night"].idxmin()]
+    if str(best["arm"]) == night_arm and str(worst["arm"]) == weak_arm:
+        learned(
+            f"Targeting night bought night: `{night_arm}` ({delta_night:+.4f} night "
+            f"mAP50-95) is the best night arm of {len(arms)}, while its "
+            f"weak-supervised twin `{weak_arm}` ({weak_delta_night:+.4f}) is the "
+            "worst — the night gain came from the frames, not from cheaper labels."
+        )
+        return
     learned(
-        f"Targeting night bought night: `{night_arm}` ({delta_night:+.4f} night "
-        f"mAP50-95) is the best night arm of {len(arms)}, while its "
-        f"weak-supervised twin `{weak_arm}` ({weak_delta_night:+.4f}) is the "
-        "worst — the night gain came from the frames, not from cheaper labels."
+        f"Targeting night bought night: `{night_arm}` posts {delta_night:+.4f} night "
+        f"mAP50-95 against the baseline, while its weak-supervised twin "
+        f"`{weak_arm}` posts {weak_delta_night:+.4f} — the night gain came from the "
+        "frames, not from cheaper labels."
     )
 
 
@@ -387,7 +407,7 @@ def _render_selected_frame(
     if n_selected is not None and n_communities_validated is not None:
         provenance(
             "reproduced",
-            f"demo al-explain reproduced the run: {n_selected} frames, "
+            f"demo al-explain reproduced the run: {int(n_selected):,} frames, "
             f"{n_communities_validated} communities",
         )
 

@@ -332,10 +332,16 @@ def test_bar_chart_grouped_without_color_field_raises() -> None:
         bar_chart(quotas, x="community", y="frames", grouped=True, zero_line=False)
 
 
-def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
+def test_bar_chart_axis_labels_are_never_truncated_dropped_or_forced_flat() -> None:
     """13 arm names across ~1100 px were clipped to "weak_graph_rate..." -- an arm
     name is an identifier, and a clipped one names nothing (real-browser finding 2);
-    a melted table's "value" column names nothing either (finding 3)."""
+    a melted table's "value" column names nothing either (finding 3).
+
+    ``labelOverlap: False`` is the same promise against a different default (Phase
+    9a review 5b): Streamlit's Vega theme sets ``labelOverlap: true``, the "parity"
+    strategy that hides every other label on a crowded categorical axis, so half a
+    13-arm chart came out unlabelled -- and an unlabelled bar is indistinguishable
+    from a missing one."""
     from render import bar_chart
 
     encoding = bar_chart(
@@ -344,12 +350,14 @@ def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
     ).to_dict()["encoding"]
 
     assert encoding["x"]["axis"]["labelLimit"] == 0
+    assert encoding["x"]["axis"]["labelOverlap"] is False
     assert encoding["x"]["axis"]["labelAngle"] == -45
     assert encoding["y"]["title"] == "mAP50-95 gain over baseline"
 
-    # no angle asked for -> no labelAngle in the spec at all, but still no truncation
+    # no angle asked for -> no labelAngle in the spec at all, but still no
+    # truncation and still no thinning
     plain = bar_chart(_arms(), x="arm", y="delta_night", zero_line=False).to_dict()["encoding"]
-    assert plain["x"]["axis"] == {"labelLimit": 0}
+    assert plain["x"]["axis"] == {"labelLimit": 0, "labelOverlap": False}
     assert plain["y"]["title"] == "delta night"
 
 

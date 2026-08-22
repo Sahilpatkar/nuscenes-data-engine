@@ -929,6 +929,54 @@ def built_demo_data_without_explain(built_demo_data: Path) -> Path:
 
 
 @pytest.fixture()
+def built_demo_data_low_conf_hero(built_demo_data: Path) -> Path:
+    """The same package, with the arm's recovery of the hero frame's pedestrian
+    rewritten to the SHIPPED package's own shape: ``conf=0.135``, ``status
+    ="low_conf"`` -- a claim the matching rule counts as a hit and the tour's
+    confident-detection rule does not.
+
+    The base fixture makes that recovery a confident ``tp`` (conf 0.80), which is
+    the branch ``test_tour_result_screen`` pins: no honesty line, because the claim
+    isn't actually unsure. That left the TRUE side of every honesty branch
+    (``_hero_recovery_is_low_conf`` / ``_hero_recovery_conf`` / the step-1 fact
+    line's low_conf wording) untested even though it is what the real package
+    renders (Phase 9a review I4).
+
+    The rewritten row is found through the package's own tables -- the hero token
+    from ``overview_metrics.json``, the arm from ``al_exemplars.json``, and the
+    recovered box from ``gt_boxes``' matched columns -- rather than by hardcoding
+    "v0"/"a2", so this fixture keeps describing the same claim if the base fixture's
+    tokens ever change. Same edit-the-built-package idiom as
+    ``_add_weak_night_twin_arm``.
+    """
+    hero = str(json.loads((built_demo_data / "overview_metrics.json").read_text())["hero_token"])
+    arm = str(json.loads((built_demo_data / "al_exemplars.json").read_text())["arm"])
+
+    gt = pd.read_parquet(built_demo_data / "gt_boxes.parquet")
+    recovered = gt.loc[
+        (gt["sample_data_token"] == hero)
+        & (gt["category_group"] == "pedestrian")
+        & gt["matched_baseline"].eq(False).fillna(False)
+        & gt[f"matched_{arm}"].eq(True).fillna(False)
+    ]
+    assert not recovered.empty, "the fixture hero no longer carries a recovered pedestrian"
+    annotation = str(recovered.iloc[0]["annotation_token"])
+
+    path = built_demo_data / "predictions.parquet"
+    preds = pd.read_parquet(path)
+    claim = (
+        (preds["sample_data_token"] == hero)
+        & (preds["model"] == arm)
+        & (preds["matched_annotation_token"] == annotation)
+    )
+    assert bool(claim.any()), "no arm prediction claims the hero's recovered pedestrian"
+    preds.loc[claim, "conf"] = 0.135
+    preds.loc[claim, "status"] = "low_conf"
+    preds.to_parquet(path, index=False)
+    return built_demo_data
+
+
+@pytest.fixture()
 def built_demo_data_without_chat_replay(built_demo_data: Path) -> Path:
     """The same package with the recorded chat group removed -- the ordinary state
     of a fresh clone (`demo chat-record` is a paid, one-off run against a live
@@ -2018,30 +2066,39 @@ def test_overview_outcome_first(
     captions = [str(c.value) for c in at.caption]
     assert any("System loop" in c for c in captions)
 
-    # exactly the four flagship metric labels (a superset check -- the Dataset
-    # scale expander's own cards, incl. "Camera keyframes", are additional metrics
-    # elsewhere on the page).
-    labels = {str(m.label) for m in at.metric}
-    assert {
+    # The headline row IS the first four metrics on the page, in the documented
+    # order (Phase 9a review M8): a set/superset check passed just as happily when
+    # the row had five cards, or when the scale expander's cards came first.
+    # Everything after index 3 belongs to the "Dataset scale & data checks"
+    # expander, which AppTest walks into and flattens into the same list.
+    assert [str(m.label) for m in at.metric][:4] == [
         "Best night gain",
         "Night pedestrian mAP50-95",
         "Weak-sup share of GT gain",
         "Graph = SQL flagship",
-    } <= labels
+    ]
     metric_values = {str(m.label): str(m.value) for m in at.metric}
     assert metric_values["Camera keyframes"] == "3"   # still reachable, inside the expander
 
     expander_labels = [str(e.label) for e in at.get("expander")]
+    # "& data checks" (review M2): the CAN-speed correlation card in this drawer is
+    # a sanity check on the CAN join, not a scale figure.
+    assert "Dataset scale & data checks" in expander_labels
     assert "Architecture (for technical reviewers)" in expander_labels
     assert any("TRINITY" in text for text in markdowns)
 
     # the flagship/retention captions -- test_overview_page_renders_from_a_built_
     # package's and test_overview_footer_carries_the_credibility_statement's own
-    # pinned substrings, still present once moved inside the expander.
+    # pinned substrings. They are provenance about the headline cards, not
+    # architecture, so review M1 moved them into their own expander directly under
+    # those cards; AppTest walks into expanders, so both are still found here.
+    assert "Where these numbers come from" in expander_labels
     assert any("computed live against Neo4j at build time" in c for c in captions)
     assert any(
         "of the ground-truth mAP gain for the" in c and "headline)." in c for c in captions
     )
+    # named, not positional: the caption no longer sits under the card it is about.
+    assert any("The Weak-sup share of GT gain card is" in c for c in captions)
 
     # both footer sentences, unmoved.
     assert any(CREDIBILITY_STATEMENT in c for c in captions)
@@ -2455,11 +2512,12 @@ def test_tour_walks_steps_2_to_5(
     # the fixture arm table: baseline 100 -> graph_rate_night 120 train images, and
     # the arm's own mined-set composition (1 scene, all-night).
     assert [str(metric.label) for metric in at.metric] == [
-        "Frames mined", "Scenes covered", "Night share", "Training set",
+        "Frames mined", "Scenes covered", "Night share", "Training images",
     ]
-    assert [str(metric.value) for metric in at.metric] == [
-        "20", "1", "100%", "100 → 120 images",
-    ]
+    # "Training images" carries the noun, so the VALUE is just the two figures --
+    # 13 characters on the real package ("7,035 → 8,535"), which fits st.metric's
+    # narrow column instead of wrapping mid-arrow (Phase 9a review 5a).
+    assert [str(metric.value) for metric in at.metric] == ["20", "1", "100%", "100 → 120"]
     assert len(at.get("vega_lite_chart")) == 1
     assert any("recorded experiment output" in text for text in captions)
 
@@ -2544,24 +2602,28 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     assert not any("best overall arm" in text for text in markdowns)
 
     # (4) what failed -- the headline weak/GT pair's loss split (0.0018/0.01 =
-    # 18.0% retained, 50.0% dropped-frame, 32.0% label cost), the verifier's
-    # sparse-frame bias (3.00 vs 0.00 GT boxes/frame for "random"), and the worst
-    # night arm ("weak_random", the only non-"_gt" weak arm in this fixture)
+    # 18.0% retained, 50.0% dropped-frame, 32.0% label cost) and the same pair's
+    # sparse-frame bias (3.00 vs 0.00 GT boxes/frame for "random")
     assert any(
         "Weak (VLM-verified) labels kept 18.0% of the ground-truth gain for the "
         "`random` pair: 50.0% was lost with the frames the verifier dropped, "
         "32.0% to label noise on the ones it kept." in text
         for text in markdowns
     )
-    assert any(
+    # ONE sparse-frames sentence, about the headline pair only (review I7) -- the
+    # real package carries a weaksup row per weak arm, and the loop wrote the
+    # sentence once per row on a screen that answers one question in a few lines.
+    sparse = [text for text in markdowns if "The verifier kept sparse frames:" in text]
+    assert sparse == [
         "The verifier kept sparse frames: 3.00 vs 0.00 GT boxes per accepted vs "
-        "rejected frame (random)." in text
-        for text in markdowns
-    )
-    assert any(
-        "`weak_random` is the worst night result of the 5 arms (+0.0050)." in text
-        for text in markdowns
-    )
+        "rejected frame (random)."
+    ]
+    # No worst-night-arm sentence on THIS package (review I2): the superlative is
+    # computed over every arm, and the arm with the lowest delta_night here is
+    # `baseline` itself (+0.0000) -- not a weak-supervision result, so there is no
+    # honest "worst of the 5 arms" claim to make. The old code took the min over
+    # the weak arms alone and then called it worst of all five.
+    assert not any("worst night result" in text for text in markdowns)
     # the hero's own recovery is a confident tp in this fixture (conf 0.800), not
     # the low-confidence claim the shipped package's hero is -- the honesty line
     # must not fire on a claim that isn't actually low-confidence.
@@ -2582,6 +2644,223 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
         str(caption.value).startswith("Step 1 of 7 · The weakness: night")
         for caption in at.caption
     )
+
+
+def test_tour_result_screen_names_the_worst_night_arm_only_when_it_is_a_weak_one(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of review I2: give the package the real one's shape -- the
+    best night arm's own weak twin holding the LOWEST delta_night of every arm --
+    and the superlative sentence is written, naming that arm and the full arm count.
+
+    ``test_tour_result_screen`` pins the skip branch on the base fixture (whose
+    lowest delta_night is `baseline`'s own +0.0000), so between them both sides of
+    the check are covered.
+    """
+    pytest.importorskip("streamlit")
+    _add_weak_night_twin_arm(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "`weak_graph_rate_night` is the worst night result of the 6 arms (-0.0100)." in text
+        for text in markdowns
+    )
+
+
+def test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf(
+    built_demo_data_low_conf_hero: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review I4: on a package whose hero recovery is the shipped package's own
+    low-confidence claim, all three honesty branches fire -- step 2's fact line
+    names the status and the floor, step 6 carries ``_HERO_HONESTY_LINE``, and step
+    7's fourth answer states the confidence itself.
+
+    (Steps are 1-based here, as the viewer reads them: ``_walk_to_step`` takes the
+    0-based index.)
+    """
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data_low_conf_hero, monkeypatch)
+
+    # --- step 2: the per-model fact line says what kind of hit it is -------------
+    _walk_to_step(at, 1)
+    assert not at.exception
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "graph_rate_night: 0.135 (low_conf — below the 0.40 hit floor; the matching "
+        "rule still counts it as a hit)" in text
+        for text in markdowns
+    )
+
+    # --- step 6: the before/after table's own honesty line -----------------------
+    _walk_to_step(at, 4)
+    assert not at.exception
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "is a low-confidence claim and does not pass this table's "
+        "confident-detection rule" in text
+        for text in markdowns
+    )
+    # ... and, because that rule finds nothing to show, the empty-table note
+    assert any("no upgraded boxes on this frame" in str(c.value) for c in at.caption)
+
+    # --- step 7: "what failed along the way?" states the confidence ---------------
+    _walk_to_step(at, 1)
+    assert not at.exception
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135) "
+        "— counted as a hit by the matching rule, not a confident detection." in text
+        for text in markdowns
+    )
+
+
+def test_tour_step_4_says_flagship_and_rejected_when_the_frame_really_is(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review I3: the "why this frame was picked" step carries two CONDITIONAL
+    sentences -- the frame is itself a flagship event, and the weak verifier later
+    rejected it -- and on the real package the frame the new ordering lands on
+    (`0f70138f…`, flagship #12, later rejected) fires both. The base fixture fires
+    neither, so the package is given both properties here: its chosen frame is
+    added to the flagship preset's event rows, and its weak verdict is flipped to
+    "rejected".
+    """
+    pytest.importorskip("streamlit")
+    events_path = built_demo_data / "scenario_events.parquet"
+    events = pd.read_parquet(events_path)
+    flagship = events.loc[events["preset_rank_hard_braking_near_pedestrians"].notna()]
+    assert not flagship.empty
+    twin = flagship.iloc[[0]].copy()
+    twin["sample_data_token"] = "v0"
+    # rank 2, so the fixture's own s1 stays the top event step 3 opens on and this
+    # frame is genuinely the SECOND flagship event, not a duplicate of the first.
+    twin["preset_rank_hard_braking_near_pedestrians"] = 2
+    pd.concat([events, twin], ignore_index=True).to_parquet(events_path, index=False)
+
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    manifest.loc[manifest["sample_data_token"] == "v0", "weak_verdict"] = "rejected"
+    manifest.to_parquet(manifest_path, index=False)
+
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 3)
+    assert not at.exception
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "This frame is itself flagship event #2 — the scenario query and the "
+        "selection agree on it." in text
+        for text in markdowns
+    )
+    assert any(
+        "Later, the weak-supervision verifier rejected this frame as too crowded to "
+        "label automatically — step 7 shows why that matters." in text
+        for text in markdowns
+    )
+
+
+def test_tour_mined_event_caption_says_train_pool_when_the_package_carries_the_frame(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 5c: "no predictions on this frame" has two different reasons, and the
+    mined-event step now says which one applies.
+
+    The base fixture's flagship event ("s1") has no ``frame_manifest`` row at all --
+    the package carries the event and its thumbs, not the frame -- so it draws the
+    not-curated caption. Given a train-pool manifest row for the same token, the
+    frame IS in the package and was simply never a test image, which is the
+    train-pool note the Active Learning page shows for that case.
+    """
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 2)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any("not in the curated prediction set" in text for text in captions)
+    assert not any("train-pool frame" in text for text in captions)
+
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    # is_night is set (rather than left to concat's NaN fill) only to keep the
+    # column a real bool: an object-dtype is_night makes every .fillna(False) in the
+    # app emit a pandas downcasting FutureWarning that has nothing to do with this
+    # test. Everything else this row doesn't set is genuinely absent, as it would be
+    # for a frame the package carries no predictions or curation facts for.
+    extra = pd.DataFrame({
+        "sample_data_token": ["s1"], "split": ["train_pool"], "is_night": [False],
+    })
+    pd.concat([manifest, extra], ignore_index=True).to_parquet(manifest_path, index=False)
+
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 2)
+    assert not at.exception
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "train-pool frame — no predictions (models never saw it as a test image)" in text
+        for text in captions
+    )
+    assert not any("not in the curated prediction set" in text for text in captions)
+
+
+def _string_literals(path: Path) -> set[str]:
+    """Every string constant in one module's source, implicit concatenation folded
+    (the parser folds ``"a " "b"`` into one ``ast.Constant``) -- so a copied string
+    can be checked against a page even where the page spells it inline rather than
+    as a module constant."""
+    tree = ast.parse(path.read_text())
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review I6: ``views/tour.py`` deliberately COPIES nine strings from the two
+    pages its steps condense (it cannot import them -- they are module-private over
+    there, or inline) and its own header comment promises "a tour step must say
+    exactly what the deep page behind it says". Nothing enforced that promise, so a
+    reword on either side would silently drift the two apart. This test is the
+    enforcement: every copied string is compared to its source, by equality.
+    """
+    pytest.importorskip("streamlit")
+    import importlib
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    tour = importlib.import_module("views.tour")
+    scenarios = importlib.import_module("views.scenarios")
+    active_learning = importlib.import_module("views.active_learning")
+    try:
+        # (a) the strings the pages DO name -- compared attribute to attribute
+        assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
+        assert tour._EXPLAIN_ABSENT_NOTE == active_learning._EXPLAIN_ABSENT_NOTE
+        assert tour._EXPLAIN_FRAME_ABSENT_NOTE == active_learning._EXPLAIN_FRAME_ABSENT_NOTE
+        assert tour._TRAIN_POOL_NOTE == active_learning._TRAIN_POOL_NOTE
+
+        # (b) the ones the pages write inline -- compared against every string
+        # literal in the page's own source, which is the same equality check
+        # (`in` over a set of exact values, not a substring search).
+        scenario_strings = _string_literals(DEMO_DIR / "views" / "scenarios.py")
+        al_strings = _string_literals(DEMO_DIR / "views" / "active_learning.py")
+        assert tour._EVENTS_ABSENT_NOTE in scenario_strings
+        assert tour._OVERLAY_LEGEND in al_strings
+        assert tour._NO_EXEMPLAR_NOTE in al_strings
+        assert tour._NO_UPGRADED_BOXES_NOTE in al_strings
+
+        # (c) the filmstrip's own step columns and labels, in strip order: the
+        # Scenario page splits them either side of the current frame, which the
+        # tour flattens into one tuple with the event itself (column None) between.
+        page_steps = (
+            *scenarios._BEFORE_STEPS,
+            (None, scenarios._CURRENT_STEP),
+            *scenarios._AFTER_STEPS,
+        )
+        assert page_steps == tour._FILMSTRIP_STEPS
+    finally:
+        _reset_demo_app_modules()
 
 
 def test_tour_deep_link_buttons_set_state(
@@ -2829,9 +3108,13 @@ def test_learned_callouts_interpolate_numbers(
     text = [str(m.value) for m in at.markdown]
     # graph_rate_night is the fixture's own best-night arm (+0.0300 against
     # baseline, active_learning_results.parquet) -- test_active_learning_page_
-    # renders_story_chart_and_exemplar_table pins the same figure.
+    # renders_story_chart_and_exemplar_table pins the same figure. With the weak
+    # twin added it also holds the table's LOWEST delta_night, so both superlatives
+    # the sentence claims ("the best night arm of 6 ... is the worst") are true of
+    # this package and the sentence is written in full (review I1).
     assert any(
         "What we learned" in t and "+0.0300" in t and "`weak_graph_rate_night`" in t
+        and "is the best night arm of 6" in t and "(-0.0100) is the worst" in t
         for t in text
     )
 
@@ -2842,3 +3125,37 @@ def test_learned_callouts_interpolate_numbers(
     # test_weak_supervision_page_cards_decomposition_bias_and_tabs pins the same
     # figure.
     assert any("What we learned" in t and "18.0%" in t for t in text)
+
+
+def test_night_inversion_callout_drops_its_superlatives_when_the_table_disagrees(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review I1: the night-inversion callout claims TWO superlatives ("the best
+    night arm of N ... is the worst"). Both are checked against this package's own
+    arm table before they are written; when either is false the same two numbers
+    are contrasted with no rank claim at all, rather than a sentence the table
+    contradicts.
+
+    Here the weak twin is still the best-night arm's twin, but a third arm
+    (`random`, pushed to -0.0200) holds the table's lowest night delta -- so
+    "is the worst" would be false.
+    """
+    pytest.importorskip("streamlit")
+    _add_weak_night_twin_arm(built_demo_data)
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "random", "delta_night"] = -0.02
+    arms.to_parquet(path, index=False)
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    text = [str(m.value) for m in at.markdown]
+    learned = [t for t in text if "What we learned" in t and "Targeting night" in t]
+    assert len(learned) == 1
+    # the same two numbers, and the same point
+    assert "`graph_rate_night` posts +0.0300 night mAP50-95 against the baseline" in learned[0]
+    assert "`weak_graph_rate_night` posts -0.0100" in learned[0]
+    assert "the night gain came from the frames, not from cheaper labels" in learned[0]
+    # ... and neither superlative
+    assert "best night arm" not in learned[0]
+    assert "is the worst" not in learned[0]

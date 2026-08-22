@@ -2,9 +2,10 @@
 
 Phase 9a (spec §4): outcome-first. The page now leads with a CTA into the guided
 tour and the loop strip, keeps only four flagship metrics in the headline row, and
-folds the dataset-scale cards and the architecture restatement into two collapsed
-expanders — nothing on the page disappears, it just stops competing with the loop
-for the first screenful.
+folds everything else into three collapsed expanders — the headline cards'
+provenance ("Where these numbers come from", directly under them), the dataset-scale
+cards and CAN check, and the architecture restatement. Nothing on the page
+disappears, it just stops competing with the loop for the first screenful.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from render import draw_overlay, loop_breadcrumb, metric_cards, provenance
 from data import (
     crop_path,
     hero_path,
+    load_al_exemplars,
     load_al_results,
     load_gt_boxes,
     load_overview,
@@ -46,7 +48,17 @@ HERO_CAPTION = (
     "defeats all three models. Explore more in the Failure Explorer."
 )
 
-_ARM_TABLE_BASELINE = "baseline"
+
+def _baseline_arm() -> str:
+    """The arm table's own name for the un-mined checkpoint, read from
+    ``al_exemplars.json`` (which ``demo build`` writes both names into) exactly as
+    ``views/tour.py::_load`` reads it -- Phase 9a review M5, where this page instead
+    hardcoded "baseline" and would have silently compared against nothing on a
+    package that named its baseline anything else. "baseline" remains the fallback
+    for a package with no ``al_exemplars.json`` at all (the loader's own default is
+    ``None``), which is what every package built so far actually calls it."""
+    return str(load_al_exemplars().get("baseline") or "baseline")
+
 
 # docs/PROJECT.md §2 "Architecture", restated (and only restated -- no new
 # claims): the two-machine topology table, the component map as a compact bullet
@@ -112,7 +124,7 @@ def _night_pedestrian_card(arms: pd.DataFrame, arm_name: str | None) -> tuple[st
     the card entirely rather than showing "nan"."""
     if arm_name is None:
         return None
-    base_rows = arms.loc[arms["arm"] == _ARM_TABLE_BASELINE]
+    base_rows = arms.loc[arms["arm"] == _baseline_arm()]
     arm_rows = arms.loc[arms["arm"] == arm_name]
     if base_rows.empty or arm_rows.empty:
         return None
@@ -129,7 +141,7 @@ def _loop_beats(results: dict[str, Any], arms: pd.DataFrame) -> list[str | None]
     rather than a card reading "nan" (an arm table without the mined-set
     composition columns, or missing a row for the best-night arm)."""
     beats: list[str | None] = [None, None, None, None]
-    base_rows = arms.loc[arms["arm"] == _ARM_TABLE_BASELINE]
+    base_rows = arms.loc[arms["arm"] == _baseline_arm()]
     arm_name = results.get("best_night_arm")
     arm_rows = arms.loc[arms["arm"] == arm_name] if arm_name is not None else arms.iloc[:0]
 
@@ -217,33 +229,13 @@ def render() -> None:
     )
     provenance("recorded", "overview_metrics.json + active_learning_results.parquet")
 
-    if hero_path().is_file():
-        st.subheader("The model at work")
-        hero_token = metrics.get("hero_token")
-        overlay = _hero_overlay(hero_token) if hero_token else None
-        if overlay is not None:
-            st.image(overlay, caption=HERO_CAPTION)
-        else:
-            st.image(str(hero_path()), caption="Validation-batch predictions (baseline yolov8n)")
-        provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
-
-    with st.expander("Dataset scale"):
-        scale = metrics["scale"]
-        scale_cards = [
-            ("Camera keyframes", f"{scale['images']:,}"),
-            ("2D boxes", f"{scale['boxes_2d']:,}"),
-            ("3D object observations", f"{scale['objects_3d']:,}"),
-            ("CAN-bus rows", f"{scale['canbus_rows']:,}"),
-        ]
-        # The CAN card lives here unless it's already the headline row's
-        # pedestrian-card fallback (an older package with no night-pedestrian
-        # slice) -- never shown twice.
-        if ped_card is not None:
-            scale_cards.append(can_card)
-        metric_cards(scale_cards)
-
-    with st.expander("Architecture (for technical reviewers)"):
-        st.markdown(_ARCHITECTURE_MARKDOWN)
+    # Provenance, not architecture (Phase 9a review M1): these two captions say
+    # where the four cards just above come from and which pair the retention figure
+    # is about, so they belong under the cards -- collapsed, because a viewer who
+    # takes the numbers at face value should not have to read past them, and one
+    # who doesn't should not have to open a drawer labelled "Architecture" to find
+    # the answer.
+    with st.expander("Where these numbers come from"):
         # One decimal place here (39.4%, not 39%) to match the figure as documented in
         # docs/DEMO.md — the two must agree on the same rounding for the same number.
         other_pairs = ", ".join(
@@ -276,10 +268,45 @@ def render() -> None:
                 "the live-graph export lands."
             )
         st.caption(f"Best night arm: `{results['best_night_arm']}` · {flagship_note}")
+        # Named, not "the card above" (Phase 9a review M1): the caption no longer
+        # sits directly under that card, and a positional reference to a metric row
+        # is fragile even when it does.
         st.caption(
-            f"The card above is {retention_text} of the ground-truth mAP gain for the "
-            f"`{weak['headline_arm']}` pair (the documented headline). {other_pairs_note}"
+            f"The Weak-sup share of GT gain card is {retention_text} of the "
+            f"ground-truth mAP gain for the `{weak['headline_arm']}` pair (the "
+            f"documented headline). {other_pairs_note}"
         )
+
+    if hero_path().is_file():
+        st.subheader("The model at work")
+        hero_token = metrics.get("hero_token")
+        overlay = _hero_overlay(hero_token) if hero_token else None
+        if overlay is not None:
+            st.image(overlay, caption=HERO_CAPTION)
+        else:
+            st.image(str(hero_path()), caption="Validation-batch predictions (baseline yolov8n)")
+        provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
+
+    # "& data checks" (Phase 9a review M2): the CAN-speed correlation card below is
+    # not a scale figure, it is the CAN-bus sanity check the demo's Q5 answer points
+    # at -- the label has to cover both or the card is unfindable.
+    with st.expander("Dataset scale & data checks"):
+        scale = metrics["scale"]
+        scale_cards = [
+            ("Camera keyframes", f"{scale['images']:,}"),
+            ("2D boxes", f"{scale['boxes_2d']:,}"),
+            ("3D object observations", f"{scale['objects_3d']:,}"),
+            ("CAN-bus rows", f"{scale['canbus_rows']:,}"),
+        ]
+        # The CAN card lives here unless it's already the headline row's
+        # pedestrian-card fallback (an older package with no night-pedestrian
+        # slice) -- never shown twice.
+        if ped_card is not None:
+            scale_cards.append(can_card)
+        metric_cards(scale_cards)
+
+    with st.expander("Architecture (for technical reviewers)"):
+        st.markdown(_ARCHITECTURE_MARKDOWN)
 
     st.divider()
     st.caption(
