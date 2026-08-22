@@ -2045,14 +2045,20 @@ def test_chat_replay_page_renders_showcase_and_graded(
         for caption in captions
     )
 
-    # (1) cards: model + counts derived from the staged records (4 replays: 1
-    # showcase + 3 eval, of which 1 passed; steps: 2 SQL, 1 Cypher, 1 search, 1
+    # (1) cards: two cards only (a wider "Model"/"Tools exercised" value would
+    # truncate inside st.metric's large font -- consolidated review, real-browser
+    # finding) + counts derived from the staged records (4 replays: 1 showcase + 3
+    # eval, of which 1 passed; steps: 2 SQL, 1 Cypher, 1 search, 1 show_frames, 1
     # chart).
     metrics = {(str(m.label), str(m.value)) for m in at.metric}
-    assert ("Model", "claude-test") in metrics
     assert ("Questions recorded", "4") in metrics
     assert ("Graded pass rate", "1/3") in metrics
-    assert ("Tools exercised", "SQL 2 · Cypher 1 · search 1 · charts 1") in metrics
+    assert not any(label == "Model" for label, _ in metrics)
+    assert not any(label == "Tools exercised" for label, _ in metrics)
+    assert (
+        "Model `claude-test` · tools exercised: SQL 2 · Cypher 1 · "
+        "semantic search 1 · frames shown 1 · charts 1"
+    ) in captions
 
     # (2) the showcase replay: question, answer text, its chart and both frames.
     markdowns = [str(m.value) for m in at.markdown]

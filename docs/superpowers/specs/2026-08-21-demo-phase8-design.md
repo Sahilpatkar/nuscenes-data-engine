@@ -173,3 +173,8 @@ while that file exists. Python 3.11 is selected in the deploy form's advanced se
 Live chat on the public app; token-level streaming replay; local-model recordings;
 changes to the agent, the eval harness, or `app/streamlit_app.py`; Terraform; the
 `docs/DEMO_PLAN.md` wording (user's document).
+
+Amendment (2026-08-21): one scoped agent change landed — `_summarize` ordered
+`charted` before `note`, fixing chart steps that were summarised as "repeat
+(skipped)" since Phase 4 (surfaced by the recording); the shipped recording was
+re-run after the fix.

@@ -108,6 +108,7 @@ def _render_charts(replay: dict[str, Any]) -> None:
                 y=columns[1],
                 title=str(chart.get("title") or ""),
                 mark="line" if chart.get("kind") == "line" else "bar",
+                label_angle=-30,
             ),
             width="stretch",
         )
@@ -179,16 +180,19 @@ def _render_header(replays: list[dict[str, Any]], summary: dict[str, Any]) -> No
         if isinstance(replay.get("checks"), dict) and replay["checks"].get("passed")
     )
     counts = replay_tool_counts(replays)
+    # Two cards only: "Model" (e.g. "claude-opus-4-8") and "Tools exercised"
+    # ("SQL 27 · Cypher 1 · …") both overflowed st.metric's large-font value box, so
+    # those figures move to a plain caption line below instead (consolidated
+    # review, real-browser finding).
     metric_cards([
-        ("Model", model),
         ("Questions recorded", str(len(replays))),
         ("Graded pass rate", f"{n_passed}/{len(graded)}"),
-        (
-            "Tools exercised",
-            f"SQL {counts['run_sql']} · Cypher {counts['run_cypher']} · "
-            f"search {counts['search_frames']} · charts {counts['charts']}",
-        ),
     ])
+    st.caption(
+        f"Model `{model}` · tools exercised: SQL {counts['run_sql']} · "
+        f"Cypher {counts['run_cypher']} · semantic search {counts['search_frames']} · "
+        f"frames shown {counts['show_frames']} · charts {counts['charts']}"
+    )
     st.caption(
         "The pass rate covers the graded cases only — the showcase questions below "
         "are demonstrations and were never graded."
