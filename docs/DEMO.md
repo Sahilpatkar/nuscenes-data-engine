@@ -40,7 +40,7 @@ output, row counts). It **fails loudly** — no manifest is written — if:
   not sum to `n_mine`,
 - a staged `al_explain/` group is partial, belongs to another arm, or did not record
   `selected_match` and `communities_match` as true, or
-- the package exceeds the size budget (100 MB; currently 25.03 MB).
+- the package exceeds the size budget (100 MB; currently 25.43 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -87,7 +87,7 @@ manifest always names the commit it was built from, not the one that carries it.
 | `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
-| `sample_frames/thumbs/` | 617 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch) |
+| `sample_frames/thumbs/` | 659 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch + 42 frames retrieved in the recorded chat session) |
 | `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set` |
 | `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, sample_data_token, score, k — k drives the gallery's "n of k" caption) |
 | `graph_subgraphs/<preset>.json` | 6 presets × per-event subgraphs from the live graph: nodes (`on_path` flag + properties), edges, the matched path (nearest matching object first), off-path observations capped at the nearest 12; plus the preset's count Cypher and `sql_count` / `cypher_count` / `parity` on the full keyframe population (model presets: `cypher_count` null — their verdict comes from predictions, not the graph) |
@@ -320,6 +320,17 @@ questions — at **≈ $4 at Opus list price**. It stages
 `data/demo_curation/chat_replays/`; `demo build` validates and copies both files into
 `demo_data/` and exports a thumbnail for every retrieved frame.
 
+**The shipped recording** (`chat_replay_summary.json`, 2026-08-21, `claude-opus-4-8`):
+25 replays — 5 showcase (chart, Cypher, semantic search, frames, slices; every
+expectation met) and 20 graded, **18/20 passed**; the two misses
+(`labels_parse_ok_count`, `max_instance_keyframes`) failed the `grounded` check, the
+same failure mode the earlier documented run had, and are shown on the page as such.
+42 distinct frames were retrieved, 210 s of agent time, no errors. It was recorded
+twice: the first run (19/20) exposed a Phase-4 bug in the agent's step summary (every
+successful `make_chart` step read "repeat (skipped)"), fixed in this phase, and the
+run was repeated so the shipped steps read "charted: …" as they should — roughly
+$8 of Claude API in total.
+
 **What gets recorded.** Two question sets, answered in one session:
 
 - **Graded** — the cases of `configs/chat_eval.yaml`, run and graded by the chat-eval
@@ -433,16 +444,16 @@ deployed URL.
 
 | # | Question (DEMO_PLAN.md) | Page | Section / element that answers it | Status |
 |---|---|---|---|---|
-| 1 | What problem does the project solve? | Overview | the mission blockquote under the title, then **Scale** and **Headline results** cards | local: pending · live: pending |
-| 2 | Where does the baseline perception model fail? | Failure Explorer (+ Overview) | the sidebar filters (lighting, rain, model, class, size bucket, distance, failure type, curation bucket) over the 125 val frames, and **Detail**'s GT / Predictions / Overlay toggle; Overview's **The model at work** hero shows one such miss | local: pending · live: pending |
-| 3 | How does the system find difficult data? | Scenario Search | the six **preset** buttons + ranked card grid, and **Recorded semantic search** | local: pending · live: pending |
-| 4 | Why is the graph useful? | Scenario Search | each preset header's SQL/Cypher **parity line** (flagship 30 = 30), and the event viewer's **Interactive graph** panel with the matched path | local: pending · live: pending |
-| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r) | local: pending · live: pending |
-| 6 | How does active learning choose frames? | Active Learning | **How `graph_rate_night` chooses: community mass → quota**, then **Why was this frame selected?** per-frame factor panel | local: pending · live: pending |
-| 7 | Did targeted retraining improve performance? | Active Learning | the story's **Result** beat, **Every arm, one chart** (13 arms in round order), and **Before / after** exemplars | local: pending · live: pending |
-| 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: pending · live: pending |
-| 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost) and **What the verifier's rule selects for** (the crowding bias) | local: pending · live: pending |
-| 10 | How does the project form a closed model-improvement loop? | Active Learning + Weak Supervision (+ Overview) | the two story-arrow narratives — Problem → Hypothesis → Acquisition → Training → Evaluation → Result, and Hypothesis → Labelling → Verification → Training → Result — closed by Overview's footer credibility statement | local: pending · live: pending |
+| 1 | What problem does the project solve? | Overview | the mission blockquote under the title, then **Scale** and **Headline results** cards | local: 2026-08-21 · live: pending |
+| 2 | Where does the baseline perception model fail? | Failure Explorer (+ Overview) | the sidebar filters (lighting, rain, model, class, size bucket, distance, failure type, curation bucket) over the 125 val frames, and **Detail**'s GT / Predictions / Overlay toggle; Overview's **The model at work** hero shows one such miss | local: 2026-08-21 · live: pending |
+| 3 | How does the system find difficult data? | Scenario Search | the six **preset** buttons + ranked card grid, and **Recorded semantic search** | local: 2026-08-21 · live: pending |
+| 4 | Why is the graph useful? | Scenario Search | each preset header's SQL/Cypher **parity line** (flagship 30 = 30), and the event viewer's **Interactive graph** panel with the matched path | local: 2026-08-21 · live: pending |
+| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r) | local: 2026-08-21 · live: pending |
+| 6 | How does active learning choose frames? | Active Learning | **How `graph_rate_night` chooses: community mass → quota**, then **Why was this frame selected?** per-frame factor panel | local: 2026-08-21 · live: pending |
+| 7 | Did targeted retraining improve performance? | Active Learning | the story's **Result** beat, **Every arm, one chart** (13 arms in round order), and **Before / after** exemplars | local: 2026-08-21 · live: pending |
+| 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: 2026-08-21 · live: pending |
+| 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-21 · live: pending |
+| 10 | How does the project form a closed model-improvement loop? | Active Learning + Weak Supervision (+ Overview) | the two story-arrow narratives — Problem → Hypothesis → Acquisition → Training → Evaluation → Result, and Hypothesis → Labelling → Verification → Training → Result — closed by Overview's footer credibility statement | local: 2026-08-21 · live: pending |
 
 ## Dataset attribution & license
 
