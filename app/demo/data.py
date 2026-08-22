@@ -16,6 +16,12 @@ _DEFAULT_DEMO_DATA = Path(__file__).resolve().parents[2] / "demo_data"
 DEMO_DATA = Path(os.environ.get("DEMO_DATA_DIR", str(_DEFAULT_DEMO_DATA)))
 
 
+# The one note every Phase-7 section shows when the committed package predates the
+# tables it reads (consolidated review M6 -- it was a private constant duplicated
+# verbatim in both Phase-7 views).
+STALE_PACKAGE_NOTE = "needs demo_data >= 0.6 (the Phase-7 tables) — rerun `demo build`"
+
+
 def package_missing() -> bool:
     return not (DEMO_DATA / "manifest.json").is_file()
 
@@ -129,12 +135,179 @@ def load_subgraphs(preset: str) -> dict[str, Any] | None:
     return data
 
 
+# --- Phase 7: the Active Learning tables ------------------------------------------
+#
+# al_communities.parquet and al_exemplars.json are written by every `demo build`
+# from package_version 0.6 on; al_selection_explain.parquet /
+# al_explain_validation.json only when `demo al-explain` (Neo4j + GDS + LanceDB)
+# staged them, which a fresh clone never has (manifest.json's validation.al_explain
+# == "absent"). All four load through load_semsearch's graceful-absence pattern --
+# an older/stale committed package must render the page, just with the sections
+# that have no data saying so, rather than a bare FileNotFoundError.
+
+_EMPTY_COMMUNITY_COLUMNS = [
+    "community", "size", "night_members", "mass",
+    "quota_graph_rate", "quota_graph_rate_night", "is_backfill",
+]
+
+_EMPTY_EXPLAIN_COLUMNS = [
+    "sample_data_token", "arm", "is_night", "scene_name", "community",
+    "community_size", "community_night_members", "community_mass",
+    "community_mass_rank", "community_quota", "degree", "degree_rank_in_community",
+    "pick_pass", "n_failures_routed", "mass_routed",
+]
+
+
+@st.cache_data
+def load_al_communities() -> pd.DataFrame:
+    """The 97 Louvain communities with each arm's quota, or an empty frame."""
+    path = DEMO_DATA / "al_communities.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_COMMUNITY_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_al_exemplars() -> dict[str, Any]:
+    """`al_exemplars.json`'s {arm, baseline, tokens}, or empty defaults."""
+    path = DEMO_DATA / "al_exemplars.json"
+    if not path.is_file():
+        return {"arm": None, "baseline": None, "tokens": []}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+def _al_explain_path() -> Path:
+    return DEMO_DATA / "al_selection_explain.parquet"
+
+
+def al_explain_available() -> bool:
+    """Whether `demo al-explain`'s per-frame selection facts shipped in this
+    package -- checked BEFORE the "why was this frame selected?" panel claims
+    anything, so an absent group draws the honest note instead (spec §3d)."""
+    return _al_explain_path().is_file()
+
+
+@st.cache_data
+def load_al_explain() -> pd.DataFrame:
+    path = _al_explain_path()
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_EXPLAIN_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_al_explain_validation() -> dict[str, Any]:
+    """The re-derivation's own validation record (night floor, pass sizes, GDS
+    version), or an empty dict when the group is absent."""
+    path = DEMO_DATA / "al_explain_validation.json"
+    if not path.is_file():
+        return {}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+# --- Phase 7: the Weak Supervision tables -----------------------------------------
+#
+# weak_loss_decomposition.parquet and weak_verifier_by_class.parquet ship with every
+# `demo build` from package_version 0.6 on; weak_labels.parquet and vlm_counts.parquet
+# only when the curation group was staged (build.py's `_include_curation` branch --
+# they are the curated weak frames' pseudo boxes and VLM count votes). All four load
+# through load_semsearch's graceful-absence pattern, so an older/stale committed
+# package renders the page with the sections that have no data saying so, rather than
+# a bare FileNotFoundError.
+
+_EMPTY_WEAK_LOSS_COLUMNS = [
+    "base_arm", "gt_gain", "weak_gt_gain", "weak_gain", "retention",
+    "dropped_frame_cost", "dropped_frame_share", "label_cost", "label_share", "headline",
+]
+
+_EMPTY_WEAK_BY_CLASS_COLUMNS = [
+    "arm", "category_group", "n_rejected_disagreements",
+    "n_accepted_mutual_zero", "mutual_zero_share",
+]
+
+_EMPTY_WEAK_LABELS_COLUMNS = [
+    "sample_data_token", "category_group", "x_min", "y_min", "x_max", "y_max", "score",
+]
+
+_EMPTY_VLM_COUNTS_COLUMNS = [
+    "sample_data_token", "parse_status", "label_confidence", "vlm_time_of_day",
+    "vlm_weather", "vlm_car", "vlm_truck", "vlm_bus", "vlm_pedestrian", "vlm_bicycle",
+    "gt_car", "gt_truck", "gt_bus", "gt_pedestrian", "gt_bicycle",
+]
+
+
+@st.cache_data
+def load_weak_loss() -> pd.DataFrame:
+    """Each weak/GT pair's gain split (retained / dropped-frame / label cost)."""
+    path = DEMO_DATA / "weak_loss_decomposition.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_LOSS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_weak_by_class() -> pd.DataFrame:
+    """The verifier's per-class rejected disagreements and mutual-zero shares."""
+    path = DEMO_DATA / "weak_verifier_by_class.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_BY_CLASS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_weak_labels() -> pd.DataFrame:
+    """The curated accepted frames' verified pseudo boxes (native 1600x900 coords).
+
+    An accepted frame with no rows here is the mutual-zero case (the verifier
+    accepted zero VLM-counted objects against zero detector boxes -- the VLM emits
+    per-class counts, never boxes), not missing data --
+    ``filters.weak_frame_summary`` is what turns that absence into a label.
+    """
+    path = DEMO_DATA / "weak_labels.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_WEAK_LABELS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_vlm_counts() -> pd.DataFrame:
+    """One row per curated frame carrying a weak verdict: the VLM's per-class counts
+    next to GT's.
+
+    Scoped to ``frame_manifest.weak_verdict`` (78 frames in the shipped package),
+    which is exactly what the page's accepted/rejected tabs render -- consolidated
+    review I1; it used to be scoped to the two curation buckets (40), leaving 38
+    rendered frames without a row.
+    """
+    path = DEMO_DATA / "vlm_counts.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_VLM_COUNTS_COLUMNS)
+    return pd.read_parquet(path)
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 
 
 def crop_path(token: str) -> Path:
     return DEMO_DATA / "sample_frames" / "crops" / f"{token}.jpg"
+
+
+def frame_image_path(token: str) -> Path | None:
+    """The best available gallery image for a token -- thumb first (galleries are
+    grids of small images), crop as the fallback, ``None`` when the package carries
+    neither.
+
+    Shared by the Active Learning and Weak Supervision galleries (consolidated
+    review M6 -- it was duplicated verbatim in both views).
+    """
+    thumb = thumb_path(token)
+    if thumb.is_file():
+        return thumb
+    crop = crop_path(token)
+    return crop if crop.is_file() else None
 
 
 def thumb_path(token: str) -> Path:

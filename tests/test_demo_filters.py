@@ -13,18 +13,25 @@ sys.path.insert(0, str(APP_DEMO))
 
 from filters import (  # noqa: E402
     braking_caption,
+    community_jump,
     confidence_caption,
+    crowding_long,
     distance_caption,
     failure_counts,
     failure_flags,
     filter_frames,
+    fixed_boxes,
     graph_node_label,
+    loss_long,
+    model_label,
     parity_caption,
     rank_events,
+    selection_factors,
     severity_caption,
     sort_frames,
     speed_caption,
     subgraph_narrative,
+    weak_frame_summary,
 )
 
 
@@ -604,3 +611,398 @@ def test_parity_caption_parity_none_draws_no_symbol() -> None:
     presets never call this) draws no ✓/✗ symbol at all, rather than being
     called a mismatch by default."""
     assert parity_caption(3, None, None, 1) == "3 matching keyframes dataset-wide — Cypher None · SQL 3 · showing the top 1"
+
+
+# --- Phase 7 (Task 4): Active Learning page helpers ------------------------------
+
+
+def _exemplar_frame() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One val frame's visible/invisible GT boxes and both models' predictions.
+
+    Five GT boxes, one per case ``fixed_boxes`` has to decide:
+      g1  baseline never claims it, the arm detects it (tp 0.61)      -> a row
+      g2  baseline only claims it at low confidence (0.22), arm tp    -> a row
+      g3  baseline already detects it (tp)                            -> excluded
+      g4  the arm itself only claims it at low confidence             -> excluded
+      g5  the arm never claims it at all                              -> excluded
+      g6  the arm detects it, but the box is below the visibility floor -> excluded
+    """
+    gt = pd.DataFrame({
+        "annotation_token": ["g1", "g2", "g3", "g4", "g5", "g6"],
+        "category_group": ["pedestrian", "car", "car", "truck", "bus", "pedestrian"],
+        "distance_to_ego_m": [26.3, 11.2, 5.0, 40.0, 60.0, 8.0],
+        "below_visibility_min": [False, False, False, False, False, True],
+    })
+    preds = pd.DataFrame({
+        "model": [
+            "baseline", "graph_rate_night",
+            "baseline", "graph_rate_night",
+            "baseline", "graph_rate_night",
+            "baseline", "graph_rate_night",
+            "baseline",
+            "graph_rate_night",
+        ],
+        "status": [
+            "fp", "tp",              # g1: baseline has no matched claim at all
+            "low_conf", "tp",        # g2
+            "tp", "tp",              # g3
+            "low_conf", "low_conf",  # g4
+            "low_conf",              # g5: arm never claims it
+            "tp",                    # g6: below the visibility floor
+        ],
+        "conf": [0.51, 0.61, 0.22, 0.58, 0.9, 0.92, 0.11, 0.19, 0.15, 0.77],
+        "matched_annotation_token": [
+            None, "g1", "g2", "g2", "g3", "g3", "g4", "g4", "g5", "g6",
+        ],
+    })
+    return gt, preds
+
+
+def test_fixed_boxes_rows_baseline_none_or_low_conf_to_arm_tp() -> None:
+    """Only a real upgrade is a row: the arm detects the box (``tp``) where the
+    baseline either never claimed it ("none") or only claimed it below the
+    confidence floor ("low-conf 0.22"). A box both models detect, a box the arm
+    itself is unsure about, and a box below the visibility floor are all excluded
+    -- the page must never present those as "fixed"."""
+    gt, preds = _exemplar_frame()
+
+    table = fixed_boxes(gt, preds, baseline="baseline", arm="graph_rate_night")
+
+    assert list(table.columns) == [
+        "annotation_token", "category_group", "distance_to_ego_m",
+        "baseline_claim", "arm_claim",
+    ]
+    assert list(table["annotation_token"]) == ["g2", "g1"]         # sorted by distance
+    assert list(table["distance_to_ego_m"]) == [11.2, 26.3]
+    assert list(table["category_group"]) == ["car", "pedestrian"]
+    assert list(table["baseline_claim"]) == ["low-conf 0.22", "none"]
+    assert list(table["arm_claim"]) == ["0.58", "0.61"]
+
+
+def test_fixed_boxes_is_empty_when_nothing_was_upgraded() -> None:
+    """A frame where the baseline already caught everything yields an empty table
+    with the same columns -- the page renders "no upgraded boxes", not a crash."""
+    gt, preds = _exemplar_frame()
+    # Give the baseline a confident claim on every box the arm claims (not just a
+    # status flip: g1's baseline row carries no matched_annotation_token at all, so
+    # flipping its status would leave g1 unclaimed and still an upgrade).
+    arm_rows = preds.loc[preds["model"] == "graph_rate_night"]
+    caught = pd.concat([preds, arm_rows.assign(model="baseline", status="tp")], ignore_index=True)
+
+    table = fixed_boxes(gt, caught, baseline="baseline", arm="graph_rate_night")
+
+    assert table.empty
+    assert "arm_claim" in table.columns
+
+
+def _communities() -> pd.DataFrame:
+    return pd.DataFrame({
+        "community": [-1, 10301, 205, 77],
+        "size": [12, 916, 916, 40],
+        "night_members": [12, 916, 300, 40],
+        "mass": [0.0, 395.19, 500.0, 12.0],
+        "quota_graph_rate": [0, 83, 120, 9],
+        "quota_graph_rate_night": [0, 323, 90, 30],
+        "is_backfill": [True, False, False, False],
+    })
+
+
+def test_community_jump_finds_largest_all_night_community() -> None:
+    """The caption's number: the LARGEST community whose members are all night
+    frames, and what the night floor did to its quota. Community 205 is heavier
+    (mass 500 vs 395) and the same size but only 300/916 night members (not
+    all-night); community 77 IS all-night but smaller; the backfill sentinel (-1) is
+    all-night by construction and is never a community.
+    """
+    jump = community_jump(
+        _communities(), before="quota_graph_rate", after="quota_graph_rate_night"
+    )
+
+    assert jump is not None
+    assert jump["community"] == 10301
+    assert jump["size"] == 916
+    assert jump["quota_before"] == 83
+    assert jump["quota_after"] == 323
+    assert jump["ratio"] == pytest.approx(323 / 83)
+
+
+def test_community_jump_returns_none_without_an_all_night_community() -> None:
+    mixed = _communities()
+    real = mixed["community"] >= 0
+    mixed.loc[real, "night_members"] = mixed.loc[real, "size"] - 1
+
+    assert community_jump(
+        mixed, before="quota_graph_rate", after="quota_graph_rate_night"
+    ) is None
+
+
+def _explain_row() -> dict[str, object]:
+    return {
+        "sample_data_token": "t0",
+        "arm": "graph_rate_night",
+        "is_night": True,
+        "scene_name": "scene-1071",
+        "community": 10301,
+        "community_size": 916,
+        "community_night_members": 916,
+        "community_mass": 395.19,
+        "community_mass_rank": 2,
+        "community_quota": 323,
+        "degree": 41.0,
+        "degree_rank_in_community": 3,
+        "pick_pass": "night",
+        "n_failures_routed": 0,
+        "mass_routed": 0.0,
+    }
+
+
+def test_selection_factors_from_explain_row() -> None:
+    """The "why was this frame selected?" panel, in the order the mechanism runs:
+    night, community, that community's failure mass and quota, which pass took the
+    frame, its rank inside the community -- and, LAST and explicitly not the
+    reason, whether any failure mass was routed to this frame itself."""
+    factors = selection_factors(_explain_row(), n_communities=97, night_floor=375)
+
+    assert factors == [
+        ("Night frame", "yes", True),
+        ("Community", "#10301 · 916 frames · 916 at night", None),
+        ("Community failure mass", "395.19 (rank 2 of 97)", None),
+        ("Community quota", "323 frames", None),
+        ("Picked in", "night pass (night floor 375)", None),
+        ("Similarity-degree rank", "3rd of 916", None),
+        ("Routed failures", "none — not itself a routing target", None),
+    ]
+
+
+def test_selection_factors_zero_mass_community_names_the_floor() -> None:
+    """A community with no routed failure mass still mines one frame -- that quota
+    came from select_by_mass's per-community FLOOR, not from mass. Printed as a
+    bare "1 frame" under "Community failure mass: 0.00 (rank 81 of 97)" it reads as
+    a quota the mass bought (consolidated review I3: 6 of the 78 gallery frames sit
+    in zero-mass communities).
+    """
+    row = {
+        **_explain_row(),
+        "community_mass": 0.0,
+        "community_mass_rank": 81,
+        "community_quota": 1,
+        "pick_pass": "main",
+    }
+    factors = dict((label, value) for label, value, _flag in selection_factors(row, n_communities=97))
+
+    assert factors["Community failure mass"] == "0.00 (rank 81 of 97)"
+    assert factors["Community quota"] == (
+        "1 frame (per-community floor — this community drew no routed failure mass)"
+    )
+    # a community that DID draw mass still just states its quota
+    assert dict(
+        (label, value) for label, value, _flag in selection_factors(
+            {**row, "community_mass": 12.5}, n_communities=97
+        )
+    )["Community quota"] == "1 frame"
+
+
+def test_ordinal_suffixes_including_the_teens() -> None:
+    """1st/2nd/3rd/4th, the 11-13 exception, and the same exception a century up."""
+    from filters import _ordinal
+
+    assert [_ordinal(n) for n in (1, 2, 3, 4)] == ["1st", "2nd", "3rd", "4th"]
+    assert [_ordinal(n) for n in (11, 12, 13)] == ["11th", "12th", "13th"]
+    assert [_ordinal(n) for n in (21, 101, 111)] == ["21st", "101st", "111th"]
+
+
+def test_visible_gt_and_gt_for_render_are_shared_by_both_phase_7_pages() -> None:
+    """One frame's GT rows, visibility-floor rows dropped, and the ``matched``
+    column draw_overlay reads -- shared helpers now, not a copy per page
+    (consolidated review M6).
+
+    ``model=None`` (the Weak Supervision page: train-pool frames nothing evaluated)
+    yields an all-NA ``matched``, which draw_overlay renders as plain GT rather than
+    as misses.
+    """
+    from filters import gt_for_render, visible_gt
+
+    gt = pd.DataFrame({
+        "sample_data_token": ["v0", "v0", "v1"],
+        "annotation_token": ["a1", "a2", "a3"],
+        "below_visibility_min": [False, True, False],
+        "matched_baseline": pd.array([True, False, True], dtype="boolean"),
+    })
+
+    rows = visible_gt(gt, "v0")
+    assert list(rows["annotation_token"]) == ["a1"]        # a2 is under the floor
+    # an older package without the column keeps every row rather than raising
+    assert len(visible_gt(gt.drop(columns=["below_visibility_min"]), "v0")) == 2
+
+    assert list(gt_for_render(rows, "baseline")["matched"]) == [True]
+    unevaluated = gt_for_render(rows)
+    assert unevaluated["matched"].dtype == "boolean"
+    assert unevaluated["matched"].isna().all()
+    # a model this package has no column for is "not evaluated", not "missed"
+    assert gt_for_render(rows, "champion")["matched"].isna().all()
+
+
+def test_selection_factors_main_pass_day_frame_with_routed_mass() -> None:
+    """The other side of every branch: a day frame taken by the main pass, with
+    failure mass actually routed to it (the sparse case -- 251 of the 1500 selected
+    frames), and no night floor known (the explain group's validation JSON absent)."""
+    row = {
+        **_explain_row(),
+        "is_night": False,
+        "pick_pass": "main",
+        "degree_rank_in_community": 21,
+        "n_failures_routed": 4,
+        "mass_routed": 12.34,
+    }
+
+    factors = dict((label, value) for label, value, _flag in selection_factors(row, n_communities=97))
+
+    assert factors["Night frame"] == "no"
+    assert factors["Picked in"] == "main pass"
+    assert factors["Similarity-degree rank"] == "21st of 916"
+    assert factors["Routed failures"] == "4 failures, mass 12.3"
+
+
+def test_selection_factors_backfill_and_missing_ranks() -> None:
+    """A frame the night backfill drew from outside every community: community -1,
+    NA mass/degree ranks. The panel says so rather than printing "<NA>"."""
+    row = {
+        **_explain_row(),
+        "community": -1,
+        "community_size": 12,
+        "community_night_members": 12,
+        "community_mass": 0.0,
+        "community_mass_rank": pd.NA,
+        "community_quota": 0,
+        "degree": float("nan"),
+        "degree_rank_in_community": pd.NA,
+        "pick_pass": "backfill",
+        "n_failures_routed": 1,
+        "mass_routed": 0.5,
+    }
+
+    factors = dict((label, value) for label, value, _flag in selection_factors(row, n_communities=97))
+
+    assert factors["Picked in"] == "seeded backfill"
+    assert factors["Community failure mass"] == "0.00 (rank n/a of 97)"
+    assert factors["Similarity-degree rank"] == "n/a"
+    assert factors["Routed failures"] == "1 failure, mass 0.5"
+
+
+def test_model_label_names_the_champion_checkpoint_honestly() -> None:
+    """"champion" is the yolov8m @960 checkpoint from the Phase-3 model comparison,
+    not an active-learning arm and not the best AL result (that is `graph`,
+    +0.0344 overall) -- wherever it appears it is labelled as the model-size
+    champion it actually is. Every other model keeps its own name."""
+    assert model_label("champion") == "champion (yolov8m @960)"
+    assert model_label("baseline") == "baseline"
+    assert model_label("graph_rate_night") == "graph_rate_night"
+
+
+# --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
+
+
+def _vlm_rows(n: int) -> pd.DataFrame:
+    """``n`` of one token's weak_labels.parquet rows."""
+    return pd.DataFrame({
+        "sample_data_token": ["wA"] * n,
+        "category_group": ["car"] * n,
+        "x_min": [50.0] * n, "y_min": [50.0] * n,
+        "x_max": [150.0] * n, "y_max": [150.0] * n,
+        "score": [0.73] * n,
+    })
+
+
+def _counts_row() -> dict[str, object]:
+    """One vlm_counts.parquet row (exporters.export_vlm_counts' own columns)."""
+    return {
+        # label_confidence is the VLM's own STRING enum ("high"/"low"), never a
+        # float (consolidated review C1).
+        "sample_data_token": "wA", "parse_status": "ok", "label_confidence": "high",
+        "vlm_time_of_day": "night", "vlm_weather": "clear",
+        "vlm_car": 2.0, "vlm_truck": 0.0, "vlm_bus": 0.0,
+        "vlm_pedestrian": 1.0, "vlm_bicycle": 0.0,
+        "gt_car": 2, "gt_truck": 0, "gt_bus": 1, "gt_pedestrian": 1, "gt_bicycle": 0,
+    }
+
+
+def test_weak_frame_summary_flags_mutual_zero_and_counts() -> None:
+    """The verdict badge and the VLM-vs-GT count table for one curated frame.
+
+    "accepted" with zero pseudo boxes is the MUTUAL-ZERO case (the verifier
+    agreed with the detector that the frame holds none of the five classes), a
+    materially different claim from "accepted, here are its boxes" -- and
+    "rejected" never has boxes at all, by construction.
+    """
+    accepted = weak_frame_summary("accepted", _vlm_rows(2), _counts_row())
+    assert accepted["mutual_zero"] is False
+    assert accepted["verdict_label"] == "accepted — 2 pseudo boxes"
+    assert weak_frame_summary("accepted", _vlm_rows(1), _counts_row())["verdict_label"] == (
+        "accepted — 1 pseudo box"
+    )
+
+    table = accepted["table"]
+    assert list(table.columns) == ["class", "vlm_count", "gt_count"]
+    assert list(table["class"]) == ["car", "truck", "bus", "pedestrian", "bicycle"]
+    assert list(table["vlm_count"]) == ["2", "0", "0", "1", "0"]
+    assert list(table["gt_count"]) == ["2", "0", "1", "1", "0"]
+
+    mutual = weak_frame_summary("accepted", _vlm_rows(0), _counts_row())
+    assert mutual["mutual_zero"] is True
+    assert mutual["verdict_label"] == "accepted — 0 pseudo boxes (mutual zero)"
+
+    rejected = weak_frame_summary("rejected", _vlm_rows(0), _counts_row())
+    assert rejected["mutual_zero"] is False
+    assert rejected["verdict_label"] == "rejected — no pseudo boxes by construction"
+
+    # A curated frame with no vlm_counts row at all (the VLM never labelled it):
+    # "n/a" strings, never a NaN rendered into the table.
+    absent = weak_frame_summary("accepted", _vlm_rows(1), None)
+    assert list(absent["table"]["vlm_count"]) == ["n/a"] * 5
+    assert list(absent["table"]["gt_count"]) == ["n/a"] * 5
+
+    partial = weak_frame_summary("accepted", _vlm_rows(1), {**_counts_row(), "vlm_car": None})
+    car = partial["table"].loc[partial["table"]["class"] == "car"]
+    assert list(car["vlm_count"]) == ["n/a"]
+    assert list(car["gt_count"]) == ["2"]
+    assert not partial["table"].isna().to_numpy().any()
+
+
+def test_loss_decomposition_long_format() -> None:
+    """One weak_loss_decomposition row -> the three stacked-chart components, in
+    the order they are stacked (what weak supervision kept, then each way it lost
+    the rest). The retained share is the RAW ``weak_gain / gt_gain`` ratio, not
+    the stored (4-dp rounded) ``retention``, so the three shares sum to 1."""
+    row = {
+        "base_arm": "random", "gt_gain": 0.0362, "weak_gt_gain": 0.0182,
+        "weak_gain": 0.0066, "retention": 0.1824,
+        "dropped_frame_cost": 0.018, "dropped_frame_share": 0.4972,
+        "label_cost": 0.0116, "label_share": 0.3204, "headline": True,
+    }
+    long = loss_long(row)
+
+    assert list(long.columns) == ["base_arm", "component", "value", "share"]
+    assert list(long["base_arm"]) == ["random"] * 3
+    assert list(long["component"]) == ["retained", "dropped-frame cost", "label cost"]
+    assert list(long["value"]) == pytest.approx([0.0066, 0.018, 0.0116])
+    assert list(long["share"]) == pytest.approx([0.0066 / 0.0362, 0.4972, 0.3204])
+    assert sum(long["share"]) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_crowding_long_format() -> None:
+    """weak_supervision_results -> the paired accepted/rejected bars, two rows per
+    arm, accepted first (the verifier keeps the SPARSE frames -- the rejected side
+    is the crowded one, which is the whole point of the chart)."""
+    df = pd.DataFrame({
+        "arm": ["random", "graph_rate_night"],
+        "gt_boxes_per_accepted_frame": [3.8674, 3.4114],
+        "gt_boxes_per_rejected_frame": [7.6052, 6.6817],
+    })
+    long = crowding_long(df)
+
+    assert list(long.columns) == ["arm", "side", "gt_boxes_per_frame"]
+    assert list(long["arm"]) == ["random", "random", "graph_rate_night", "graph_rate_night"]
+    assert list(long["side"]) == ["accepted", "rejected", "accepted", "rejected"]
+    assert list(long["gt_boxes_per_frame"]) == pytest.approx(
+        [3.8674, 7.6052, 3.4114, 6.6817]
+    )

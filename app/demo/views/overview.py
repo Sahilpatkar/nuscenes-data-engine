@@ -98,7 +98,7 @@ def render() -> None:
     )
     other_pairs_note = (
         f"The {other_pairs} pair is carried in `demo_data/overview_metrics.json`. "
-        "The Weak Supervision page presents it in Phase 7."
+        "The Weak Supervision page presents it."
         if other_pairs
         else "No other weak/GT pairs are in this build."
     )

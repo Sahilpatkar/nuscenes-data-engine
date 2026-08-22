@@ -7,7 +7,7 @@ FastAPI service, the databases, or src/nuscenes_data_engine.
 from __future__ import annotations
 
 import streamlit as st
-from views import failures, overview, scenarios, stubs
+from views import active_learning, failures, overview, scenarios, stubs, weak_supervision
 
 from data import package_missing
 
@@ -33,8 +33,22 @@ pages = [
     # switch_page("views/scenarios.py"), which resolves the target page by hashing
     # that filename-derived name against each st.Page's url_path hash.
     st.Page(scenarios.render, title="Scenario Search", icon=":material/route:", url_path="scenarios"),
-    st.Page(stubs.active_learning, title="Active Learning", icon=":material/model_training:"),
-    st.Page(stubs.weak_supervision, title="Weak Supervision", icon=":material/fact_check:"),
+    # url_path="active_learning" (same rationale as the two pages above): the
+    # Phase-7 AppTest smokes navigate via switch_page("views/active_learning.py").
+    st.Page(
+        active_learning.render,
+        title="Active Learning",
+        icon=":material/model_training:",
+        url_path="active_learning",
+    ),
+    # url_path="weak_supervision" (same rationale as the pages above): the
+    # Phase-7 AppTest smokes navigate via switch_page("views/weak_supervision.py").
+    st.Page(
+        weak_supervision.render,
+        title="Weak Supervision",
+        icon=":material/fact_check:",
+        url_path="weak_supervision",
+    ),
     st.Page(stubs.chat_replay, title="Ask the Dataset", icon=":material/chat:"),
 ]
 st.navigation(pages).run()

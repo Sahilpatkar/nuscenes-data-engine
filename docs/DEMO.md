@@ -31,8 +31,16 @@ output, row counts). It **fails loudly** — no manifest is written — if:
   `results.json`,
 - a staged `graph_subgraphs/` group is partial (some of the six presets missing),
   stale (a preset's event keys differ from the events this build ranks — re-run
-  `demo subgraphs`), or its flagship Cypher count ≠ the flagship SQL count, or
-- the package exceeds the size budget (100 MB; currently 24.90 MB).
+  `demo subgraphs`), or its flagship Cypher count ≠ the flagship SQL count,
+- an `al.exemplar_tokens` entry is not a val frame with a confident `graph_rate_night`
+  detection that `baseline` missed or only low-conf claimed (or the list is empty while
+  curation is present),
+- `weak_loss_decomposition.retention` disagrees with `overview_metrics.json`'s per-pair
+  weak retention, the two community diagnostics files disagree, or a quota column does
+  not sum to `n_mine`,
+- a staged `al_explain/` group is partial, belongs to another arm, or did not record
+  `selected_match` and `communities_match` as true, or
+- the package exceeds the size budget (100 MB; currently 25.03 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -59,16 +67,23 @@ Rebuilds are deterministic: identical inputs produce byte-identical outputs —
 commit: a package can't contain the sha of the commit that adds it, so the committed
 manifest always names the commit it was built from, not the one that carries it.
 
-## Package layout (Phases 1-6)
+## Package layout (Phases 1-7)
 
 | file | contents |
 |---|---|
 | `manifest.json` | provenance: git sha, `package_version`, input/output SHA256s, counts, validation |
 | `overview_metrics.json` | scale, headline results, flagship parity, CAN r |
-| `active_learning_results.parquet` | all 13 arms: overall/night mAP50-95 + deltas |
-| `weak_supervision_results.parquet` | per-arm verifier retention + box stats |
+| `active_learning_results.parquet` | all 13 arms: overall/night mAP50-95 + deltas, plus (Phase 7) round order, family, mAP50, night precision/recall, night pedestrian mAP, day/rain/clear slices, `val_images`, mined-set composition (`n_scenes`, `night_share`, `rain_share`) |
+| `weak_supervision_results.parquet` | per-arm verifier retention + box stats, plus (Phase 7) rejected-side and candidate-pool GT boxes/frame, tolerance, conf, n_unparsed |
+| `al_communities.parquet` | 97 Louvain communities: size, night members, routed failure mass, quota under `graph_rate` and `graph_rate_night` (`is_backfill` sentinel flag) |
+| `al_selection_explain.parquet` + `al_explain_validation.json` | optional (`demo al-explain`): per selected frame — community, its size / night members / mass rank / quota, degree rank, night-pass vs main-pass pick, routed failures; the validation record proving the run reproduced |
+| `al_exemplars.json` | hand-approved before/after tokens (validated at build) |
+| `weak_loss_decomposition.parquet` | per base arm: GT gain, dropped-frame cost/share, label cost/share, retention (headline flag) |
+| `weak_verifier_by_class.parquet` | per arm × class: rejected disagreements, accepted mutual-zero count/share |
+| `weak_labels.parquet` | verified pseudo boxes (baseline-detector proposals) for curated tokens, native 1600×900 |
+| `vlm_counts.parquet` | per curated frame with a weak verdict: the VLM's per-class count vote, parse status, label confidence, scene call; GT counts alongside |
 | `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car AND a pedestrian — graph_rate_night recovers only the pedestrian, a low-confidence hit; the car defeats all three models) — rendered live with overlays on Overview |
-| `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched) |
+| `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched), `weak_verdict` (accepted / rejected for frames in the weak arm's candidate pool, else NA) and `al_selected_by` (the AL arm that selected the frame, else NA) |
 | `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
 | `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
@@ -107,9 +122,10 @@ contributor guardrail, not a sandbox (a dynamic `importlib` call would slip past
 Strict mypy also covers `app/demo` (see `[tool.mypy] files` in `pyproject.toml`) —
 that's real type-checking of the app code, not an import-policing mechanism. Its full
 dependency set is [app/demo/requirements.txt](../app/demo/requirements.txt)
-(streamlit, pandas, pyarrow, pillow, streamlit-agraph — the latter imported lazily
-inside the graph panel, so its absence degrades to a warning, not a crash). Bare-venv
-smoke check:
+(streamlit ≥ 1.59 — `st.altair_chart(width="stretch")` — pandas, pyarrow, pillow,
+altair (already a Streamlit dependency, declared explicitly because the Phase-7 pages
+import it), streamlit-agraph — the latter imported lazily inside the graph panel, so
+its absence degrades to a warning, not a crash). Bare-venv smoke check:
 
 ```bash
 uv venv "$TMPDIR/demo-venv" --python 3.11
@@ -214,6 +230,65 @@ graph). Without a staged `graph_subgraphs/`, `demo build` records
 `validation.subgraphs: "absent"`, the page shows an honest "not included in this
 package" note, and Overview keeps the sourced Cypher value.
 
+## Active Learning + Weak Supervision (Phase 7)
+
+Both pages read only the package. One optional step re-derives the per-frame
+selection facts the AL run never persisted, with the Neo4j graph built per
+[GRAPH.md](GRAPH.md):
+
+```bash
+docker compose up -d neo4j
+uv run nuscenes-data-engine demo al-explain   # -> data/demo_curation/al_explain/ (~90 s)
+uv run nuscenes-data-engine demo build        # package v0.6
+```
+
+`demo al-explain` re-runs the `graph_rate_night` selection with the experiment's own
+functions and config (`configs/active_learning.yaml`: Louvain over the `SIMILAR_TO`
+projection with GDS `concurrency: 1`, failure-mass routing through LanceDB, then
+`select_by_mass` with the 375-frame night floor) and **stages nothing unless it
+reproduces the run exactly** — the 1,500 selected tokens must equal
+`data/active_learning/graph_rate_night.parquet` and the 97-community table must equal
+`communities_graph_rate_night.json` row for row. Reproduction is the only evidence that
+the per-frame facts are the experiment's, so there is no approximate mode. The shipped
+run reproduced (`al_explain_validation.json`: `selected_match`, `communities_match`,
+GDS 2.13.11, passes `{night: 375, main: 1125}`).
+
+**Active Learning page** (`app/demo/views/active_learning.py`): the experiment story
+(Problem → Hypothesis → Acquisition → Training → Evaluation → Result, every number from
+the table); Δnight / Δoverall for all 13 arms in round order (`graph_rate_night`
+highlighted, weak arms greyed; the table's best *overall* arm is `graph`, and the
+yolov8m checkpoint the demo calls "champion (yolov8m @960)" is a different, model-size
+champion); how `graph_rate_night` chooses (community failure mass → quota; the all-night
+community's quota 83 → 323 is computed from `al_communities.parquet`); a "why was this
+frame selected?" gallery over the arm's curated frames (night first, paged) whose
+factor panel states the real mechanism — community mass → quota, then
+similarity-degree rank within the community; routed mass per frame is context only,
+because most selected frames received none; and a before/after section over
+hand-approved exemplars (`configs/demo.yaml` `al.exemplar_tokens`, validated at build:
+each must have a visible GT box where `graph_rate_night` reaches a confident detection
+`baseline` missed or only claimed at low confidence) with a per-box table generated
+from `predictions.parquet`. Without the `al_explain` group the gallery still renders
+and says per-frame community and routed mass are not in the package.
+
+**Weak Supervision page** (`app/demo/views/weak_supervision.py`): the documented 18%
+headline (`random` pair) next to the 39.4% `graph_rate_night` pair, verifier retention,
+the night-pedestrian collapse (0.117 → 0.020; "worst night result of the 13 arms" is
+computed, not quoted), the loss split (≈50% dropped frames / ≈32% label noise / 18%
+retained, recomputed from `active_learning_results.parquet`), the crowded-frame bias
+(accepted 3.87 vs rejected **7.61** GT boxes/frame; 3.41 vs 6.68 for the night arm —
+the rejected side is a new export computed over the five detector classes in
+`annotations.parquet`; `samples.n_boxes` counts every class and gives 9.94), the
+verifier's by-class rejections and mutual-zero rates, and accepted / rejected galleries.
+The blue boxes there are **pseudo labels: baseline-detector proposals at conf ≥ 0.5,
+kept because the VLM's per-class counts agreed within ±1** — the VLM emits counts,
+never boxes, so the number on a box is the detector's confidence
+([DEMO_PLAN.md](DEMO_PLAN.md)'s "VLM-generated labels" is shorthand the page
+deliberately corrects). Each frame shows the VLM's count vote against GT; the verifier
+itself compared those counts to the detector's, which the package does not carry.
+`vlm_counts.parquet` merges both label tables the run used
+(`data/autolabel/labels.parquet` + `data/active_learning/autolabel_weak/labels.parquet`)
+and covers every curated frame with a verdict.
+
 ## Dataset attribution & license
 
 The demo package (`demo_data/sample_frames/`) contains imagery **derived from the
@@ -236,5 +311,5 @@ is **not** redistributed by this repository.
 | 4 | chat upgrades (local stack): probe fix, streaming, charts | **shipped** |
 | 5 | scenario search + synchronized event viewer | **shipped** |
 | 6 | interactive graph (subgraph export + agraph) | **shipped** |
-| 7 | active-learning + weak-supervision pages | pending |
+| 7 | active-learning + weak-supervision pages | **shipped** |
 | 8 | chat replay gallery, licensing gate, deployment | pending |

@@ -340,6 +340,12 @@ H2 measures this mechanism as implemented. Scene spread (378/368) sits between r
 centroid arms (~220) and the size-weighted `graph` (473) — training will tell
 whether that diversity loss costs more than the failure focus gains.
 
+The public demo re-derives this arm's selection at package-build time
+(`nuscenes-data-engine demo al-explain`) and ships per-frame community / quota /
+degree facts only because the re-run reproduced `graph_rate_night.parquet` and
+`communities_graph_rate_night.json` exactly — see
+[DEMO.md](DEMO.md#active-learning--weak-supervision-phase-7).
+
 Determinism note: unseeded GDS Louvain is nondeterministic (community partitions
 varied run-to-run; mined-set Jaccard 0.71). GDS 2.13.11 rejects `randomSeed` for
 Louvain, so the fix is `concurrency: 1` — verified byte-identical parquets across

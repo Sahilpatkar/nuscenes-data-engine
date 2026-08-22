@@ -1,5 +1,6 @@
-streamlit>=1.40
+streamlit>=1.59        # width="stretch" on st.altair_chart (Phase 7 charts)
 pandas>=2.0
 pyarrow>=15
 pillow>=10
 streamlit-agraph>=0.0.45
+altair>=5

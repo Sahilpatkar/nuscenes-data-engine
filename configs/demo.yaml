@@ -3,6 +3,20 @@
 paths:
   processed_dir: data/processed
   active_learning_dir: data/active_learning
+  active_learning_config: configs/active_learning.yaml   # Phase 7: n_mine for
+                      # al_communities.parquet's quota-sum check -- never re-typed
+                      # in this file
+  autolabel_dir: data/autolabel          # Phase 7 (consolidated review, C3): the
+                      # Phase-6b VLM label table. `al pseudo-label` MERGES this
+                      # with the weak run's own table before verifying, so
+                      # vlm_counts.parquet must read both or frames the VLM did
+                      # label come out all-NA. Optional: defaults to
+                      # <DATA_DIR>/autolabel, the same expression pseudo_label.py
+                      # computes.
+  autolabel_weak_config: configs/autolabel_weak.yaml     # its `state.dir` is the
+                      # weak run's OWN label table -- resolved from the config the
+                      # run reads, never hardcoded here. Optional: defaults to
+                      # <active_learning_dir>/autolabel_weak.
   mlruns_dir: mlruns
   lancedb_path: data/lancedb
   lancedb_table: frames
@@ -86,3 +100,15 @@ curation:
   weak_arm: graph_rate_night
   al_arm: graph_rate_night
   crop_size: [960, 540]
+
+al:                               # Phase 7: Active Learning page
+  arm: graph_rate_night
+  baseline: baseline
+  community_arms: [graph_rate, graph_rate_night]
+  exemplar_tokens:                # hand-approved val frames: `arm` reaches a confident detection `baseline` missed or only low-conf claimed
+    - 00ec313e03a34216b14ae025674a953a   # night, scene-1071: pedestrian 26 m, low-conf 0.30 -> 0.47
+    - c25ac25cdd7e43208447a9030c7049ae   # night, scene-1069: truck 11 m none -> 0.42; car 23 m 0.15 -> 0.55
+    - b08a2deaf871433fad9a4c03e6f53d32   # day bus stop: two pedestrians 0.18 -> 0.67, 0.35 -> 0.46
+    - 1ee6165c9091483bb384d02b78e92c5a   # day crosswalk: pedestrian 19 m 0.16 -> 0.62
+    - 524d443c501a4f98a14508c3fb6f6de3   # day campus: pedestrian 26 m 0.33 -> 0.64 (champion only 0.35)
+    - 9a662c4898d14a6c9246f504c3a7d835   # day cafe: pedestrian 22 m 0.39 -> 0.63 (champion 0.36)

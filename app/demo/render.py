@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -49,6 +51,13 @@ STYLE_FN = BoxStyle(color=(255, 133, 27), width=3, dash=8)          # orange das
 STYLE_TP = BoxStyle(color=(255, 255, 255), width=1, dash=None)      # white thin
 STYLE_FP = BoxStyle(color=(255, 65, 54), width=2, dash=None)        # red solid
 STYLE_LOW_CONF = BoxStyle(color=(255, 220, 0), width=2, dash=2)     # yellow dotted
+# Phase 7 (Task 5): a pseudo box on a weak-supervision train-pool frame. Blue solid
+# -- a colour no GT/prediction style uses, because a pseudo box is neither: it is a
+# baseline-detector proposal that a VLM's per-class counts corroborated (the VLM
+# never draws a box), drawn alongside GT so the two can be compared by eye.
+# Named STYLE_PSEUDO, not STYLE_VLM (consolidated review C2): the box and the score
+# on it are the DETECTOR's, and the old name put the VLM's name on both.
+STYLE_PSEUDO = BoxStyle(color=(0, 116, 217), width=2, dash=None)    # blue solid
 
 _PRED_STYLES: dict[str, BoxStyle] = {"tp": STYLE_TP, "fp": STYLE_FP, "low_conf": STYLE_LOW_CONF}
 _VALID_MODES = ("gt", "pred", "overlay")
@@ -167,6 +176,7 @@ def draw_overlay(
     *,
     mode: str,
     scale: float,
+    pseudo_boxes: pd.DataFrame | None = None,
 ) -> Image.Image:
     """Render GT and/or predictions onto a copy of ``image``.
 
@@ -178,6 +188,21 @@ def draw_overlay(
     "tp"/"fp"/"low_conf" -- anything else raises ValueError).
     ``mode``: "gt" | "pred" | "overlay", else raises ValueError. The input image is
     never mutated.
+
+    ``pseudo_boxes`` (Phase 7) is a THIRD, independent layer: the weak-supervision
+    pseudo boxes for the frame (x_min..y_max, category_group, score --
+    weak_labels.parquet's own schema), drawn last, in every mode. It is
+    mode-independent on purpose: the frames that carry pseudo boxes are train-pool
+    frames, which have GT but never predictions, so the page draws them in "gt"
+    mode and still needs the blue layer. Left as ``None`` (the default) the render
+    is byte-identical to the two-layer one this signature had before.
+
+    A pseudo box is the BASELINE DETECTOR's proposal (conf >= 0.5), kept because a
+    VLM's per-class counts for the frame agreed with the detector's within a
+    tolerance -- the VLM emits counts and never draws a box. The layer, its style
+    and its label all say "pseudo" rather than "VLM" for that reason
+    (consolidated review C2: ``VLM 0.73`` attributed the detector's own confidence
+    to the VLM).
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"draw_overlay: unknown mode {mode!r} — expected one of {_VALID_MODES}")
@@ -212,4 +237,144 @@ def draw_overlay(
             label = f"{row.category_group} {row.conf:.2f}"
             _draw_label(draw, xyxy, label, style)
 
+    if pseudo_boxes is not None:
+        for row in pseudo_boxes.itertuples(index=False):
+            xyxy = (row.x_min * scale, row.y_min * scale, row.x_max * scale, row.y_max * scale)
+            _validate_xyxy(xyxy, kind="pseudo", category=str(row.category_group))
+            _draw_rect(draw, xyxy, STYLE_PSEUDO)
+            # The score, not the category: the category is already on the GT box
+            # underneath, and what a viewer needs to judge a pseudo box is how
+            # confident the proposal was. The number is the BASELINE DETECTOR's
+            # confidence, so the label says "pseudo" -- naming the layer for what
+            # the box is, not for the model that merely corroborated it.
+            _draw_label(draw, xyxy, f"pseudo {row.score:.2f}", STYLE_PSEUDO)
+
     return out
+
+
+# --- Shared altair bar chart (Phase 7) -------------------------------------------
+#
+# altair is streamlit's OWN hard dependency (st.altair_chart is the API these pages
+# call), so importing it at module level adds no wheel to the deployment -- it is
+# declared in app/demo/requirements.txt purely to pin the version the specs below
+# are written against. The Active Learning and Weak Supervision pages both draw
+# their bars through this one helper so the two read as one visual language.
+
+# The accent used for "the thing being explained" -- the same #FF851B the Scenario
+# page's on-path graph nodes use.
+_ACCENT = "#FF851B"
+# Weak-supervision arms: pseudo-label training runs, not night-targeting AL arms.
+# Greyed so they read as a different KIND of row rather than a competing result --
+# the same #BBBBBB the graph panel fades its context nodes with.
+_MUTED = "#BBBBBB"
+_DEFAULT_BAR = "#4A90D9"
+_ZERO_RULE = "#888888"
+_COLOR_COLUMN = "_bar_color"
+
+
+def _bar_colors(frame: pd.DataFrame, *, x: str, highlight: str | None) -> pd.Series:
+    """One literal colour per row: accent for ``highlight``, grey for the weak
+    family, the default bar colour otherwise."""
+    family = (
+        frame["family"] if "family" in frame.columns else pd.Series("", index=frame.index)
+    )
+    colors = pd.Series(_DEFAULT_BAR, index=frame.index)
+    colors = colors.mask(family.eq("weak"), _MUTED)
+    if highlight is not None:
+        colors = colors.mask(frame[x].eq(highlight), _ACCENT)
+    return colors
+
+
+def bar_chart(
+    frame: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    highlight: str | None = None,
+    color_field: str | None = None,
+    title: str = "",
+    sort: list[str] | None = None,
+    zero_line: bool = True,
+    grouped: bool = False,
+    y_title: str | None = None,
+    label_angle: int | None = None,
+) -> alt.Chart | alt.LayerChart:
+    """A bar chart of ``y`` over the categorical ``x``, ready for
+    ``st.altair_chart(chart, width="stretch")``.
+
+    (``width="stretch"``, not the ``use_container_width=True`` the design doc
+    wrote: that keyword is deprecated with a removal date already in the past, and
+    warns on every render of streamlit 1.59 -- the demo deploys against whatever
+    Streamlit Cloud installs, so the page calls the current API and
+    app/demo/requirements.txt declares the floor that has it.)
+
+    ``sort`` pins the x-axis category order (the arm chart passes ``round_order``'s
+    order, so the arms read as the experiment ran them rather than alphabetically).
+    ``highlight`` names the one ``x`` category drawn in the accent colour; rows whose
+    ``family`` is "weak" are greyed; everything else takes the default bar colour.
+    ``color_field`` overrides all of that with an ordinary categorical colour scale
+    on that field (a stacked/grouped chart, e.g. the weak-sup loss decomposition),
+    keeping its legend.
+
+    ``grouped`` (with ``color_field``) puts the categories SIDE BY SIDE within each
+    ``x`` instead of stacking them, via ``xOffset`` plus an explicit ``stack=None``.
+    Stacking claims the parts sum to the whole; two alternative allocations of the
+    same budget (the Active Learning page's graph_rate vs graph_rate_night quotas)
+    are not summable, and a stacked pair of them reads as a total that does not
+    exist (consolidated review, real-browser finding 1).
+
+    ``y_title`` overrides the axis title (default: the ``y`` column name with
+    underscores spaced) -- a melted long table's value column is called "value",
+    which names nothing. ``label_angle`` tilts the x labels; x labels are never
+    truncated (``labelLimit=0``), since a clipped arm name ("weak_graph_rate...")
+    is not an identifier.
+
+    ``zero_line`` layers a rule at y = 0 -- delta charts carry negative values, and
+    without the rule a regression reads as just a shorter bar. That layering is why
+    the return type is a union: an ``alt.LayerChart`` is not an ``alt.Chart``, and
+    ``st.altair_chart`` takes either.
+    """
+    if grouped and color_field is None:
+        raise ValueError("bar_chart: grouped=True needs a color_field")
+    data = frame.copy()
+    axis_kwargs: dict[str, Any] = {"labelLimit": 0}
+    if label_angle is not None:
+        axis_kwargs["labelAngle"] = label_angle
+    axis_title = y.replace("_", " ") if y_title is None else y_title
+    # stack=None only on the grouped path: passing it unconditionally would also
+    # unstack the loss decomposition, whose three components DO sum to the whole.
+    y_encoding = (
+        alt.Y(f"{y}:Q", title=axis_title, stack=None)
+        if grouped
+        else alt.Y(f"{y}:Q", title=axis_title)
+    )
+    encode: dict[str, Any] = {
+        "x": alt.X(f"{x}:N", sort=sort, title=None, axis=alt.Axis(**axis_kwargs)),
+        "y": y_encoding,
+        "tooltip": [c for c in (x, y, color_field, "family") if c and c in data.columns],
+    }
+    if color_field is not None:
+        encode["color"] = alt.Color(f"{color_field}:N", title=color_field.replace("_", " "))
+        if grouped:
+            encode["xOffset"] = alt.XOffset(f"{color_field}:N")
+    else:
+        data[_COLOR_COLUMN] = _bar_colors(data, x=x, highlight=highlight)
+        # scale=None: the column already holds literal colours, so altair must pass
+        # them through instead of building a categorical scale over them.
+        encode["color"] = alt.Color(f"{_COLOR_COLUMN}:N", scale=None, legend=None)
+
+    bars = alt.Chart(data).mark_bar().encode(**encode)
+    chart: alt.Chart | alt.LayerChart = bars
+    if zero_line:
+        rule = (
+            alt.Chart(pd.DataFrame({"zero": [0.0]}))
+            .mark_rule(color=_ZERO_RULE)
+            .encode(y="zero:Q")
+        )
+        # alt.layer is typed as returning LayerChart | FacetChart (it facets when
+        # given a facet spec, which this never does); the cast keeps this helper's
+        # own, narrower return type honest.
+        chart = cast("alt.LayerChart", alt.layer(bars, rule))
+    if title:
+        chart = chart.properties(title=title)
+    return chart

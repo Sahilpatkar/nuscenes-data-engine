@@ -59,11 +59,17 @@ def test_demo_requirements_stay_minimal() -> None:
         if line.strip() and not line.startswith("#")
     ]
     lines = [line.split("==")[0].split(">=")[0].strip() for line in raw_lines]
-    assert set(lines) <= {"streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph"}
+    # altair (Phase 7) is streamlit's OWN hard dependency -- declaring it adds no
+    # wheel to the deployment, it just pins the version the charts are written
+    # against (app/demo/render.py::bar_chart imports it at module level).
+    assert set(lines) <= {
+        "streamlit", "pandas", "pyarrow", "pillow", "streamlit-agraph", "altair"
+    }
     # The subset check above would still pass if streamlit-agraph were dropped
     # entirely -- the interactive graph panel (Phase 6) needs it present, not just
-    # not-disallowed.
+    # not-disallowed. Same for altair and the Phase-7 charts.
     assert any(line.startswith("streamlit-agraph") for line in raw_lines)
+    assert any(line.startswith("altair") for line in raw_lines)
 
 
 def _stage_subgraphs_with_event(staging_dir: Path) -> None:
@@ -211,6 +217,58 @@ def _stage_subgraphs_with_event(staging_dir: Path) -> None:
         (out / f"{preset}.json").write_text(json.dumps(payload, sort_keys=True, indent=2))
 
 
+def _stage_al_explain(staging_dir: Path) -> None:
+    """Stage the optional `demo al-explain` group (spec §1) under ``staging_dir``.
+
+    Phase 7 (Task 4): the Active Learning page's "why was this frame selected?"
+    panel reads ``al_selection_explain.parquet`` (per-frame community/pick-pass/
+    degree facts) and the night floor out of ``al_explain_validation.json``. The
+    real command needs Neo4j + GDS + LanceDB, so this stages its OUTPUT directly --
+    the same idiom `_stage_subgraphs_with_event` uses for `demo subgraphs`, and what
+    tests/test_demo_export.py's own al_explain build test does.
+
+    One row per token in this fixture's ``graph_rate_night.parquet`` (the arm's
+    selected set), so every gallery card has a row -- exactly the real package's
+    relationship (1500 selected frames, 1500 explain rows). The two train_pool
+    tokens carry the two branches the panel has to render: "wA" was taken by the
+    NIGHT pass with no failure mass routed to it (the ordinary case -- 1249 of the
+    1500 real selected frames have none), "wR" by the main pass with mass actually
+    routed to it.
+    """
+    out = staging_dir / "al_explain"
+    out.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "sample_data_token": ["v0", "v1", "wA", "wR"],
+        "arm": ["graph_rate_night"] * 4,
+        "is_night": [True, False, True, False],
+        "scene_name": ["scene-v0", "scene-v1", "scene-wA", "scene-wR"],
+        "community": [0, 1, 0, 1],
+        "community_size": [10, 8, 10, 8],
+        "community_night_members": [2, 1, 2, 1],
+        "community_mass": [5.0, 3.0, 5.0, 3.0],
+        "community_mass_rank": pd.array([1, 2, 1, 2], dtype="Int64"),
+        "community_quota": [1, 2, 1, 2],
+        "degree": [4.0, 2.0, 3.0, 1.0],
+        "degree_rank_in_community": pd.array([1, 1, 2, 2], dtype="Int64"),
+        "pick_pass": ["night", "main", "night", "main"],
+        "n_failures_routed": [0, 0, 0, 2],
+        "mass_routed": [0.0, 0.0, 0.0, 4.25],
+    }).to_parquet(out / "al_selection_explain.parquet", index=False)
+    (out / "al_explain_validation.json").write_text(json.dumps({
+        "arm": "graph_rate_night",
+        "selected_match": True,
+        "communities_match": True,
+        "n_selected": 4,
+        "n_communities": 2,
+        "mass_total": 8.0,
+        "gds_version": "2.13.11",
+        "config": {
+            "channel": "CAM_FRONT", "n_mine": 3, "night_floor": 1,
+            "route_k": 10, "seed": 64, "top_k": 1000,
+        },
+    }))
+
+
 @pytest.fixture()
 def built_demo_data(tmp_path: Path) -> Path:
     """A real (tiny) demo_data/ package, built through the actual exporters/build path.
@@ -271,7 +329,18 @@ def built_demo_data(tmp_path: Path) -> Path:
             "is_rain": [False, False, False],
         }
     ).to_parquet(processed / "samples.parquet")
-    pd.DataFrame({"sample_token": ["s1"] * 4}).to_parquet(processed / "annotations.parquet")
+    # Phase 7 (Task 2): sample_data_token/category_group -- export_weaksup's
+    # rejected-side recipe reads exactly these two columns. All 4 rows are s1's; 3
+    # carry a detector category_group (pedestrian/car/pedestrian) and the 4th is
+    # None (ignored) -- s1's detector count is 3, matching random_pseudo_summary.
+    # json's mean_gt_boxes_per_accepted_frame=3.0 below (random_accepted=["s1"]).
+    pd.DataFrame(
+        {
+            "sample_token": ["s1"] * 4,
+            "sample_data_token": ["s1"] * 4,
+            "category_group": ["pedestrian", "car", "pedestrian", None],
+        }
+    ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
         {
             # annotation_token: required since Task 1 (Phase 3) -- gt_boxes.parquet
@@ -320,10 +389,31 @@ def built_demo_data(tmp_path: Path) -> Path:
                     "overall": {"mAP50-95": 0.21},
                     "night": {"mAP50-95": 0.11},
                 },
+                # Phase 7 (Task 4): configs' al.arm -- the arm the Active Learning
+                # page tells the story of, so the fixture package must actually
+                # carry a row for it (delta_night +0.0300, delta_overall +0.0300
+                # against baseline, and the best night gain of the four arms, as
+                # graph_rate_night is in the real results.json). night.per_class
+                # gives the expander table a real night_ped_map5095 to show.
+                "graph_rate_night": {
+                    "n_train_images": 120,
+                    "overall": {"mAP50-95": 0.23},
+                    "night": {"mAP50-95": 0.13, "per_class": {"pedestrian": 0.09}},
+                },
                 "weak_random": {
                     "n_train_images": 110,
                     "overall": {"mAP50-95": 0.2018},
                     "night": {"mAP50-95": 0.105},
+                },
+                # Phase 7 (Task 2): weak_random's GT-trained twin -- gives
+                # export_weak_loss_decomposition a "random" row (gt_gain=0.01,
+                # weak_gt_gain=0.005, weak_gain=0.0018), which run_build asserts
+                # against overview_metrics.json's own (independently, but
+                # identically, computed) weak_retention.by_base_arm["random"].
+                "weak_random_gt": {
+                    "n_train_images": 112,
+                    "overall": {"mAP50-95": 0.205},
+                    "night": {"mAP50-95": 0.103},
                 },
             }
         )
@@ -334,9 +424,16 @@ def built_demo_data(tmp_path: Path) -> Path:
                 "arm": "random", "n_candidates": 10, "n_accepted": 6, "retention": 0.6,
                 "n_boxes": 12, "mean_boxes_per_accepted_frame": 2.0,
                 "mean_gt_boxes_per_accepted_frame": 3.0,
+                "conf": 0.5, "tolerance": 1, "n_no_label": 1, "n_unparsed": 0,
+                "rejected_by_class": {"pedestrian": 1}, "accepted_mutual_zero_by_class": {"car": 1},
             }
         )
     )
+    # Phase 7 (Task 2): export_weaksup's own per-arm inputs -- "random" candidates
+    # (s1 accepted, s3 rejected -- s3 has no annotations.parquet rows at all -> 0
+    # detector GT boxes by the reindex-fill-0 rule).
+    pd.DataFrame({"sample_data_token": ["s1", "s3"]}).to_parquet(al / "random.parquet")
+    pd.DataFrame({"sample_data_token": ["s1"]}).to_parquet(al / "random_accepted.parquet")
     # Phase 3: the hero is a hand-picked exemplar crop from the curated-frames group,
     # not an mlruns mosaic -- stage a minimal two-token curation group so
     # run_build's now-mandatory hero-token resolution has a real crop to copy. A
@@ -356,31 +453,45 @@ def built_demo_data(tmp_path: Path) -> Path:
     staging = tmp_path / "curation_staging"
     (staging / "crops").mkdir(parents=True)
     pd.DataFrame({
-        "sample_data_token": ["v0", "v1"],
-        "split": ["val", "val"],
-        "filename": ["images/v0.jpg", "images/v1.jpg"],
+        # Phase 7 (Task 2): "wA"/"wR" are train_pool weak-supervision frames (no
+        # predictions, so they're excluded from the val-coverage check below) --
+        # "wA" carries curation_buckets=["weak_accepted"] and gets one pseudo box
+        # in graph_rate_night_pseudo_labels.parquet; "wR" carries
+        # ["weak_rejected"] and gets none (rejected frames have no pseudo boxes by
+        # construction). Task 5's Weak Supervision page tests can render off
+        # these two tokens directly.
+        "sample_data_token": ["v0", "v1", "wA", "wR"],
+        "split": ["val", "val", "train_pool", "train_pool"],
+        "filename": ["images/v0.jpg", "images/v1.jpg", "images/wA.jpg", "images/wR.jpg"],
         # scene_name: the grid loop's caption reads this straight off each row
         # (row.scene_name) -- absent here, that line never ran in any test before
         # this review round, because bug #2 (the distance-slider default) also
         # happened to filter v0 itself out of every prior single-model fixture
         # (its only GT row had a NaN distance), leaving `frames` empty and the
         # grid loop body dead code from the page's very first test.
-        "scene_name": ["scene-v0", "scene-v1"],
+        "scene_name": ["scene-v0", "scene-v1", "scene-wA", "scene-wR"],
         # Two buckets on v0, not one: curation_buckets round-trips through parquet
         # as a numpy array (pyarrow's list dtype) -- a single-element array is
         # falsy-safe by accident (`bool()` of a length-1 array just returns that
         # element's truthiness), so this needs >= 2 entries to actually exercise
         # `array or []`-style bugs in the page (`ValueError: truth value of an
         # array with more than one element is ambiguous`).
-        "curation_buckets": [["night_failure", "al_selected"], ["hard_braking"]],
+        "curation_buckets": [
+            ["night_failure", "al_selected"], ["hard_braking"],
+            ["weak_accepted"], ["weak_rejected"],
+        ],
         # is_night/is_rain: the Failure Explorer sidebar builds its lighting/rain
         # filter options straight off these columns' actual values -- absent here,
         # the page would KeyError before an AppTest ever gets to render.
-        "is_night": [True, False], "is_rain": [False, False],
-        "n_preds_baseline": pd.array([1, 2], dtype="Int64"),
-        "n_preds_graph_rate_night": pd.array([2, 2], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array([True, False], dtype="boolean"),
-        "fixes_fn_vs_graph_rate_night_baseline": pd.array([False, False], dtype="boolean"),
+        "is_night": [True, False, True, False], "is_rain": [False, False, False, False],
+        "n_preds_baseline": pd.array([1, 2, pd.NA, pd.NA], dtype="Int64"),
+        "n_preds_graph_rate_night": pd.array([2, 2, pd.NA, pd.NA], dtype="Int64"),
+        "fixes_fn_vs_baseline_graph_rate_night": pd.array(
+            [True, False, pd.NA, pd.NA], dtype="boolean"
+        ),
+        "fixes_fn_vs_graph_rate_night_baseline": pd.array(
+            [False, False, pd.NA, pd.NA], dtype="boolean"
+        ),
     }).to_parquet(staging / "frame_manifest.parquet")
     pd.DataFrame({
         "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
@@ -420,6 +531,10 @@ def built_demo_data(tmp_path: Path) -> Path:
     v1_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(60, 60, 60)).save(v1_bytes, format="JPEG")
     (staging / "crops" / "v1.jpg").write_bytes(v1_bytes.getvalue())
+    for token, color in (("wA", (90, 90, 90)), ("wR", (30, 30, 30))):
+        buf = io.BytesIO()
+        Image.new("RGB", (2, 2), color=color).save(buf, format="JPEG")
+        (staging / "crops" / f"{token}.jpg").write_bytes(buf.getvalue())
 
     # Task 3 (Scenario Search page): a tiny staged semantic-search result so
     # build.py::_include_semsearch has something to copy (`demo semsearch` itself
@@ -439,11 +554,61 @@ def built_demo_data(tmp_path: Path) -> Path:
         "k": [2, 2],
     }).to_parquet(staging / "semantic_search_results.parquet")
 
+    # Phase 7 (Task 1): al_communities.parquet's inputs (always required -- see
+    # run_build) -- 2 communities whose quotas each sum to n_mine=3, mirroring
+    # tests/test_demo_export.py's tiny_inputs fixture.
+    for arm, quotas in (("graph_rate", [2, 1]), ("graph_rate_night", [1, 2])):
+        records = [
+            {"community": 0, "size": 10, "mass": 5.0, "night_members": 2, "quota": quotas[0]},
+            {"community": 1, "size": 8, "mass": 3.0, "night_members": 1, "quota": quotas[1]},
+        ]
+        (al / f"communities_{arm}.json").write_text(json.dumps(records))
+    al_config_path = tmp_path / "active_learning.yaml"
+    al_config_path.write_text(yaml.safe_dump({"mining": {"n_mine": 3}}))
+    # weak_verdict/al_selected_by's arm parquets: v0/wA are weak-arm candidates
+    # AND accepted ("accepted"); v1/wR are candidates but not accepted
+    # ("rejected"). Both are in the al_arm's selected set (same file, weak_arm ==
+    # al_arm here) -- matches wA/wR's own curation_buckets above.
+    pd.DataFrame({"sample_data_token": ["v0", "v1", "wA", "wR"]}).to_parquet(
+        al / "graph_rate_night.parquet"
+    )
+    pd.DataFrame({"sample_data_token": ["v0", "wA"]}).to_parquet(
+        al / "graph_rate_night_accepted.parquet"
+    )
+    # Phase 7 (Task 2): weak_labels/vlm_counts' own inputs. wA gets one pseudo box
+    # (its curation_buckets=["weak_accepted"]); wR gets none (rejected frames have
+    # no pseudo boxes by construction) -- both get a VLM row so vlm_counts can
+    # compare its counts to GT for both tabs.
+    pd.DataFrame({
+        "sample_data_token": ["wA"],
+        "category_group": ["car"],
+        "x_min": [50.0], "y_min": [50.0], "x_max": [150.0], "y_max": [150.0],
+        "score": [0.73],
+    }).to_parquet(al / "graph_rate_night_pseudo_labels.parquet")
+    (al / "autolabel_weak").mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["wA", "wR"],
+        "model": ["qwen2.5-vl", "qwen2.5-vl"],
+        "parse_status": ["ok", "ok"],
+        "time_of_day": ["night", "day"],
+        "weather": ["clear", "rain"],
+        "hazards": ["[]", "[]"],
+        "notable_conditions": ["[]", "[]"],
+        # The VLM's own STRING enum -- rendering it as a float crashed the page on
+        # every frame it had actually labelled (consolidated review C1).
+        "label_confidence": ["high", "low"],
+        "cars": [1.0, 0.0], "trucks": [0.0, 0.0], "buses": [0.0, 0.0],
+        "trailers": [0.0, 0.0], "construction_vehicles": [0.0, 0.0],
+        "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
+        "pedestrians": [0.0, 1.0], "traffic_cones": [0.0, 0.0], "barriers": [0.0, 0.0],
+    }).to_parquet(al / "autolabel_weak" / "labels.parquet")
+
     out = tmp_path / "demo_data"
     config = {
         "paths": {
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
+            "active_learning_config": str(al_config_path),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -462,7 +627,20 @@ def built_demo_data(tmp_path: Path) -> Path:
             "high_speed_mps": 10.0,
             "model_for_results": "baseline",
         },
-        "curation": {"staging_dir": str(staging)},
+        "curation": {
+            "staging_dir": str(staging),
+            "weak_arm": "graph_rate_night",
+            "al_arm": "graph_rate_night",
+        },
+        # Phase 7 (Task 1): "v0" already carries fixes_fn_vs_baseline_graph_rate_
+        # night=True, split="val", and predictions for both configured models
+        # above, so it's a valid exemplar token.
+        "al": {
+            "arm": "graph_rate_night",
+            "baseline": "baseline",
+            "community_arms": ["graph_rate", "graph_rate_night"],
+            "exemplar_tokens": ["v0"],
+        },
     }
     config_path = tmp_path / "demo.yaml"
     config_path.write_text(yaml.safe_dump(config))
@@ -475,6 +653,7 @@ def built_demo_data(tmp_path: Path) -> Path:
     # (Task 2) passes. Only the flagship's count is constrained this way; the
     # other five presets' sql_count/cypher_count are free (see that helper).
     _stage_subgraphs_with_event(staging)
+    _stage_al_explain(staging)
 
     run_build(config_path)
 
@@ -501,6 +680,28 @@ def built_demo_data(tmp_path: Path) -> Path:
         (thumbs_dir / f"{token}.jpg").write_bytes(buf.getvalue())
 
     return out
+
+
+@pytest.fixture()
+def built_demo_data_without_explain(built_demo_data: Path) -> Path:
+    """The same package with the optional al_explain group removed -- the ordinary
+    state of a fresh clone (no Neo4j, so `demo al-explain` never ran).
+
+    Deletes the two files from an otherwise-normal built package rather than
+    rebuilding one without the staging: the page's own absent branch keys off
+    ``data.al_explain_available()``, i.e. the file's presence, and the builder's
+    absent/included recording is already pinned on the builder side
+    (tests/test_demo_export.py::test_build_records_al_explain_group_absent_then_
+    included). Same idiom as test_scenario_graph_panel_absent_when_subgraphs_not_
+    staged.
+    """
+    for name in ("al_selection_explain.parquet", "al_explain_validation.json"):
+        (built_demo_data / name).unlink()
+    manifest_path = built_demo_data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"]["al_explain"] = "absent"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
 
 
 def test_overview_page_renders_from_a_built_package(
@@ -1095,3 +1296,441 @@ def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
     assert not at.exception
     assert len(at.image) >= 1   # the thumb-fallback overlay still rendered
     assert not any("no image available" in str(c.value) for c in at.caption)
+
+
+# --- Phase 7 (Task 4): the Active Learning page --------------------------------
+
+
+def _active_learning_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="active_learning" in main.py, same rationale as the Failure Explorer's
+    # and Scenario Search's explicit url_paths (see those pages' comments).
+    at.switch_page("views/active_learning.py").run(timeout=30)
+    return at
+
+
+def test_active_learning_page_renders_story_chart_and_exemplar_table(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a/b/e) The page's spine: the six story beats, the arm chart, and the
+    before/after exemplar controls + per-box table -- every number read from the
+    package (the fixture's graph_rate_night arm is +0.0300 night against baseline).
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # (a) story arrows: render.story_arrows writes "**<title>**  \n<body>" markdown
+    markdowns = [str(m.value) for m in at.markdown]
+    assert any("Result" in text for text in markdowns)
+    assert any("Problem" in text for text in markdowns)
+
+    # the derived night delta, from active_learning_results.parquet (0.13 - 0.10)
+    numbers = [str(m.value) for m in at.metric] + [str(c.value) for c in at.caption] + markdowns
+    assert any("+0.0300" in text for text in numbers)
+
+    # (b) the arm chart itself (st.altair_chart -> a "vega_lite_chart" element;
+    # AppTest has no typed accessor for charts, so it is fetched by element type)
+    assert len(at.get("vega_lite_chart")) >= 1
+
+    # (e) exemplar controls: the selectbox over al_exemplars.json's tokens and the
+    # model radio, whose options are the package's own model labels.
+    assert at.selectbox(key="al_exemplar")
+    assert at.radio(key="al_model").options == ["baseline", "graph_rate_night"]
+
+    # (e) the per-box table: v0's GT box a2 is caught by graph_rate_night (tp 0.8)
+    # and never claimed by baseline -- exactly one upgraded row.
+    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
+    assert len(tables) == 1
+    assert len(tables[0]) >= 1
+    assert list(tables[0]["baseline_claim"]) == ["none"]
+
+
+def test_active_learning_page_explain_absent_note(
+    built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) Without `demo al-explain` the gallery still works, and the page says
+    exactly what is missing instead of inventing a per-frame reason."""
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data_without_explain, monkeypatch)
+    assert not at.exception
+
+    notes = [str(i.value) for i in at.info]
+    assert any(
+        "per-frame community and routed mass are not included in this package "
+        "(demo al-explain)" in note
+        for note in notes
+    )
+    # the gallery is still there (a "View" button per AL-selected frame)
+    assert at.button(key="al_frame_select_wA")
+
+
+def test_active_learning_page_why_selected_panel_with_explain(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) With the group staged, picking a selected frame shows the derived factor
+    panel -- community/quota/pass/degree rank -- and says plainly that a train-pool
+    frame carries no predictions. Routed failure mass is CONTEXT, never the reason:
+    "wA" has none, and the panel says so rather than claiming a high failure rate.
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    panel = [str(m.value) for m in at.markdown]
+    assert any("Community quota" in text for text in panel)
+    assert any("#0 · 10 frames · 2 at night" in text for text in panel)
+    assert any("night pass (night floor 1)" in text for text in panel)
+    assert any("none — not itself a routing target" in text for text in panel)
+    assert not any(
+        "per-frame community and routed mass are not included" in str(i.value) for i in at.info
+    )
+    assert any(
+        "train-pool frame — no predictions" in str(c.value) for c in at.caption
+    )
+
+
+def test_active_learning_page_on_a_pre_phase_7_package(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before Phase 7 carries none of this page's tables --
+    al_exemplars.json, al_communities.parquet, the al_explain group -- and a
+    frame_manifest without ``al_selected_by``. The page must say what is missing
+    and stop, not raise (consolidated review M11).
+
+    Stripped from a built package rather than rebuilt, the same idiom
+    test_weak_supervision_page_on_a_pre_phase_7_package uses.
+    """
+    pytest.importorskip("streamlit")
+    for name in (
+        "al_exemplars.json", "al_communities.parquet",
+        "al_selection_explain.parquet", "al_explain_validation.json",
+    ):
+        (built_demo_data / name).unlink()
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    pd.read_parquet(manifest_path).drop(columns=["al_selected_by"]).to_parquet(
+        manifest_path, index=False
+    )
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    notes = [str(e.value) for e in at.error] + [str(i.value) for i in at.info]
+    assert any("needs demo_data >= 0.6" in note for note in notes)
+
+
+def test_active_learning_page_with_an_empty_exemplar_list(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``al_exemplars.json`` with no tokens is a real, allowed state (a package built
+    with curation absent) -- the before/after section says so instead of raising on
+    an empty selectbox (consolidated review M11)."""
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "al_exemplars.json"
+    package = json.loads(path.read_text())
+    package["tokens"] = []
+    path.write_text(json.dumps(package, indent=2, sort_keys=True))
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("no exemplar frames in this package" in str(i.value) for i in at.info)
+    # the rest of the page is unaffected -- the arm chart is still there
+    assert len(at.get("vega_lite_chart")) >= 1
+
+
+def test_active_learning_gallery_pages_night_frames_first(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """78 selected frames rendered as 78 images and 78 buttons in one grid is a wall
+    (consolidated review M8): the gallery shows the first 24, night frames first
+    (this arm is night-targeted), behind a "show all" checkbox.
+
+    The built package's manifest is widened with synthetic selected frames rather
+    than rebuilt -- the page reads ``al_selected_by``/``is_night``/``scene_name``
+    and nothing else about them, and no crop needs to exist for a thumb-less frame.
+    """
+    pytest.importorskip("streamlit")
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    extra = pd.DataFrame({
+        "sample_data_token": [f"g{i}" for i in range(30)],
+        "scene_name": [f"scene-{i:03d}" for i in range(30)],
+        # the last one is the ONLY night frame, so night-first ordering must lift it
+        # out of the tail and into the first page
+        "is_night": [False] * 29 + [True],
+        "al_selected_by": pd.array(["graph_rate_night"] * 30, dtype="string"),
+        "split": ["train_pool"] * 30,
+    })
+    pd.concat([manifest, extra], ignore_index=True).to_parquet(manifest_path, index=False)
+
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any("night frames first" in str(c.value) for c in at.caption)
+    # night frame first, day frame 29 (alphabetically last) past the first page
+    assert at.button(key="al_frame_select_g29")
+    assert not [b for b in at.button if b.key == "al_frame_select_g28"]
+
+    at.checkbox(key="al_gallery_show_all").set_value(True).run(timeout=30)
+    assert not at.exception
+    assert at.button(key="al_frame_select_g28")
+
+
+# --- Phase 7 (Task 5): the Weak Supervision page -------------------------------
+
+
+def _weak_supervision_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from streamlit.testing.v1 import AppTest
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    # url_path="weak_supervision" in main.py, same rationale as the other pages'
+    # explicit url_paths (switch_page resolves by hashing the filename-derived name).
+    at.switch_page("views/weak_supervision.py").run(timeout=30)
+    return at
+
+
+def _add_second_weak_pair(built_demo_data: Path) -> None:
+    """Give the built package a SECOND weak/GT pair (the real package carries two:
+    the documented ``random`` headline and the ``graph_rate_night`` pair Overview
+    promises). This fixture's results.json only has ``weak_random``/
+    ``weak_random_gt``, so the non-headline card/caption/arrow would otherwise be
+    untestable -- the row is appended to the built parquet directly, the same
+    idiom the scenario tests use to edit a built package after the fact.
+
+    Deliberately NO ``weak_graph_rate_night`` row is added to
+    active_learning_results.parquet: the page must then say plainly that the
+    trained arm isn't in this package rather than inventing a delta for it.
+    """
+    path = built_demo_data / "weak_loss_decomposition.parquet"
+    existing = pd.read_parquet(path)
+    second = pd.DataFrame([{
+        "base_arm": "graph_rate_night", "gt_gain": 0.03, "weak_gt_gain": 0.02,
+        "weak_gain": 0.01181, "retention": 0.3937,
+        "dropped_frame_cost": 0.01, "dropped_frame_share": 0.01 / 0.03,
+        "label_cost": 0.00819, "label_share": 0.00819 / 0.03, "headline": False,
+    }])
+    pd.concat([existing, second], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_weak_supervision_page_cards_decomposition_bias_and_tabs(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a)-(e) The page's spine: both retention pairs as cards, the loss split, the
+    crowded-frame bias, and the accepted/rejected gallery with the VLM-vs-GT
+    counts -- every number read from the package (the fixture's headline pair is
+    0.0018/0.0100 = 18.0% retained, 50.0% dropped-frame, 32.0% label cost).
+    """
+    pytest.importorskip("streamlit")
+    _add_second_weak_pair(built_demo_data)
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # (a) both pairs, the documented headline attributed as such
+    # Short, backtick-free card labels: st.metric breaks its label mid-TOKEN in a
+    # narrow column ("graph_ra te_night"), so the arm names carry no markup and the
+    # night card's arm pair moved to a caption (real-browser finding 4).
+    labels = {m.label: m.value for m in at.metric}
+    assert labels["GT gain retained — random (headline)"] == "18.0%"
+    assert labels["GT gain retained — graph_rate_night"] == "39.4%"
+    assert "`" not in "".join(labels)
+    # verifier retention (a DIFFERENT quantity: what the verifier kept, not what
+    # the training run retained) and the night pedestrian slice
+    assert labels["Verifier retention — random"] == "60%"
+    assert "Night pedestrian mAP50-95" in labels
+
+    # (b)/(c) the stacked loss decomposition and the paired crowding chart
+    assert len(at.get("vega_lite_chart")) >= 2
+    captions = [str(c.value) for c in at.caption]
+    # the "(headline)" card suffix carries its own attribution caption, naming
+    # docs/ACTIVE_LEARNING.md and clarifying it marks the LOWER share, not the
+    # better one (real-browser finding: a bare "(headline)" read as "best").
+    assert any(
+        "(headline) marks the pair docs/ACTIVE_LEARNING.md publishes" in c
+        and "the lower of the two shares, not the better one" in c
+        for c in captions
+    )
+    assert any("18.0%" in c and "50.0%" in c and "32.0%" in c for c in captions)
+    assert any("accepted frames average 3.00 GT boxes/frame" in c for c in captions)
+    by_class = [
+        d.value for d in at.dataframe
+        if "mutual_zero_share" in list(getattr(d.value, "columns", []))
+    ]
+    assert len(by_class) == 1
+    assert "16.7%" in list(by_class[0]["mutual_zero_share"])
+
+    # (d) the two tabs over frame_manifest.weak_verdict
+    assert {"accepted", "rejected"} <= {str(tab.label) for tab in at.tabs}
+
+    at.session_state["ws_accepted_token"] = "wA"
+    at.session_state["ws_rejected_token"] = "wR"
+    at.run(timeout=30)
+    assert not at.exception
+
+    text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
+    assert any("accepted — 1 pseudo box" in t for t in text)
+    assert any("rejected — no pseudo boxes by construction" in t for t in text)
+    assert any(
+        "no pseudo boxes exist for rejected frames by construction" in t for t in text
+    )
+    assert len(at.image) >= 1                                   # wA's crop + pseudo box
+    # label_confidence is the VLM's string enum, rendered as text: formatting it as
+    # a float raised ValueError and took the page down on every frame the VLM had
+    # labelled (consolidated review C1) -- 32 of the 78 real gallery frames.
+    assert any("label confidence high" in t for t in text)
+    counts = [
+        d.value for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == ["class", "vlm_count", "gt_count"]
+    ]
+    assert len(counts) == 2                                     # one per tab
+    accepted_counts = counts[0]
+    assert list(accepted_counts.loc[accepted_counts["class"] == "car", "vlm_count"]) == ["1"]
+
+    # the downstream result stated at ARM level (train-pool frames have no
+    # predictions), from active_learning_results: weak_random is +0.0050 night
+    assert any(
+        "`weak_random`" in t and "+0.0050" in t and "+0.0018" in t for t in text
+    )
+    # ... and the pair whose trained arm this package doesn't carry says so
+    assert any("`weak_graph_rate_night`" in t and "not in this package" in t for t in text)
+
+
+def test_weak_supervision_mutual_zero_flag(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted frame with zero pseudo boxes is the MUTUAL-ZERO case, and the
+    badge says so -- "accepted" alone would read as "the VLM labelled it", when
+    what actually happened is that the verifier agreed with the detector that the
+    frame holds none of the five classes.
+
+    Empties wA's rows out of the built package's weak_labels.parquet (the fixture
+    stages exactly one pseudo box, for wA) rather than rebuilding: the badge keys
+    off the frame's pseudo-box count, and the exporter's own "accepted frames with
+    no rows are simply absent" contract is pinned on the builder side.
+    """
+    pytest.importorskip("streamlit")
+    labels_path = built_demo_data / "weak_labels.parquet"
+    pd.read_parquet(labels_path).iloc[0:0].to_parquet(labels_path, index=False)
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    at.session_state["ws_accepted_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    text = [str(m.value) for m in at.markdown] + [str(c.value) for c in at.caption]
+    assert any("accepted — 0 pseudo boxes (mutual zero)" in t for t in text)
+
+
+def test_weak_supervision_gallery_pages_its_tabs(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The accepted tab holds 47 frames in the real package -- one grid of 47 images
+    and 47 buttons is the same wall the AL gallery was (consolidated review M8), so
+    each tab shows the first 24 behind its own "show all" checkbox."""
+    pytest.importorskip("streamlit")
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    extra = pd.DataFrame({
+        "sample_data_token": [f"a{i}" for i in range(30)],
+        "scene_name": [f"scene-{i:03d}" for i in range(30)],
+        "is_night": [False] * 30,
+        "weak_verdict": pd.array(["accepted"] * 30, dtype="string"),
+        "split": ["train_pool"] * 30,
+    })
+    pd.concat([manifest, extra], ignore_index=True).to_parquet(manifest_path, index=False)
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    assert any(
+        str(c.value).startswith("The first 24 of ") and "verifier accepted" in str(c.value)
+        for c in at.caption
+    )
+    assert not [b for b in at.button if b.key == "ws_accepted_select_a29"]
+
+    at.checkbox(key="ws_accepted_show_all").set_value(True).run(timeout=30)
+    assert not at.exception
+    assert at.button(key="ws_accepted_select_a29")
+    # the rejected tab has 1 frame, well under the page size -- no checkbox for it
+    assert not [c for c in at.checkbox if c.key == "ws_rejected_show_all"]
+
+
+def test_overview_no_longer_promises_phase_7(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overview's live promise is fulfilled: the non-headline pair's sentence names
+    the page in the present tense, and no caption still says "Phase 7".
+
+    The fixture's results.json carries a single weak/GT pair, so a second
+    by_base_arm entry is patched into the built overview_metrics.json (the page's
+    whole input for this sentence) -- same idiom as
+    test_overview_flagship_caption_when_the_cypher_twin_is_only_sourced.
+    """
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    overview_path = built_demo_data / "overview_metrics.json"
+    overview = json.loads(overview_path.read_text())
+    overview["results"]["weak_retention"]["by_base_arm"]["graph_rate_night"] = 0.3937
+    overview_path.write_text(json.dumps(overview, indent=2, sort_keys=True))
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    at = AppTest.from_file(str(DEMO_DIR / "main.py"))
+    at.run(timeout=30)
+    assert not at.exception
+
+    captions = [str(c.value) for c in at.caption]
+    assert not any("Phase 7" in c for c in captions)
+    assert any(
+        "`graph_rate_night` (39.4%)" in c and "The Weak Supervision page presents it." in c
+        for c in captions
+    )
+
+
+def test_weak_supervision_page_on_a_pre_phase_7_package(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before Phase 7 (the committed demo_data/ is still
+    package_version 0.5) carries weak_supervision_results.parquet in its OLD,
+    narrower schema -- no ``tolerance``/``conf``/``gt_boxes_per_rejected_frame``/
+    ``gt_boxes_per_candidate_frame`` -- no decomposition/by-class/labels/counts
+    tables at all, and a frame_manifest without ``weak_verdict``. The page must
+    then show what the package does carry and say what is missing, rather than
+    raising an AttributeError on a column that didn't exist yet.
+
+    Rebuilt from the built package by dropping exactly those columns/files (the
+    builder's own absent/included recording is pinned on the builder side) --
+    same idiom as test_scenario_page_errors_on_stale_package_missing_events.
+    """
+    pytest.importorskip("streamlit")
+    for name in (
+        "weak_loss_decomposition.parquet", "weak_verifier_by_class.parquet",
+        "weak_labels.parquet", "vlm_counts.parquet",
+    ):
+        (built_demo_data / name).unlink()
+    weaksup_path = built_demo_data / "weak_supervision_results.parquet"
+    pd.read_parquet(weaksup_path)[[
+        "arm", "n_candidates", "n_accepted", "verifier_retention", "n_pseudo_boxes",
+        "boxes_per_accepted_frame", "gt_boxes_per_accepted_frame",
+    ]].to_parquet(weaksup_path, index=False)
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    pd.read_parquet(manifest_path).drop(columns=["weak_verdict"]).to_parquet(
+        manifest_path, index=False
+    )
+
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert any("needs demo_data >= 0.6" in str(i.value) for i in at.info)
+    # the one thing the old package does carry is still on screen
+    assert any(m.label == "Verifier retention — random" for m in at.metric)
