@@ -50,7 +50,7 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 **All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
-FastAPI + Streamlit demo, and Evidently drift monitoring over the serving inputs with a
+FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
 two-job CI (quality + CPU smoke-train). **Demo phases 1–8 shipped:** the six-page
 public demo above runs entirely off the committed `demo_data/` package and is
 deployable to Streamlit Community Cloud.
@@ -161,7 +161,7 @@ src/nuscenes_data_engine/
   serving/                  FastAPI app
   monitoring/               Evidently drift reports
   data_engine/              SigLIP embeddings, LanceDB store, semantic search
-app/                        Streamlit demo UI (serving)
+app/                        Streamlit serving UI (`app/streamlit_app.py`) + the public demo (`app/demo/`)
 app/demo/                   public demo app — reads demo_data/ only, no backend
 demo_data/                  committed artifact package the public demo reads
 tests/                      pytest suite

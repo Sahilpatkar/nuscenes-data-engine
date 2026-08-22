@@ -351,7 +351,7 @@ the page is built around:
   exactly what the live chat UI shows — and the page never reconstructs a table the
   package does not carry.
 - **Failed cases are shown, not hidden**: a ✗ names the check it failed and the
-  reference value it was graded against ("reference 66 · answered 66").
+  reference value it was graded against ("reference 66").
 - The summary's `search_available` / `graph_available` flags are stated on the page
   when false, so a recording made without the search engine or the graph says so
   rather than looking like an agent that chose not to use them.

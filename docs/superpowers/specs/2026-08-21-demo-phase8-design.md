@@ -58,6 +58,11 @@ graph_available, max_turns}`. Staged under `data/demo_curation/chat_replays/`
 (default from settings; `anthropic` for the shipped run), `--limit N` for dry runs,
 `--model`. Cost note lives in the CLI help and `docs/DEMO.md`.
 
+Amendment (2026-08-21): `search_available` records that the frame store opened
+(token-based `show_frames` works regardless of the encoder); a failed encoder
+shows up as an errored `search_frames` step, and a `search` showcase then fails
+the run.
+
 ## 2. Build integration
 
 `build._include_chat_replay(config, out_dir) -> str` — absent / partial-`ValueError` /
@@ -92,6 +97,11 @@ Registered in `main.py` with `url_path="chat_replay"`; `views/stubs.py` is delet
    chosen one rendered by the same renderer, plus a verdict line: passed checks, the
    failing check by name, and for numeric cases "reference 66 · answered 66". Failed
    cases are shown, never hidden.
+
+   Amendment (2026-08-21, review): the verdict line shows the reference value
+   only — `✓ passed (checks) · reference 66` / `✗ failed: numeric · reference
+   2.91`; no "answered N" is extracted from the prose, the full answer is
+   rendered above it.
 4. Honesty lines: raw SQL result rows are not stored (the step shows the SQL and
    "n rows", as the live UI does); the summary's `search_available` /
    `graph_available` flags are stated when false; a replay with `error` renders the

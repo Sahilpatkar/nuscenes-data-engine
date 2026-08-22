@@ -57,8 +57,12 @@ _SEEN_KEY = "chat_replay_seen"
 
 # A whole answer reveals in about _REVEAL_TOTAL_S however long it is (per-word
 # delay capped, so a two-word answer doesn't crawl): a fixed per-word delay makes a
-# 200-word recorded answer take ten seconds before the page is readable.
-_REVEAL_TOTAL_S = 1.2
+# 200-word recorded answer take ten seconds before the page is readable. Only the
+# FIRST showcase replay is ever animated (see _render_showcase) -- a cold session
+# used to reveal every showcase answer plus the first graded one in sequence
+# (~7 s before the page was readable); one intro typing effect makes the point,
+# five in a row is just latency.
+_REVEAL_TOTAL_S = 0.8
 _REVEAL_MAX_STEP_S = 0.03
 
 # Each chunk is one word WITH its own trailing whitespace, so the streamed text is
@@ -78,9 +82,16 @@ def _word_chunks(answer: str) -> Iterator[str]:
         yield chunk
 
 
-def _reveal_answer(replay: dict[str, Any]) -> None:
-    """The stored answer, typed out on its first display in this session."""
+def _reveal_answer(replay: dict[str, Any], *, animate: bool) -> None:
+    """The stored answer -- typed out on its first display in this session, but
+    only when ``animate`` (only the very first showcase replay ever is; see
+    _render_showcase). Every other replay renders statically even on a cold
+    session: real users notice one intro typing effect, not five in a row.
+    """
     answer = str(replay.get("answer") or "")
+    if not animate:
+        st.markdown(answer)
+        return
     seen: set[str] = st.session_state.setdefault(_SEEN_KEY, set())
     replay_id = str(replay.get("id", ""))
     if replay_id in seen:
@@ -143,16 +154,23 @@ def _render_steps(replay: dict[str, Any]) -> None:
         st.caption(_ROWS_NOTE)
 
 
-def _render_replay(replay: dict[str, Any]) -> None:
+def _render_replay(replay: dict[str, Any], *, animate: bool = False) -> None:
     """One recorded question end to end — the same renderer for showcase and
     graded replays, so a graded case is never presented more thinly than a
-    showcase one."""
-    st.markdown(f"**{replay.get('question', '')}**")
+    showcase one. ``animate`` is true only for the very first showcase replay
+    (see _render_showcase) -- every other call renders its answer statically."""
+    # .strip(): several recorded questions are YAML folded scalars and end in a
+    # trailing "\n" -- unstripped, that newline lands INSIDE the bold span and
+    # CommonMark never closes the "**" across it, so the page shows literal
+    # asterisks instead of bold text. Display only -- the stored record stays
+    # byte-identical to what the model saw.
+    question = str(replay.get("question", "")).strip()
+    st.markdown(f"**{question}**")
     error = replay.get("error")
     if error:
         st.error(str(error))
     elif replay.get("answer"):
-        _reveal_answer(replay)
+        _reveal_answer(replay, animate=animate)
     else:
         st.caption("this question was recorded without an answer")
     _render_charts(replay)
@@ -227,7 +245,8 @@ def _render_showcase(replays: list[dict[str, Any]]) -> None:
     for position, replay in enumerate(showcase):
         if position:
             st.divider()
-        _render_replay(replay)
+        # Only the FIRST showcase replay is ever typed out -- see _reveal_answer.
+        _render_replay(replay, animate=position == 0)
     # Closes the section itself (rather than render() drawing the rule): a
     # recording with no showcase replays would otherwise leave two rules stacked
     # on top of each other.
@@ -246,7 +265,10 @@ def _render_graded(replays: list[dict[str, Any]]) -> None:
     labels = {
         key: (
             f"{'✓' if isinstance(replay.get('checks'), dict) and replay['checks'].get('passed') else '✗'} "
-            f"{replay.get('question', '')}"
+            # .strip(): same trailing-"\n" YAML-folded-scalar issue as
+            # _render_replay's heading -- an unstripped question here makes the
+            # selectbox render a multi-line option label.
+            f"{str(replay.get('question', '')).strip()}"
         )
         for key, replay in by_id.items()
     }

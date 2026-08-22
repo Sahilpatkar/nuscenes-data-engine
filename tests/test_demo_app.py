@@ -2108,6 +2108,40 @@ def test_chat_replay_page_renders_showcase_and_graded(
     assert any("✗ errored — overloaded_error" in str(c.value) for c in at.caption)
 
 
+def test_chat_replay_question_with_trailing_newline_renders_without_a_broken_bold_span(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Several of the real recorded questions are YAML folded scalars and end in a
+    literal trailing ``\\n``. Unstripped, that newline lands INSIDE the showcase
+    heading's bold span (``**question**``) and CommonMark never closes the ``**``
+    across it, so the page showed literal asterisks; the same trailing newline
+    also left the graded selectbox's option label multi-line. The fix is
+    display-only -- mutate the BUILT package's own `chat_replays.json` (as the
+    real recorder's YAML-folded-scalar output would already look) rather than the
+    staging fixture, so the record on disk stays exactly what `demo chat-record`
+    would have written."""
+    pytest.importorskip("streamlit")
+    replays_path = built_demo_data / "chat_replays.json"
+    records = json.loads(replays_path.read_text())
+    for record in records:
+        if record["id"] in ("show_night_locations", "eval_scene_count"):
+            record["question"] = record["question"] + "\n"
+    replays_path.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+
+    at = _chat_replay_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # The showcase heading's bold span closes right after the (stripped)
+    # question text -- no newline snuck inside it to leave the "**" unclosed.
+    markdowns = [str(m.value) for m in at.markdown]
+    assert "**Which locations have the most night frames?**" in markdowns
+
+    # The graded selectbox's label is a single line too.
+    graded = at.selectbox(key="chat_replay_graded")
+    assert "✓ How many scenes are in the dataset?" in graded.options
+    assert all("\n" not in option for option in graded.options)
+
+
 def test_chat_replay_page_absent_note(
     built_demo_data_without_chat_replay: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

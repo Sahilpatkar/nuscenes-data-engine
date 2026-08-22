@@ -341,7 +341,10 @@ def record_session(
         )
 
     summary = {
-        "model": model if model is not None else getattr(transport, "model", None),
+        # Plain `model`, not a fallback: by this point at least one record
+        # succeeded (the all-errored case already raised above), and the loop sets
+        # `model` from that record's own result the first time one lands.
+        "model": model,
         "provider": provider,
         "recorded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),

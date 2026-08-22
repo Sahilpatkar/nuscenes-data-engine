@@ -2881,6 +2881,19 @@ def test_validate_chat_replays_rejects_bad_staging(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _validate_chat_replays(records, summary, path)
 
+    _, summary = _default_chat_replays()
+    with pytest.raises(ValueError, match="JSON list"):
+        _validate_chat_replays({"not": "a list"}, summary, path)  # records not a list
+
+    records, _ = _default_chat_replays()
+    with pytest.raises(ValueError, match="JSON object"):
+        _validate_chat_replays(records, ["not", "a", "dict"], path)  # summary not a dict
+
+    records, summary = _default_chat_replays()
+    summary["n_passed"] = 99  # disagrees with the records
+    with pytest.raises(ValueError, match="n_passed"):
+        _validate_chat_replays(records, summary, path)
+
     # sanity: the unmodified fixture is valid and raises nothing.
     records, summary = _default_chat_replays()
     _validate_chat_replays(records, summary, path)
