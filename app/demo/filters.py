@@ -1006,3 +1006,71 @@ def step_detail(step: Mapping[str, Any]) -> tuple[str, str | None, str | None]:
         tokens = step_input.get("sample_data_tokens") or []
         return f"{outcome} · {len(tokens)} tokens", None, None
     return outcome, None, None
+
+
+# --- Phase 9a (Task 1): guided-tour helpers ---------------------------------------
+
+
+def parity_short(
+    sql_count: int, cypher_count: int | None, parity: bool | None, *, noun: str = "events"
+) -> str:
+    """The guided tour's one-line SQL/Cypher parity summary (a shorter cousin of
+    ``parity_caption``, which stays as the Scenario preset header's own pinned
+    wording -- this is a distinct string for a distinct place).
+
+    ``cypher_count is None`` (a GT-only preset never ran the Cypher side) reads
+    "Graph n/a (GT-only preset)" rather than a mismatch. Otherwise a ✓/✗ symbol
+    follows the Cypher count exactly as ``parity_caption`` does: ✓ for
+    ``parity is True``, "✗ mismatch recorded" for ``parity is False``, nothing for
+    ``parity is None``. ``noun`` singularizes (trailing "s" stripped, or pass an
+    already-singular noun e.g. "event") when ``sql_count == 1``.
+    """
+    label = noun[:-1] if sql_count == 1 and noun.endswith("s") else noun
+    if cypher_count is None:
+        graph = "n/a (GT-only preset)"
+    elif parity is False:
+        graph = f"{cypher_count} ✗ mismatch recorded"
+    elif parity is True:
+        graph = f"{cypher_count} ✓"
+    else:
+        graph = f"{cypher_count}"
+    return f"{sql_count} {label} found · SQL {sql_count} / Graph {graph}"
+
+
+def tour_frame_candidates(
+    manifest: pd.DataFrame, explain: pd.DataFrame, gt: pd.DataFrame, *, arm: str
+) -> list[str]:
+    """Ranked candidate frames for the guided tour's arm-selected steps ("why this
+    frame", before/after).
+
+    Restricted to manifest rows curated for ``arm`` (``al_selected_by`` -- an older
+    package without the column, or with no rows selected by this arm, yields no
+    candidates rather than raising, mirroring the Active Learning page's own
+    degradation) that also have a row in ``al_selection_explain.parquet``: the
+    "why selected" step has nothing to explain for a frame the explain group never
+    covered.
+
+    Ranked night frames first -- the arm this tour walks is night-targeted, so the
+    frame it leads with must show what the arm was built to find -- then by how
+    many visible pedestrian GT boxes the frame carries (the sharpest "what
+    changed" story for a viewer), then by token for a stable tie-break.
+    """
+    if manifest.empty or explain.empty or "al_selected_by" not in manifest.columns:
+        return []
+    explained = set(explain["sample_data_token"].astype(str))
+    selected = manifest.loc[
+        (manifest["al_selected_by"] == arm)
+        & manifest["sample_data_token"].astype(str).isin(explained)
+    ]
+    if selected.empty:
+        return []
+
+    def _pedestrian_count(token: str) -> int:
+        rows = visible_gt(gt, token)
+        return int((rows["category_group"] == "pedestrian").sum())
+
+    ranked = sorted(
+        (not bool(row.is_night), -_pedestrian_count(str(row.sample_data_token)), str(row.sample_data_token))
+        for row in selected.itertuples(index=False)
+    )
+    return [token for _, _, token in ranked]

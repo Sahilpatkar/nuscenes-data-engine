@@ -26,6 +26,7 @@ from filters import (  # noqa: E402
     loss_long,
     model_label,
     parity_caption,
+    parity_short,
     rank_events,
     replay_tool_counts,
     selection_factors,
@@ -34,6 +35,7 @@ from filters import (  # noqa: E402
     speed_caption,
     step_detail,
     subgraph_narrative,
+    tour_frame_candidates,
     verdict_line,
     weak_frame_summary,
 )
@@ -1174,3 +1176,65 @@ def test_step_detail() -> None:
         "SELECT * FROM nope",
         "sql",
     )
+
+
+# --- Phase 9a (Task 1): trust chrome primitives -----------------------------------
+
+
+def test_parity_short_wording() -> None:
+    """The Scenario viewer tour step's one-line parity summary: a match, a recorded
+    mismatch, a GT-only preset (no Cypher count at all), and singular-noun
+    agreement at a count of 1."""
+    assert parity_short(30, 30, True) == "30 events found · SQL 30 / Graph 30 ✓"
+    assert (
+        parity_short(30, 29, False)
+        == "30 events found · SQL 30 / Graph 29 ✗ mismatch recorded"
+    )
+    assert parity_short(4, None, None) == "4 events found · SQL 4 / Graph n/a (GT-only preset)"
+    assert parity_short(1, 1, True, noun="event") == "1 event found · SQL 1 / Graph 1 ✓"
+
+
+def _tour_manifest() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sample_data_token": ["day2", "night0", "night3", "noexplain", "otherarm"],
+        "al_selected_by": ["graph_rate_night"] * 4 + ["weak_random"],
+        "is_night": [False, True, True, True, True],
+    })
+
+
+def _tour_explain() -> pd.DataFrame:
+    # "noexplain" has no row here on purpose -- it must be dropped even though it
+    # is otherwise arm-selected.
+    return pd.DataFrame({"sample_data_token": ["day2", "night0", "night3", "otherarm"]})
+
+
+def _tour_gt() -> pd.DataFrame:
+    tokens = (
+        ["day2"] * 2
+        + ["night3"] * 3
+        # generously seeded with pedestrians on the two frames that must be
+        # EXCLUDED regardless -- proves it's the arm/explain filter dropping
+        # them, not a coincidental pedestrian count of zero.
+        + ["noexplain"] * 10
+        + ["otherarm"] * 10
+    )
+    return pd.DataFrame({
+        "sample_data_token": tokens,
+        "category_group": ["pedestrian"] * len(tokens),
+    })
+
+
+def test_tour_frame_candidates_orders_night_then_pedestrians_then_token() -> None:
+    """Ranked for the guided tour: night frames before day frames (the arm is
+    night-targeted), then by visible pedestrian GT count descending, then token --
+    dropping any frame the arm didn't select or that has no explain row."""
+    candidates = tour_frame_candidates(
+        _tour_manifest(), _tour_explain(), _tour_gt(), arm="graph_rate_night"
+    )
+    assert candidates == ["night3", "night0", "day2"]
+
+
+def test_tour_frame_candidates_empty_manifest_or_explain_is_empty_list() -> None:
+    manifest, explain, gt = _tour_manifest(), _tour_explain(), _tour_gt()
+    assert tour_frame_candidates(manifest.iloc[0:0], explain, gt, arm="graph_rate_night") == []
+    assert tour_frame_candidates(manifest, explain.iloc[0:0], gt, arm="graph_rate_night") == []

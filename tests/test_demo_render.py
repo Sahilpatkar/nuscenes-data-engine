@@ -15,6 +15,8 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from render import (  # noqa: E402
+    LOOP_STAGES,
+    PROVENANCE,
     STYLE_FN,
     STYLE_FP,
     STYLE_GT,
@@ -23,7 +25,10 @@ from render import (  # noqa: E402
     STYLE_TP,
     BoxStyle,
     _draw_rect,
+    chip_row_text,
     draw_overlay,
+    loop_breadcrumb_text,
+    provenance_text,
 )
 
 
@@ -445,3 +450,61 @@ def test_bar_chart_line_mark() -> None:
 
     with pytest.raises(ValueError, match="unknown mark"):
         bar_chart(counted, x="hour", y="n", mark="area", zero_line=False)
+
+
+# --- Phase 9a (Task 1): trust chrome primitives -----------------------------------
+
+
+def test_loop_breadcrumb_text_lights_only_active_stages() -> None:
+    """The lit stage(s) draw an orange badge, every other LOOP_STAGES entry a grey
+    one -- one active stage, two, and None (nothing lit, e.g. the Overview page's
+    whole-loop breadcrumb)."""
+    assert (
+        loop_breadcrumb_text(["Diagnose"])
+        == ":orange-badge[Diagnose] → :gray-badge[Mine] → "
+        ":gray-badge[Train] → :gray-badge[Evaluate]"
+    )
+    assert (
+        loop_breadcrumb_text(["Mine", "Train"])
+        == ":gray-badge[Diagnose] → :orange-badge[Mine] → "
+        ":orange-badge[Train] → :gray-badge[Evaluate]"
+    )
+    assert (
+        loop_breadcrumb_text(None)
+        == ":gray-badge[Diagnose] → :gray-badge[Mine] → "
+        ":gray-badge[Train] → :gray-badge[Evaluate]"
+    )
+    # every LOOP_STAGES entry appears exactly once regardless of what is lit
+    for stage in LOOP_STAGES:
+        assert stage in loop_breadcrumb_text(None)
+
+
+def test_loop_breadcrumb_text_rejects_unknown_stage() -> None:
+    with pytest.raises(ValueError, match="Bogus"):
+        loop_breadcrumb_text(["Bogus"])
+
+
+def test_provenance_text_kinds_and_detail() -> None:
+    """All three PROVENANCE kinds surface their fixed sentence behind their icon;
+    a non-empty ``detail`` is appended with " · "."""
+    for kind, (icon, sentence) in PROVENANCE.items():
+        text = provenance_text(kind)
+        assert text == f"{icon} {sentence}"
+        assert sentence in text
+
+    with_detail = provenance_text("recorded", "run 2026-08-11")
+    assert with_detail == f"{PROVENANCE['recorded'][0]} {PROVENANCE['recorded'][1]} · run 2026-08-11"
+
+    # empty detail (the default) appends nothing
+    assert " · " not in provenance_text("recomputed")
+
+
+def test_provenance_text_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError, match="bogus"):
+        provenance_text("bogus")
+
+
+def test_chip_row_text_joins_badges_and_is_empty_for_no_chips() -> None:
+    assert chip_row_text(["night", "pedestrian"]) == ":blue-badge[night] :blue-badge[pedestrian]"
+    assert chip_row_text(["night"], color="orange") == ":orange-badge[night]"
+    assert chip_row_text([]) == ""

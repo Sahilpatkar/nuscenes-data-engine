@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -393,3 +394,106 @@ def bar_chart(
     if title:
         chart = chart.properties(title=title)
     return chart
+
+
+# --- Phase 9a (Task 1): trust chrome ----------------------------------------------
+#
+# The guided tour and every page it visits need two small, recurring pieces of
+# chrome: which step of the Diagnose -> Mine -> Train -> Evaluate loop a page (or
+# tour step) belongs to, and where a number/claim on screen actually came from
+# (recomputed live from the package tables, a recorded experiment output shipped
+# as-is, or a reproduced selection re-derived and checked against the run). Both
+# are one-line badges/captions, so the wording lives in a pure `_text` function
+# (unit-tested without a Streamlit runtime) with a thin Streamlit-calling wrapper
+# around it, the same split `parity_caption`/`_render_parity_line` already uses.
+
+LOOP_STAGES: tuple[str, ...] = ("Diagnose", "Mine", "Train", "Evaluate")
+
+
+def loop_breadcrumb_text(active: Sequence[str] | None) -> str:
+    """The loop breadcrumb line: every ``LOOP_STAGES`` entry, in order, each an
+    orange badge if it's in ``active`` and a grey one otherwise. ``active=None``
+    lights nothing (the Overview page's whole-loop breadcrumb). An entry of
+    ``active`` that isn't a real stage raises ``ValueError`` naming it, rather than
+    silently lighting nothing -- a typo'd stage name must fail loudly, not draw a
+    breadcrumb that quietly lights the wrong (or no) badge.
+    """
+    lit = set(active or ())
+    for stage in lit:
+        if stage not in LOOP_STAGES:
+            raise ValueError(
+                f"loop_breadcrumb_text: unknown stage {stage!r} — expected one of {LOOP_STAGES}"
+            )
+    return " → ".join(
+        f":orange-badge[{stage}]" if stage in lit else f":gray-badge[{stage}]"
+        for stage in LOOP_STAGES
+    )
+
+
+def loop_breadcrumb(active: Sequence[str] | None, *, caption: str | None = None) -> None:
+    """The breadcrumb markdown, plus an optional caption line under it (e.g. the
+    Overview page's "Detect weakness → Find useful data → Retrain → Measure
+    impact")."""
+    st.markdown(loop_breadcrumb_text(active))
+    if caption:
+        st.caption(caption)
+
+
+# {kind: (material icon, fixed sentence)}. The sentence is the honest claim about
+# where a number on screen came from -- "recomputed" (this app derived it live from
+# the package's own tables), "recorded" (the offline pipeline's own output, shipped
+# and shown as-is), "reproduced" (demo al-explain re-derived the selection and this
+# app checked it equals the run's). Spec §3 places each on specific numbers/charts
+# per page; this module only owns the wording.
+PROVENANCE: dict[str, tuple[str, str]] = {
+    "recomputed": (":material/calculate:", "recomputed in this app from the package tables"),
+    "recorded": (
+        ":material/history:",
+        "recorded experiment output — shipped as the offline pipeline produced it",
+    ),
+    "reproduced": (
+        ":material/verified:",
+        "reproduced selection — re-derived by demo al-explain and validated equal to the run",
+    ),
+}
+
+
+def provenance_text(kind: str, detail: str = "") -> str:
+    """"{icon} {sentence}", with a non-empty ``detail`` appended as " · {detail}"
+    (e.g. a run id or a frame count). Unknown ``kind`` raises ``ValueError`` naming
+    it -- a typo'd provenance kind must not silently claim the wrong story about
+    where a number came from.
+    """
+    if kind not in PROVENANCE:
+        raise ValueError(
+            f"provenance_text: unknown kind {kind!r} — expected one of {sorted(PROVENANCE)}"
+        )
+    icon, sentence = PROVENANCE[kind]
+    text = f"{icon} {sentence}"
+    return f"{text} · {detail}" if detail else text
+
+
+def provenance(kind: str, detail: str = "") -> None:
+    st.caption(provenance_text(kind, detail))
+
+
+def chip_row_text(chips: Sequence[str], *, color: str = "blue") -> str:
+    """One markdown line of space-separated ``:{color}-badge[...]`` chips, e.g. the
+    tour's "night", "pedestrian" selection tags. Empty input -> empty string, so
+    the void wrapper below can no-op rather than render a blank line."""
+    return " ".join(f":{color}-badge[{chip}]" for chip in chips)
+
+
+def chip_row(chips: Sequence[str], *, color: str = "blue") -> None:
+    if not chips:
+        return
+    st.markdown(chip_row_text(chips, color=color))
+
+
+def learned(text: str) -> None:
+    """A bordered "What we learned" callout. Deliberately a plain bordered
+    container rather than ``st.info`` -- existing page tests assert ``at.info``'s
+    contents for other, unrelated notices, and reusing that widget kind here would
+    make those assertions ambiguous about which info box they're reading."""
+    with st.container(border=True):
+        st.markdown(f":material/school: **What we learned** — {text}")
