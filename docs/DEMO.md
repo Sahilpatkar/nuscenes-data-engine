@@ -193,19 +193,30 @@ manifest always names the commit it was built from, not the one that carries it.
 | `chat_replays.json` | recorded chat session (`demo chat-record`): per replay `{id, kind (eval/showcase), question, answer, model, provider, steps [{tool, input, output}], frames (7 projected columns, no thumbnail bytes), charts, checks (graded cases only), latency_s, error}` |
 | `chat_replay_summary.json` | that recording's provenance: model, provider, `recorded_at`, `git_sha`, `n_eval`, `n_passed`, `n_showcase`, `search_available`, `graph_available`, `max_turns` |
 
-## Picking the hero token
+## Overview, outcome-first (Phase 9a)
 
 Phase 9a made the page outcome-first (spec §4): title + mission → the guided-tour CTA
 → the loop strip (an unlit `loop_breadcrumb` plus four one-line beats: detect
 weakness, find useful data, retrain, measure impact) → exactly four flagship metrics
 (best night gain; night pedestrian mAP or, absent that slice, the CAN-speed
 correlation; weak-sup share of GT gain; graph = SQL flagship) → the hero image below
-that. The dataset-scale cards (camera keyframes, 2D boxes, 3D object observations,
-CAN-bus rows) moved into a collapsed `st.expander("Dataset scale")`, and a second
-`st.expander("Architecture (for technical reviewers)")` restates
-[PROJECT.md](PROJECT.md) §2 (the two-machine topology, component map, CI) and
-carries the flagship/retention captions that used to sit in the open. Nothing left
-the page — it just stopped competing with the loop for the first screenful.
+that. Everything else folded into three collapsed expanders:
+
+- `st.expander("Where these numbers come from")`, directly under the headline cards
+  — the flagship-parity and weak-retention captions. They are provenance about
+  those four cards, not architecture, so the review round moved them out of the
+  architecture drawer; the retention caption names its card ("The Weak-sup share of
+  GT gain card is …") rather than saying "the card above", which it no longer is.
+- `st.expander("Dataset scale & data checks")` — camera keyframes, 2D boxes, 3D
+  object observations, CAN-bus rows, and the **CAN speed vs ego-motion** correlation
+  card (a check on the CAN join, not a scale figure — hence "& data checks").
+- `st.expander("Architecture (for technical reviewers)")` — [PROJECT.md](PROJECT.md)
+  §2 restated: the two-machine topology, the component map, CI.
+
+Nothing left the page — it just stopped competing with the loop for the first
+screenful.
+
+## Picking the hero token
 
 The Overview page's hero image is a hand-picked exemplar crop, not a mosaic or an
 algorithmically-chosen frame. To change it: pick a `sample_data_token` from
@@ -564,8 +575,8 @@ deployed URL.
 | 1 | What problem does the project solve? | Overview + Guided tour | the loop strip ("Detect weakness → Find useful data → Retrain → Measure impact") and tour step 1, **The weakness: night** | local: pending · live: pending |
 | 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** GT / Predictions / Overlay toggle | local: pending · live: pending |
 | 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Find more like it** (the flagship event), and the six **preset** buttons + ranked card grid | local: pending · live: pending |
-| 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line next to each dynamics preset's parity caption (flagship 30 events found · SQL 30 / Graph 30 ✓), and the event viewer's **Interactive graph** panel with the matched path | local: pending · live: pending |
-| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r) | local: 2026-08-21 · live: pending |
+| 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel with the matched path | local: pending · live: pending |
+| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r), now inside the **Dataset scale & data checks** expander | local: pending · live: pending |
 | 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Why was this frame selected?** per-frame factor panel | local: pending · live: pending |
 | 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **Retrain on what was found** / **Same kind of frame, after**, plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: pending · live: pending |
 | 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: 2026-08-21 · live: pending |

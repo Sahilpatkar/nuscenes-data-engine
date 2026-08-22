@@ -65,6 +65,12 @@ Steps (stage → content; every value from the package):
 | 5 | Same kind of frame, after (Evaluate) | first exemplar token, two-state `st.radio(key="tour_exemplar_model")`, overlay, `fixed_boxes` table, night mAP sentence, the hero honesty line |
 | 6 | What we found, added, gained — and what failed (Evaluate, all lit) | four bordered answers (§2), deep links to all six pages, Restart |
 
+Amendment (2026-08-22, review): `tour_frame_candidates` orders night first, then
+community failure-mass rank, then pedestrian GT count — the step shows the frame
+whose community best exemplifies the mass → quota mechanism; on v0.7 that is
+`0f70138f…` (flagship #12, community #10823, quota 23 → 87, later rejected by the
+weak verifier), so both conditional sentences render.
+
 ## 2. Result screen (step 6) — derived sources
 
 1. **What weakness did we find?** baseline night 0.1667 vs overall 0.2477, night
@@ -129,6 +135,13 @@ scale")` with the four scale cards → `st.expander("Architecture (for technical
 reviewers)")` restating `docs/PROJECT.md` §2 (two machines, component map, CI —
 no new claims) and carrying the existing flagship/retention captions verbatim →
 footer captions unchanged (test-pinned).
+
+Amendment (2026-08-22, review): the scale drawer is labelled `st.expander("Dataset
+scale & data checks")` (the CAN-speed card in it is a check on the CAN join, not a
+scale figure), and the flagship/retention captions moved out of the architecture
+drawer into a third expander, `st.expander("Where these numbers come from")`,
+directly under the headline cards — they are provenance about those cards, so the
+retention one now names its card instead of saying "the card above".
 
 ## 5. Docs, screenshots, tests
 
