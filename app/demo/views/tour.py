@@ -21,12 +21,31 @@ from typing import Any
 import nav
 import pandas as pd
 import streamlit as st
-from filters import failure_flags, gt_for_render, model_label, visible_gt
+from filters import (
+    failure_flags,
+    fixed_boxes,
+    gt_for_render,
+    model_label,
+    parity_short,
+    rank_events,
+    selection_factors,
+    severity_caption,
+    tour_frame_candidates,
+    visible_gt,
+)
 from PIL import Image
-from render import draw_overlay, loop_breadcrumb, metric_cards, provenance
+from render import (
+    bar_chart,
+    chip_row,
+    draw_overlay,
+    loop_breadcrumb,
+    metric_cards,
+    provenance,
+)
 
 from data import (
     STALE_PACKAGE_NOTE,
+    al_explain_available,
     crop_path,
     events_available,
     load_al_communities,
@@ -39,8 +58,11 @@ from data import (
     load_gt_boxes,
     load_overview,
     load_predictions,
+    load_subgraphs,
     load_weak_loss,
     load_weaksup,
+    subgraphs_available,
+    thumb_path,
 )
 from views.overview import HERO_CAPTION
 
@@ -57,9 +79,61 @@ _CONF_HIT_FLOOR = 0.40
 
 _NO_HERO_CROP_NOTE = "hero crop not in this package"
 
-# Steps 2-6 land in the next tasks (plan Tasks 3 and 4) -- an honest placeholder
-# line, never a half-built claim.
+# Step 6 lands in the next task (plan Task 4) -- an honest placeholder line, never a
+# half-built claim.
 _PLACEHOLDER_NOTE = "Step lands in the next task"
+
+# The tour's mining step queries the flagship dynamics preset: it is the one the
+# Scenario page opens on, the one `demo subgraphs` records a SQL/Cypher parity for,
+# and the one whose events are hard braking near pedestrians -- the population the
+# night weakness of steps 0-1 lives in.
+_TOUR_PRESET = "hard_braking_near_pedestrians"
+
+# Text copied verbatim (not imported) from the two pages these steps condense --
+# every one of them is a module-private constant or an inline string over there, and
+# a tour step must say exactly what the deep page behind it says:
+#   views/scenarios.py -- _NOT_CURATED_CAPTION, and `render`'s events-absent error;
+#   views/active_learning.py -- _EXPLAIN_ABSENT_NOTE, _EXPLAIN_FRAME_ABSENT_NOTE,
+#   _TRAIN_POOL_NOTE, and _render_before_after's legend / empty-exemplar note.
+_NOT_CURATED_CAPTION = "not in the curated prediction set"
+_EVENTS_ABSENT_NOTE = "needs demo_data >= 0.4 — rerun demo build"
+_EXPLAIN_ABSENT_NOTE = (
+    "per-frame community and routed mass are not included in this package "
+    "(demo al-explain)"
+)
+_EXPLAIN_FRAME_ABSENT_NOTE = (
+    "this frame is not in the staged selection facts — re-run `demo al-explain`"
+)
+_TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
+_OVERLAY_LEGEND = (
+    "Green = ground truth, orange dashed = a GT box this model missed, white = its "
+    "true positives, yellow dotted = a claim below the confidence floor, red = a "
+    "false positive."
+)
+_NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
+_NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
+
+_NO_TOUR_EVENT_NOTE = f"no `{_TOUR_PRESET}` events in this package"
+_NO_TOUR_FRAME_NOTE = "no curated frame selected by the arm is in this package"
+
+# Step 5's honesty line, drawn only when the package's own numbers make it true --
+# see _hero_recovery_is_low_conf.
+_HERO_HONESTY_LINE = (
+    "The hero frame's pedestrian recovery (step 2) is a low-confidence claim and does "
+    "not pass this table's confident-detection rule; the hand-approved exemplars do."
+)
+
+# scenario_events' t-2..t+2 neighbour columns in strip order, with the event itself
+# (column None) in the middle. Plain ASCII hyphens in the labels, matching
+# views/scenarios.py's own _BEFORE_STEPS/_AFTER_STEPS -- ruff RUF001 flags the design
+# doc's typographic U+2212 minus as an ambiguous character.
+_FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = (
+    ("t_minus2", "t-2"),
+    ("t_minus1", "t-1"),
+    (None, "current"),
+    ("t_plus1", "t+1"),
+    ("t_plus2", "t+2"),
+)
 
 
 @dataclass
@@ -324,6 +398,357 @@ def _render_missed_pedestrian(data: _TourData) -> None:
     provenance("recomputed", "boxes, claims and counts from gt_boxes/predictions")
 
 
+def _open(page_url: str, **state: str) -> None:
+    """Assign a target page's own session-state keys, then switch to it.
+
+    ``st.page_link`` carries no state, so the three "open this one over there"
+    buttons write the keys the target page already reads -- ``scenario_preset``/
+    ``scenario_token``, ``al_frame_token``, ``al_exemplar`` (that last one is the
+    Active Learning page's exemplar SELECTBOX key, which is valid to set before the
+    widget is instantiated) -- and switch afterwards. Called from a button's inline
+    branch, never from an ``on_click`` callback.
+    """
+    for key, value in state.items():
+        st.session_state[key] = value
+    st.switch_page(nav.page(page_url))
+
+
+def _render_event_frame(data: _TourData, row: pd.Series) -> None:
+    """The mined event's frame, GT boxes only: crop first, thumb second -- the two
+    branches ``views/scenarios.py::_render_viewer`` uses for an event outside the
+    curated prediction set, and its caption for the same reason that page shows it
+    (predictions exist for curated val frames only). A curated event keeps the
+    boxes and drops the caption: it would be a false absence claim there."""
+    token = str(row["sample_data_token"])
+    gt_rows = gt_for_render(visible_gt(data.gt, token))
+    crop, thumb = crop_path(token), thumb_path(token)
+    if crop.is_file():
+        st.image(draw_overlay(Image.open(crop), gt_rows, pd.DataFrame(), mode="gt", scale=0.6))
+    elif thumb.is_file():
+        st.image(draw_overlay(Image.open(thumb), gt_rows, pd.DataFrame(), mode="gt", scale=0.16))
+    if not bool(row.get("in_curated_set")):
+        st.caption(_NOT_CURATED_CAPTION)
+
+
+def _render_event_filmstrip(row: pd.Series) -> None:
+    """The event's t-2..t+2 thumbs with their step labels -- the Scenario page's
+    filmstrip without its step slider (a tour screen is one visual, not a control
+    panel). A scene-edge neighbour is NA and is left out of the strip entirely,
+    exactly as that page leaves it out."""
+    steps = []
+    for column, label in _FILMSTRIP_STEPS:
+        token = row["sample_data_token"] if column is None else row.get(column)
+        if pd.notna(token):
+            steps.append((label, str(token)))
+    if not steps:
+        return
+    for strip_column, (label, token) in zip(st.columns(len(steps)), steps, strict=True):
+        with strip_column:
+            thumb = thumb_path(token)
+            if thumb.is_file():
+                st.image(str(thumb))
+            st.caption(label)
+
+
+def _render_mine(data: _TourData) -> None:
+    """Step 2 — the weakness as a population: the flagship scenario query's top
+    event, its own facts, and how many of the matching events are at night."""
+    if data.events is None:
+        st.info(_EVENTS_ABSENT_NOTE)
+        return
+    ranked = rank_events(data.events, _TOUR_PRESET)
+    if ranked.empty:
+        st.info(_NO_TOUR_EVENT_NOTE)
+        return
+    row = ranked.iloc[0]
+    token = str(row["sample_data_token"])
+
+    left, right = st.columns([3, 2])
+    with left:
+        _render_event_frame(data, row)
+    with right:
+        st.markdown(f"**{row['scene_name']} · {severity_caption(_TOUR_PRESET, row.to_dict())}**")
+        n_peds = int(row["n_peds_within_10m"]) if pd.notna(row["n_peds_within_10m"]) else 0
+        nearest = row["min_dist_pedestrian_m"]
+        facts = f"within 10 m: {n_peds} pedestrian{'' if n_peds == 1 else 's'}"
+        if pd.notna(nearest):
+            facts += f" · nearest at {float(nearest):.1f} m"
+        st.markdown(facts)
+        chip_row([
+            "night" if bool(row["is_night"]) else "day",
+            *(["rain"] if bool(row["is_rain"]) else []),
+        ])
+    _render_event_filmstrip(row)
+
+    # The parity line is a trust indicator, not a claim about this event: a package
+    # with no subgraphs staged simply omits it (the Scenario page's own no-op).
+    payload = load_subgraphs(_TOUR_PRESET) if subgraphs_available() else None
+    if payload is not None:
+        st.caption(
+            parity_short(int(payload["sql_count"]), payload["cypher_count"], payload["parity"])
+        )
+
+    n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
+    st.markdown(f"{n_night} of {len(ranked)} matching events are at night.")
+    provenance("recorded", "event counts computed at build against SQL and the Neo4j graph")
+    provenance("recomputed", "overlay from gt_boxes.parquet")
+    if st.button("Open this event in Scenario Search →", key="tour_open_event"):
+        _open("scenarios", scenario_preset=_TOUR_PRESET, scenario_token=token)
+
+
+def _tour_frame(data: _TourData, arm: str) -> tuple[str, float] | None:
+    """``(token, image scale)`` for the "why selected" step: the first ranked
+    candidate that has a crop, else the first that has a thumb (a partial package),
+    else ``None`` -- the same crop-then-thumb fallback (and the same 0.6/0.16
+    scales) the Active Learning page's own selected-frame panel uses."""
+    candidates = tour_frame_candidates(data.manifest, data.explain, data.gt, arm=arm)
+    for token in candidates:
+        if crop_path(token).is_file():
+            return token, 0.6
+    for token in candidates:
+        if thumb_path(token).is_file():
+            return token, 0.16
+    return None
+
+
+def _flagship_rank(data: _TourData, token: str) -> int | None:
+    """This frame's rank in the tour's own scenario query, or ``None`` when it is
+    not one of that query's events at all -- the "the two mechanisms agree on this
+    frame" sentence is only written when they actually do."""
+    if data.events is None:
+        return None
+    ranked = rank_events(data.events, _TOUR_PRESET)
+    tokens = [str(value) for value in ranked["sample_data_token"]]
+    return tokens.index(token) + 1 if token in tokens else None
+
+
+def _render_why_selected(data: _TourData) -> None:
+    """Step 3 — one mined frame and the recorded reason it was picked, reproduced
+    by ``demo al-explain`` rather than reasoned about here."""
+    if not al_explain_available():
+        st.info(_EXPLAIN_ABSENT_NOTE)
+        return
+    arm = data.arm
+    if arm is None:
+        st.info(STALE_PACKAGE_NOTE)
+        return
+    chosen = _tour_frame(data, arm)
+    if chosen is None:
+        st.info(_NO_TOUR_FRAME_NOTE)
+        return
+    token, scale = chosen
+
+    frame_row = data.manifest.loc[data.manifest["sample_data_token"] == token].iloc[0]
+    gt_rows = visible_gt(data.gt, token)
+    image_path = crop_path(token) if scale == 0.6 else thumb_path(token)
+    st.image(
+        draw_overlay(
+            Image.open(image_path),
+            # matched_<arm> is NA on a train-pool frame (no model ever saw it as a
+            # test image), which draw_overlay renders as plain GT -- never as a miss.
+            gt_for_render(gt_rows, arm),
+            pd.DataFrame(),
+            mode="gt",
+            scale=scale,
+        )
+    )
+    if frame_row.get("split") == "train_pool":
+        st.caption(_TRAIN_POOL_NOTE)
+
+    explain_rows = data.explain.loc[data.explain["sample_data_token"] == token]
+    if explain_rows.empty:
+        # Unreachable for a candidate (tour_frame_candidates only returns tokens
+        # with an explain row), kept so this panel can never invent a reason.
+        st.caption(_EXPLAIN_FRAME_ABSENT_NOTE)
+        return
+    night_floor_value = (data.validation.get("config") or {}).get("night_floor")
+    night_floor = int(night_floor_value) if night_floor_value is not None else None
+    n_communities = int(data.validation.get("n_communities", len(data.communities)))
+    for label, value, flag in selection_factors(
+        explain_rows.iloc[0].to_dict(), n_communities=n_communities, night_floor=night_floor
+    ):
+        mark = "" if flag is None else (" ✓" if flag else " ✗")
+        st.markdown(f"**{label}:** {value}{mark}")
+
+    rank = _flagship_rank(data, token)
+    if rank is not None:
+        st.markdown(
+            f"This frame is itself flagship event #{rank} — the scenario query and the "
+            "selection agree on it."
+        )
+    if str(frame_row.get("weak_verdict")) == "rejected":
+        st.markdown(
+            "Later, the weak-supervision verifier rejected this frame as too crowded to "
+            "label automatically — step 7 shows why that matters."
+        )
+    floor_text = (
+        "a night floor takes a minimum number of night frames first"
+        if night_floor is None
+        else f"a night floor takes {night_floor} night frames first"
+    )
+    st.markdown(
+        f"Nothing about this frame on its own selected it: its community carried failure "
+        f"mass, that mass bought the community a quota, the frame ranked high enough "
+        f"inside it by similarity — and {floor_text}."
+    )
+    n_selected = int(data.validation.get("n_selected", len(data.explain)))
+    provenance(
+        "reproduced",
+        f"demo al-explain reproduced the run: {n_selected} frames, "
+        f"{n_communities} communities",
+    )
+    if st.button("Open this frame in Active Learning →", key="tour_open_al_frame"):
+        _open("active_learning", al_frame_token=token)
+
+
+def _render_retrain(data: _TourData) -> None:
+    """Step 4 — what the mining bought the training set, and where this arm lands
+    among every arm the experiment ran."""
+    arm = data.arm
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm] if arm is not None else data.arms.iloc[:0]
+    if base_rows.empty or arm_rows.empty:
+        st.info(STALE_PACKAGE_NOTE)
+        return
+    base_row, arm_row = base_rows.iloc[0], arm_rows.iloc[0]
+
+    # A card whose value is NA is omitted, never rendered as "nan": n_scenes/
+    # night_share come from the arm's own mined-set composition, which an older
+    # results.json (or an arm with no extra-frames file) never wrote.
+    cards: list[tuple[str, str]] = []
+    base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
+    sizes_known = bool(pd.notna(base_n)) and bool(pd.notna(arm_n))
+    if sizes_known:
+        cards.append(("Frames mined", f"{int(arm_n) - int(base_n):,}"))
+    n_scenes = arm_row.get("n_scenes")
+    if bool(pd.notna(n_scenes)):
+        cards.append(("Scenes covered", f"{int(n_scenes)}"))
+    night_share = arm_row.get("night_share")
+    if bool(pd.notna(night_share)):
+        cards.append(("Night share", f"{float(night_share):.0%}"))
+    if sizes_known:
+        cards.append(("Training set", f"{int(base_n):,} → {int(arm_n):,} images"))
+    metric_cards(cards)
+
+    ordered = (
+        data.arms.sort_values("round_order").reset_index(drop=True)
+        if "round_order" in data.arms.columns
+        else data.arms
+    )
+    st.altair_chart(
+        bar_chart(
+            ordered,
+            x="arm",
+            y="delta_night",
+            highlight=arm,
+            # round_order's own order: the arms read as the experiment ran them.
+            sort=[str(name) for name in ordered["arm"]],
+            label_angle=-45,
+            title="Night mAP50-95 vs baseline, all arms",
+            y_title="Δ night mAP50-95",
+        ),
+        width="stretch",
+    )
+    st.markdown(
+        "Every arm retrains the same detector with the same budget and is scored on the "
+        "same held-out split; `random` is the control."
+    )
+    provenance("recorded", "active_learning_results.parquet")
+
+
+def _night_map_sentence(data: _TourData, arm: str) -> str | None:
+    """"Night mAP50-95 A → B (+D) on the held-out split.", or ``None`` when this
+    package's arm table carries no row for one of the two models."""
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm]
+    if base_rows.empty or arm_rows.empty:
+        return None
+    base_night = float(base_rows.iloc[0]["night_map5095"])
+    arm_night = float(arm_rows.iloc[0]["night_map5095"])
+    # The table's own recorded delta where it has one (it is the number every other
+    # page quotes); the difference of the two figures on screen otherwise.
+    recorded = arm_rows.iloc[0].get("delta_night")
+    delta = float(recorded) if bool(pd.notna(recorded)) else arm_night - base_night
+    return (
+        f"Night mAP50-95 {base_night:.4f} → {arm_night:.4f} ({delta:+.4f}) on the "
+        "held-out split."
+    )
+
+
+def _hero_recovery_is_low_conf(data: _TourData) -> bool:
+    """Whether the hero frame's pedestrian recovery really is the low-confidence
+    claim step 5's honesty line calls it: the arm turns a baseline miss into a hit
+    on that frame (``_pedestrian_miss_to_hit_frames``), yet ``fixed_boxes`` -- the
+    confident-detection rule this step's table applies -- lists nothing for it.
+
+    Derived rather than asserted: the shipped package's hero is exactly that case
+    (conf 0.135, below the 0.40 hit floor), but a package whose hero was recovered
+    confidently must not carry a sentence calling the recovery unsure."""
+    hero = str(data.overview.get("hero_token") or "")
+    arm = data.arm
+    if not hero or arm is None:
+        return False
+    frames = _pedestrian_miss_to_hit_frames(data)
+    if frames is None or hero not in frames:
+        return False
+    upgraded = fixed_boxes(
+        visible_gt(data.gt, hero),
+        data.preds.loc[data.preds["sample_data_token"] == hero],
+        baseline=data.baseline,
+        arm=arm,
+    )
+    return bool(upgraded.empty)
+
+
+def _render_after(data: _TourData) -> None:
+    """Step 5 — a hand-approved before/after frame, and the arm-level number that
+    is the actual result."""
+    arm = data.arm
+    tokens = [str(token) for token in (data.exemplars.get("tokens") or [])]
+    if not tokens or arm is None:
+        st.info(_NO_EXEMPLAR_NOTE)
+        return
+    token = tokens[0]
+    models = [data.baseline, arm]
+    model = (
+        st.radio(
+            "Model", models, key="tour_exemplar_model", horizontal=True, format_func=model_label
+        )
+        or models[0]
+    )
+
+    gt_rows = visible_gt(data.gt, token)
+    frame_preds = data.preds.loc[data.preds["sample_data_token"] == token]
+    crop = crop_path(token)
+    if crop.is_file():
+        st.image(
+            draw_overlay(
+                Image.open(crop),
+                gt_for_render(gt_rows, model),
+                frame_preds.loc[frame_preds["model"] == model],
+                mode="overlay",
+                scale=0.6,
+            ),
+            width="stretch",
+        )
+    st.caption(_OVERLAY_LEGEND)
+
+    upgraded = fixed_boxes(gt_rows, frame_preds, baseline=data.baseline, arm=arm)
+    if upgraded.empty:
+        st.caption(_NO_UPGRADED_BOXES_NOTE)
+    else:
+        st.dataframe(upgraded, hide_index=True)
+
+    sentence = _night_map_sentence(data, arm)
+    if sentence:
+        st.markdown(sentence)
+    if _hero_recovery_is_low_conf(data):
+        st.markdown(_HERO_HONESTY_LINE)
+    provenance("recomputed", "per-box claims from predictions.parquet")
+    if st.button("Open this exemplar in Active Learning →", key="tour_open_exemplar"):
+        _open("active_learning", al_exemplar=token)
+
+
 def _render_placeholder(data: _TourData) -> None:
     st.caption(_PLACEHOLDER_NOTE)
 
@@ -343,24 +768,33 @@ _STEPS: tuple[_Step, ...] = (
         render=_render_missed_pedestrian,
         links=(("failures", "Failure Explorer — the same overlay on every val frame"),),
     ),
-    _Step(key="mine", title="Find more like it", stage="Mine", render=_render_placeholder),
+    _Step(
+        key="mine",
+        title="Find more like it",
+        stage="Mine",
+        render=_render_mine,
+        links=(("scenarios", "Scenario Search — every preset, every matching event"),),
+    ),
     _Step(
         key="why_selected",
         title="Why this frame was picked",
         stage="Mine",
-        render=_render_placeholder,
+        render=_render_why_selected,
+        links=(("active_learning", "Active Learning — the whole mined set and its communities"),),
     ),
     _Step(
         key="retrain",
         title="Retrain on what was found",
         stage="Train",
-        render=_render_placeholder,
+        render=_render_retrain,
+        links=(("active_learning", "Active Learning — every arm, its quotas and its table"),),
     ),
     _Step(
         key="after",
         title="Same kind of frame, after",
         stage="Evaluate",
-        render=_render_placeholder,
+        render=_render_after,
+        links=(("active_learning", "Active Learning — every hand-approved before/after frame"),),
     ),
     _Step(
         key="result",

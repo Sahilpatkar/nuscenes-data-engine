@@ -2302,6 +2302,145 @@ def test_tour_walks_steps_0_and_1(
     )
 
 
+def _walk_to_step(at: Any, index: int) -> Any:
+    """Click "Next →" until the tour sits on its ``index``-th step (0-based, i.e.
+    the screen captioned "Step {index + 1} of 7").
+
+    The walk is deliberately a real click sequence rather than a session_state
+    poke: the Back/Next callbacks are the only thing that moves ``tour_step``, and
+    a test that set the key directly would stop covering them.
+    """
+    for _ in range(index):
+        at.button(key="tour_next").click().run(timeout=30)
+    return at
+
+
+def test_tour_walks_steps_2_to_5(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Steps 2-5 (screens 3-6): the mined event, why one mined frame was picked, the
+    retrain, and the same kind of frame after -- every number read from the fixture
+    package (its flagship event "s1", its night-pass selected frame, its arm table,
+    its one exemplar "v0"), never written into the page."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+
+    # --- step 2: "Find more like it" -----------------------------------------------
+    _walk_to_step(at, 2)
+    assert not at.exception
+    captions = [str(caption.value) for caption in at.caption]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(text.startswith("Step 3 of 7 · Find more like it") for text in captions)
+    # the fixture's only hard_braking_near_pedestrians event: "s1", scene-X, its own
+    # severity figure (accel_long_min_mps2 = -7.5) and its near-pedestrian facts
+    # (f1 at 5m within 10m, f2 at 20m outside it).
+    assert any("scene-X" in text and "0.76g braking" in text for text in markdowns)
+    assert any("within 10 m: 1 pedestrian · nearest at 5.0 m" in text for text in markdowns)
+    # the event frame itself plus its filmstrip thumbs (s1 and its t+1 neighbour v1)
+    assert len(at.image) >= 2
+    # parity read from graph_subgraphs/hard_braking_near_pedestrians.json (1/1, True)
+    assert any("found · SQL 1 / Graph 1 ✓" in text for text in captions)
+    # the counted night line: s1 is a day event, so 0 of the 1 matching events
+    assert any("0 of 1 matching events are at night" in text for text in markdowns)
+    assert "Scenario Search" in str(at.button(key="tour_open_event").label)
+
+    # --- step 3: "Why this frame was picked" ---------------------------------------
+    at.button(key="tour_next").click().run(timeout=30)
+    assert not at.exception
+    captions = [str(caption.value) for caption in at.caption]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(text.startswith("Step 4 of 7 · Why this frame was picked") for text in captions)
+    # selection_factors, rendered exactly as the Active Learning page renders them --
+    # the fixture's first candidate frame was taken by the night pass (floor 1).
+    assert any(text.startswith("**Night frame:** yes ✓") for text in markdowns)
+    assert any("**Picked in:** night pass (night floor 1)" in text for text in markdowns)
+    # the selection is REPRODUCED (demo al-explain), not recomputed or recorded
+    assert any("reproduced selection" in text for text in captions)
+    assert "Active Learning" in str(at.button(key="tour_open_al_frame").label)
+
+    # --- step 4: "Retrain on what was found" ---------------------------------------
+    at.button(key="tour_next").click().run(timeout=30)
+    assert not at.exception
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(text.startswith("Step 5 of 7 · Retrain on what was found") for text in captions)
+    # the fixture arm table: baseline 100 -> graph_rate_night 120 train images, and
+    # the arm's own mined-set composition (1 scene, all-night).
+    assert [str(metric.label) for metric in at.metric] == [
+        "Frames mined", "Scenes covered", "Night share", "Training set",
+    ]
+    assert [str(metric.value) for metric in at.metric] == [
+        "20", "1", "100%", "100 → 120 images",
+    ]
+    assert len(at.get("vega_lite_chart")) == 1
+    assert any("recorded experiment output" in text for text in captions)
+
+    # --- step 5: "Same kind of frame, after" ---------------------------------------
+    at.button(key="tour_next").click().run(timeout=30)
+    assert not at.exception
+    captions = [str(caption.value) for caption in at.caption]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(text.startswith("Step 6 of 7 · Same kind of frame, after") for text in captions)
+    assert at.radio(key="tour_exemplar_model").options == ["baseline", "graph_rate_night"]
+    assert len(at.image) == 1
+    # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
+    # graph_rate_night claims it at 0.80.
+    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
+    assert len(tables) == 1
+    # the result is the arm, not the frame: fixture baseline night 0.10 -> arm 0.13.
+    assert any(
+        "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
+        for text in markdowns
+    )
+    assert any("recomputed in this app" in text for text in captions)
+    assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
+
+
+def test_tour_deep_link_buttons_set_state(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each step's deep link pre-selects what the viewer was looking at on the page
+    it opens -- the same event, frame or exemplar, not that page's default.
+
+    Only the state is asserted: an in-script ``st.switch_page`` reruns into the
+    target page but is not sticky across AppTest's own ``at.run()`` (the plan's
+    verified facts), so each button gets its own walk from a fresh app.
+    """
+    pytest.importorskip("streamlit")
+    for step_index, key, expected in (
+        (2, "tour_open_event", {"scenario_preset": "hard_braking_near_pedestrians",
+                                "scenario_token": "s1"}),
+        (3, "tour_open_al_frame", {"al_frame_token": "v0"}),
+        (5, "tour_open_exemplar", {"al_exemplar": "v0"}),
+    ):
+        at = _tour_apptest(built_demo_data, monkeypatch)
+        _walk_to_step(at, step_index)
+        at.button(key=key).click().run(timeout=30)
+        assert not at.exception, key
+        for state_key, value in expected.items():
+            assert at.session_state[state_key] == value, key
+
+
+def test_tour_degrades_without_optional_groups(
+    built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two optional groups the mining steps read: without `demo al-explain`'s
+    per-frame facts step 3 says so instead of inventing a reason, and without
+    scenario_events.parquet step 2 says so instead of raising."""
+    pytest.importorskip("streamlit")
+    package = built_demo_data_without_explain
+
+    at = _tour_apptest(package, monkeypatch)
+    _walk_to_step(at, 3)
+    assert not at.exception
+    assert any("not included in this package" in str(e.value) for e in at.info)
+
+    (package / "scenario_events.parquet").unlink()
+    at = _tour_apptest(package, monkeypatch)
+    _walk_to_step(at, 2)
+    assert not at.exception
+    assert any("needs demo_data >= 0.4" in str(e.value) for e in at.info)
+
+
 def test_navigation_sections_keep_every_page_reachable(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
