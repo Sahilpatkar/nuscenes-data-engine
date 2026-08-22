@@ -21,16 +21,20 @@ from filters import (  # noqa: E402
     failure_flags,
     filter_frames,
     fixed_boxes,
+    frame_caption,
     graph_node_label,
     loss_long,
     model_label,
     parity_caption,
     rank_events,
+    replay_tool_counts,
     selection_factors,
     severity_caption,
     sort_frames,
     speed_caption,
+    step_detail,
     subgraph_narrative,
+    verdict_line,
     weak_frame_summary,
 )
 
@@ -1005,4 +1009,168 @@ def test_crowding_long_format() -> None:
     assert list(long["side"]) == ["accepted", "rejected", "accepted", "rejected"]
     assert list(long["gt_boxes_per_frame"]) == pytest.approx(
         [3.8674, 7.6052, 3.4114, 6.6817]
+    )
+
+
+# --- the recorded chat replay helpers ---------------------------------------------
+#
+# Shapes come from `demo chat-record`'s own records (src/nuscenes_data_engine/demo/
+# chat_record.py::RECORD_KEYS / FRAME_COLUMNS) and the agent's step summaries
+# (data_engine/chat/agent.py::_summarize) -- these tests pin how the page turns them
+# into on-screen text, with no Streamlit runtime involved.
+
+
+def _steps_replay(*tools: str) -> dict[str, object]:
+    return {"steps": [{"tool": tool, "input": {}, "output": "ok"} for tool in tools], "charts": []}
+
+
+def test_replay_tool_counts_counts_tools_and_charts() -> None:
+    """The "tools exercised" card: one count per agent tool across every replay,
+    plus the total number of charts recorded. An ERRORED replay's steps still
+    count -- the agent really did run those tools before the session broke."""
+    replays = [
+        {
+            "steps": [
+                {"tool": "run_sql", "input": {"sql": "SELECT 1"}, "output": "1 rows"},
+                {"tool": "show_frames", "input": {"sample_data_tokens": ["a"]}, "output": "1 frames attached"},
+                {"tool": "make_chart", "input": {}, "output": "charted: Night scenes"},
+            ],
+            "charts": [{"kind": "bar", "title": "Night scenes", "columns": [], "rows": []}],
+        },
+        _steps_replay("run_cypher", "search_frames", "run_sql"),
+        {
+            "steps": [{"tool": "run_sql", "input": {"sql": "SELECT 1"}, "output": "error: boom"}],
+            "charts": [],
+            "error": "boom",
+        },
+    ]
+
+    assert replay_tool_counts(replays) == {
+        "run_sql": 3, "run_cypher": 1, "search_frames": 1, "show_frames": 1,
+        "make_chart": 1, "charts": 1,
+    }
+
+    # Every key is present even with nothing recorded -- the card reads the dict
+    # straight, so a missing key would be a KeyError on an empty package.
+    assert replay_tool_counts([]) == {
+        "run_sql": 0, "run_cypher": 0, "search_frames": 0, "show_frames": 0,
+        "make_chart": 0, "charts": 0,
+    }
+
+
+def test_verdict_line_passed_failed_reference_and_showcase() -> None:
+    """The graded verdict line: which checks applied, which failed by name, and the
+    reference value the numeric check was graded against.
+
+    The reference is stated; the model's own number is NOT extracted from its prose
+    (the answer itself is on screen in full above the line -- guessing which number
+    in a sentence was "the" answer would be the page inventing a fact).
+    """
+    passed = {
+        "kind": "eval", "error": None,
+        "checks": {
+            "english": True, "tool_use": True, "grounded": True, "numeric": True,
+            "expected": 66, "passed": True,
+        },
+    }
+    assert verdict_line(passed) == "✓ passed (english, tool_use, grounded, numeric) · reference 66"
+
+    failed = {
+        "kind": "eval", "error": None,
+        "checks": {
+            "english": True, "tool_use": True, "grounded": True, "numeric": False,
+            "expected": 2.91, "passed": False,
+        },
+    }
+    assert verdict_line(failed) == "✗ failed: numeric · reference 2.91"
+
+    two_failures = {
+        "kind": "eval", "error": None,
+        "checks": {
+            "english": True, "tool_use": True, "grounded": False, "numeric": False,
+            "expected": 12, "passed": False,
+        },
+    }
+    assert verdict_line(two_failures) == "✗ failed: grounded, numeric · reference 12"
+
+    # A case with no reference_sql carries no `expected` key -- the clause is
+    # omitted rather than printed as "reference None".
+    no_reference = {
+        "kind": "eval", "error": None,
+        "checks": {"english": True, "tool_use": True, "grounded": True, "frames": True, "passed": True},
+    }
+    assert verdict_line(no_reference) == "✓ passed (english, tool_use, grounded, frames)"
+
+    # An integral reference reads as an int whichever JSON type it came back as;
+    # a fractional one is printed as recorded, never re-rounded.
+    integral = {
+        "kind": "eval", "error": None,
+        "checks": {"english": True, "tool_use": True, "grounded": True, "numeric": True,
+                   "expected": 66.0, "passed": True},
+    }
+    assert verdict_line(integral).endswith("· reference 66")
+
+    errored = {
+        "kind": "eval", "checks": {"passed": False},
+        "error": "overloaded_error: the provider dropped the session",
+    }
+    assert verdict_line(errored) == "✗ errored — overloaded_error: the provider dropped the session"
+
+    showcase = {"kind": "showcase", "checks": None, "error": None}
+    assert verdict_line(showcase) == "showcase — not graded"
+
+
+def test_frame_caption() -> None:
+    """A retrieved frame's caption: scene, location, and the conditions the package
+    recorded for it (rain only when it rained -- a "no rain" label on every day
+    frame is noise)."""
+    night_rain = {
+        "sample_data_token": "abc", "scene_name": "scene-0916",
+        "location": "singapore-onenorth", "is_night": True, "is_rain": True,
+        "channel": "CAM_FRONT", "score": 0.87,
+    }
+    assert frame_caption(night_rain) == "scene-0916 · singapore-onenorth · night, rain"
+
+    day = {**night_rain, "scene_name": "scene-0001", "location": "boston-seaport",
+           "is_night": False, "is_rain": False}
+    assert frame_caption(day) == "scene-0001 · boston-seaport · day"
+
+
+def test_step_detail() -> None:
+    """One agent step -> (outcome line, code block, code language). The outcome
+    passes the recorder's own summary through verbatim (agent.py::_summarize wrote
+    it), with the step's input adding what the summary alone does not say."""
+    sql = {"tool": "run_sql", "input": {"sql": "SELECT count(*) FROM scenes"}, "output": "1 rows"}
+    assert step_detail(sql) == ("`run_sql` → 1 rows", "SELECT count(*) FROM scenes", "sql")
+
+    cypher = {"tool": "run_cypher", "input": {"cypher": "MATCH (s:Scene) RETURN s"}, "output": "3 rows"}
+    assert step_detail(cypher) == ("`run_cypher` → 3 rows", "MATCH (s:Scene) RETURN s", "cypher")
+
+    search = {"tool": "search_frames", "input": {"query": "foggy road", "k": 8}, "output": "8 frames found"}
+    assert step_detail(search) == ("`search_frames` → 8 frames found · query: foggy road", None, None)
+
+    show = {
+        "tool": "show_frames",
+        "input": {"sample_data_tokens": ["a", "b", "c", "d", "e", "f"]},
+        "output": "6 frames attached",
+    }
+    assert step_detail(show) == ("`show_frames` → 6 frames attached · 6 tokens", None, None)
+
+    chart = {"tool": "make_chart", "input": {"kind": "bar", "title": "Night scenes"},
+             "output": "charted: Night scenes"}
+    assert step_detail(chart) == ("`make_chart` → charted: Night scenes", None, None)
+
+    unknown = {"tool": "tool", "input": {}, "output": "output"}
+    assert step_detail(unknown) == ("`tool` → output", None, None)
+
+    # An errored step still shows its query and its error verbatim -- a failed SQL
+    # attempt is part of the recorded session, not something to hide.
+    errored = {
+        "tool": "run_sql", "input": {"sql": "SELECT * FROM nope"},
+        "output": "error: Catalog Error: Table with name nope does not exist!",
+    }
+    assert step_detail(errored) == (
+        "`run_sql` → error: Catalog Error: Table with name nope does not exist!",
+        "SELECT * FROM nope",
+        "sql",
     )

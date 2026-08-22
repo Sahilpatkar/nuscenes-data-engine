@@ -285,6 +285,9 @@ def _bar_colors(frame: pd.DataFrame, *, x: str, highlight: str | None) -> pd.Ser
     return colors
 
 
+_MARKS = ("bar", "line")
+
+
 def bar_chart(
     frame: pd.DataFrame,
     *,
@@ -298,6 +301,7 @@ def bar_chart(
     grouped: bool = False,
     y_title: str | None = None,
     label_angle: int | None = None,
+    mark: str = "bar",
 ) -> alt.Chart | alt.LayerChart:
     """A bar chart of ``y`` over the categorical ``x``, ready for
     ``st.altair_chart(chart, width="stretch")``.
@@ -329,6 +333,11 @@ def bar_chart(
     truncated (``labelLimit=0``), since a clipped arm name ("weak_graph_rate...")
     is not an identifier.
 
+    ``mark`` draws the same encoding as a line instead of bars (``"line"``) -- the
+    recorded chat agent's ``make_chart`` tool emits either kind (its own enum is
+    bar|line, data_engine/chat/agent.py), so the recorded-replay page needs both
+    from one helper rather than a second charting path.
+
     ``zero_line`` layers a rule at y = 0 -- delta charts carry negative values, and
     without the rule a regression reads as just a shorter bar. That layering is why
     the return type is a union: an ``alt.LayerChart`` is not an ``alt.Chart``, and
@@ -336,6 +345,8 @@ def bar_chart(
     """
     if grouped and color_field is None:
         raise ValueError("bar_chart: grouped=True needs a color_field")
+    if mark not in _MARKS:
+        raise ValueError(f"bar_chart: unknown mark {mark!r} — expected one of {list(_MARKS)}")
     data = frame.copy()
     axis_kwargs: dict[str, Any] = {"labelLimit": 0}
     if label_angle is not None:
@@ -363,7 +374,11 @@ def bar_chart(
         # them through instead of building a categorical scale over them.
         encode["color"] = alt.Color(f"{_COLOR_COLUMN}:N", scale=None, legend=None)
 
-    bars = alt.Chart(data).mark_bar().encode(**encode)
+    base = alt.Chart(data)
+    # point=True on the line: a recorded chart is often 3-5 points, and a bare
+    # polyline through that few values hides where the data actually is.
+    drawn = base.mark_line(point=True) if mark == "line" else base.mark_bar()
+    bars = drawn.encode(**encode)
     chart: alt.Chart | alt.LayerChart = bars
     if zero_line:
         rule = (

@@ -427,3 +427,21 @@ def test_draw_overlay_pseudo_boxes_drawn_in_pseudo_style_and_signature_backward_
     )
     draw_overlay(_blank(), gt, preds, mode="gt", scale=0.6, pseudo_boxes=pseudo)
     assert ("pseudo 0.73", STYLE_PSEUDO) in calls
+
+
+def test_bar_chart_line_mark() -> None:
+    """The recorded chat agent may emit either chart kind (agent.py's make_chart
+    enum is bar|line), so the shared helper draws either -- ``mark="line"`` for a
+    recorded line chart, bars everywhere else by default."""
+    from render import bar_chart
+
+    counted = pd.DataFrame({"hour": ["00", "01", "02"], "n": [3, 5, 2]})
+
+    line = bar_chart(counted, x="hour", y="n", mark="line", zero_line=False).to_dict()
+    assert line["mark"]["type"] == "line"
+
+    bars = bar_chart(counted, x="hour", y="n", zero_line=False).to_dict()
+    assert bars["mark"]["type"] == "bar"
+
+    with pytest.raises(ValueError, match="unknown mark"):
+        bar_chart(counted, x="hour", y="n", mark="area", zero_line=False)

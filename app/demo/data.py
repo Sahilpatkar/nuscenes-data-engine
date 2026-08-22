@@ -287,6 +287,51 @@ def load_vlm_counts() -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+# --- the recorded chat session ----------------------------------------------------
+#
+# chat_replays.json + chat_replay_summary.json ship only when `demo chat-record`
+# staged a recording (a paid, one-off run against a live provider) and `demo build`
+# copied it (manifest.json's validation.chat_replay == "included"). A fresh clone --
+# or any package built by an older `demo build` -- carries neither file, so both
+# load through load_semsearch's graceful-absence pattern and the "Ask the Dataset"
+# page draws its honest absent note instead of a bare FileNotFoundError.
+
+_CHAT_REPLAY_FILES = ("chat_replays.json", "chat_replay_summary.json")
+
+
+def chat_replay_available() -> bool:
+    """Whether this package carries a recorded chat session.
+
+    BOTH files, checked on disk: the page reads the recording's model and date out
+    of the summary beside the replays themselves, and `demo build` only ever copies
+    the pair (a half-staged group fails the build). The check is on the FILES, not
+    on manifest.json's ``validation.chat_replay`` -- a package built before that key
+    existed has no key to read, and the files are what the page actually opens.
+    """
+    return all((DEMO_DATA / name).is_file() for name in _CHAT_REPLAY_FILES)
+
+
+@st.cache_data
+def load_chat_replays() -> list[dict[str, Any]]:
+    """The recorded replays (showcase first, then graded), or an empty list."""
+    path = DEMO_DATA / "chat_replays.json"
+    if not path.is_file():
+        return []
+    data: list[dict[str, Any]] = json.loads(path.read_text())
+    return data
+
+
+@st.cache_data
+def load_chat_replay_summary() -> dict[str, Any]:
+    """The recording's own summary (model, provider, recorded_at, counts, whether
+    the search engine and the graph were available), or an empty dict."""
+    path = DEMO_DATA / "chat_replay_summary.json"
+    if not path.is_file():
+        return {}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
 def hero_path() -> Path:
     return DEMO_DATA / "sample_frames" / "hero.jpg"
 
