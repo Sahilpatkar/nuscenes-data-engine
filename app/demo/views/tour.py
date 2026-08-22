@@ -8,8 +8,8 @@ after, and the result screen. The step index is the page's only state
 
 This module writes prose, never figures: every number on a step is derived here
 from the same package tables the deep pages read, each step says where its numbers
-came from (``render.provenance``), and each step lights its own stage in the loop
-breadcrumb.
+came from (``render.provenance``), and each step lights its stage(s) in the loop
+breadcrumb -- one stage for an ordinary step, all four for the result screen.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from filters import (
 )
 from PIL import Image
 from render import (
+    LOOP_STAGES,
     bar_chart,
     chip_row,
     draw_overlay,
@@ -78,10 +79,6 @@ TOUR_STEP_KEY = "tour_step"
 _CONF_HIT_FLOOR = 0.40
 
 _NO_HERO_CROP_NOTE = "hero crop not in this package"
-
-# Step 6 lands in the next task (plan Task 4) -- an honest placeholder line, never a
-# half-built claim.
-_PLACEHOLDER_NOTE = "Step lands in the next task"
 
 # The tour's mining step queries the flagship dynamics preset: it is the one the
 # Scenario page opens on, the one `demo subgraphs` records a SQL/Cypher parity for,
@@ -165,13 +162,15 @@ class _TourData:
 
 @dataclass(frozen=True)
 class _Step:
-    """One screen of the tour. ``stage`` is the loop stage it lights (``None``
-    lights nothing); ``links`` are the "Go deeper" deep links, as
-    ``(url_path, label)`` pairs resolved through ``nav.page``."""
+    """One screen of the tour. ``stage`` is the loop stage(s) it lights: a single
+    stage name for an ordinary step, a tuple to light more than one (the result
+    screen lights all four -- the whole loop just ran), or ``None`` to light
+    nothing; ``links`` are the "Go deeper" deep links, as ``(url_path, label)``
+    pairs resolved through ``nav.page``."""
 
     key: str
     title: str
-    stage: str | None
+    stage: str | tuple[str, ...] | None
     render: Callable[[_TourData], None]
     links: tuple[tuple[str, str], ...] = ()
 
@@ -269,19 +268,33 @@ def _render_weakness(data: _TourData) -> None:
         provenance("recomputed", recomputed_detail)
 
 
-def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str) -> str:
-    """What ``model`` claimed about one GT box: its confidence and status, or "no
-    claim" when it never matched the box at all (an honest absence -- a model that
-    said nothing is not a model that said something weak)."""
+def _claim(
+    preds: pd.DataFrame, *, token: str, model: str, annotation: str
+) -> tuple[float, str] | None:
+    """The highest-confidence row ``model`` filed against ``annotation`` on
+    ``token``: ``(conf, status)``, or ``None`` when it never claimed the box at
+    all. The raw pair ``_claim_text`` formats into its "no claim"/"conf (status)"
+    prose -- and the result screen's hero-honesty line (Task 4) reads it back
+    directly, rather than re-deriving the claim a second way."""
     rows = preds.loc[
         (preds["sample_data_token"] == token)
         & (preds["model"] == model)
         & (preds["matched_annotation_token"] == annotation)
     ]
     if rows.empty:
-        return "no claim"
+        return None
     row = rows.sort_values("conf", ascending=False).iloc[0]
-    conf, status = float(row["conf"]), str(row["status"])
+    return float(row["conf"]), str(row["status"])
+
+
+def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str) -> str:
+    """What ``model`` claimed about one GT box: its confidence and status, or "no
+    claim" when it never matched the box at all (an honest absence -- a model that
+    said nothing is not a model that said something weak)."""
+    claim = _claim(preds, token=token, model=model, annotation=annotation)
+    if claim is None:
+        return "no claim"
+    conf, status = claim
     if status == "low_conf":
         return (
             f"{conf:.3f} (low_conf — below the {_CONF_HIT_FLOOR:.2f} hit floor; the "
@@ -749,8 +762,239 @@ def _render_after(data: _TourData) -> None:
         _open("active_learning", al_exemplar=token)
 
 
-def _render_placeholder(data: _TourData) -> None:
-    st.caption(_PLACEHOLDER_NOTE)
+def _hero_recovery_conf(data: _TourData) -> float | None:
+    """The arm's raw confidence on the hero frame's low-confidence pedestrian
+    recovery -- the same claim ``_hero_recovery_is_low_conf`` establishes is a
+    low_conf hit, read back out through ``_claim`` (the pedestrian-claim helper
+    step 1 already uses) rather than re-deriving it. Only meaningful when the
+    caller has already checked ``_hero_recovery_is_low_conf``; ``None`` otherwise
+    (defensive -- never hit on the shipped package)."""
+    hero = str(data.overview.get("hero_token") or "")
+    arm = data.arm
+    if not hero or arm is None:
+        return None
+    gt_rows = visible_gt(data.gt, hero)
+    baseline_column, arm_column = f"matched_{data.baseline}", f"matched_{arm}"
+    if not {baseline_column, arm_column} <= set(gt_rows.columns):
+        return None
+    peds = gt_rows.loc[
+        (gt_rows["category_group"] == "pedestrian")
+        & gt_rows[baseline_column].eq(False).fillna(False)
+        & gt_rows[arm_column].eq(True).fillna(False)
+    ]
+    if peds.empty:
+        return None
+    annotation = str(peds.iloc[0]["annotation_token"])
+    claim = _claim(data.preds, token=hero, model=arm, annotation=annotation)
+    return claim[0] if claim else None
+
+
+def _result_weakness(data: _TourData) -> None:
+    """Answer 1 -- "What weakness did we find?": the same recorded/recomputed
+    numbers step 0 opens on, restated as the tour's own finding."""
+    st.markdown("**What weakness did we find?**")
+    rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    if rows.empty:
+        st.info(STALE_PACKAGE_NOTE)
+        return
+    row = rows.iloc[0]
+    st.markdown(
+        f"Night mAP50-95 {float(row['night_map5095']):.4f} vs overall "
+        f"{float(row['overall_map5095']):.4f}."
+    )
+    night_ped = row.get("night_ped_map5095")
+    if night_ped is not None and bool(pd.notna(night_ped)):
+        st.markdown(f"Night pedestrian mAP50-95 {float(night_ped):.4f}.")
+
+    counts = _night_miss_counts(data)
+    if counts is None:
+        st.info(STALE_PACKAGE_NOTE)
+    else:
+        n_night, n_night_fn, _n_val = counts
+        st.markdown(
+            f"{n_night_fn} of {n_night} night validation frames carry at least one "
+            "baseline miss."
+        )
+    provenance("recorded", "mAP from active_learning_results.parquet")
+    if counts is not None:
+        provenance("recomputed", "frame counts from frame_manifest/gt_boxes/predictions")
+
+
+def _mined_comparator_clause(data: _TourData, *, name: str, label: str) -> str | None:
+    """"{label} covered {n} scenes at {p:.0%} night" for the comparator arm
+    ``name``, or ``None`` when this package carries no row for it (an older
+    package, or one that never ran that arm) -- omitted rather than guessed."""
+    rows = data.arms.loc[data.arms["arm"] == name]
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    n_scenes, night_share = row.get("n_scenes"), row.get("night_share")
+    if not (bool(pd.notna(n_scenes)) and bool(pd.notna(night_share))):
+        return None
+    return f"{label} covered {int(n_scenes)} scenes at {float(night_share):.0%} night"
+
+
+def _result_data_added(data: _TourData) -> None:
+    """Answer 2 -- "What data did we add?": the arm's own mined-set composition,
+    against the ``random``/``mined`` comparators when this package carries them."""
+    st.markdown("**What data did we add?**")
+    arm = data.arm
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm] if arm is not None else data.arms.iloc[:0]
+    if arm is None or base_rows.empty or arm_rows.empty:
+        st.info(STALE_PACKAGE_NOTE)
+        return
+    base_row, arm_row = base_rows.iloc[0], arm_rows.iloc[0]
+    base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
+    n_scenes, night_share = arm_row.get("n_scenes"), arm_row.get("night_share")
+    if not (
+        bool(pd.notna(base_n))
+        and bool(pd.notna(arm_n))
+        and bool(pd.notna(n_scenes))
+        and bool(pd.notna(night_share))
+    ):
+        st.info(STALE_PACKAGE_NOTE)
+        return
+
+    n_mined = int(arm_n) - int(base_n)
+    sentence = (
+        f"`{arm}` mined {n_mined:,} frames across {int(n_scenes)} scenes, "
+        f"{float(night_share):.0%} at night"
+    )
+    clauses = [
+        clause
+        for clause in (
+            _mined_comparator_clause(data, name="random", label="random"),
+            _mined_comparator_clause(data, name="mined", label="similarity mining"),
+        )
+        if clause is not None
+    ]
+    if clauses:
+        sentence += " — " + "; ".join(clauses)
+    st.markdown(sentence + ".")
+    provenance(
+        "recorded",
+        "n_train_images, n_scenes, night_share from active_learning_results.parquet",
+    )
+
+
+def _result_improved(data: _TourData) -> None:
+    """Answer 3 -- "Did the model improve?": the night result, the night
+    pedestrian slice, the arm's own overall delta, and (only when a different arm
+    actually won it) which arm took the best overall gain."""
+    st.markdown("**Did the model improve?**")
+    arm = data.arm
+    if arm is None:
+        st.info(STALE_PACKAGE_NOTE)
+        return
+
+    sentence = _night_map_sentence(data, arm)
+    if sentence:
+        st.markdown(sentence)
+
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm]
+    if not base_rows.empty and not arm_rows.empty:
+        base_ped = base_rows.iloc[0].get("night_ped_map5095")
+        arm_ped = arm_rows.iloc[0].get("night_ped_map5095")
+        if bool(pd.notna(base_ped)) and bool(pd.notna(arm_ped)):
+            st.markdown(
+                f"Night pedestrian mAP50-95 {float(base_ped):.4f} → {float(arm_ped):.4f}."
+            )
+        delta_overall = arm_rows.iloc[0].get("delta_overall")
+        if bool(pd.notna(delta_overall)):
+            st.markdown(f"Overall mAP50-95 {float(delta_overall):+.4f} against baseline.")
+
+    ranked = data.arms.dropna(subset=["delta_overall"])
+    if not ranked.empty:
+        best = ranked.loc[ranked["delta_overall"].idxmax()]
+        if str(best["arm"]) != arm:
+            st.markdown(
+                f"The best overall arm is `{best['arm']}` ({float(best['delta_overall']):+.4f}); "
+                "the night arm trades overall gain for night gain."
+            )
+    provenance("recorded", "mAP from active_learning_results.parquet")
+
+
+def _result_failures(data: _TourData) -> None:
+    """Answer 4 -- "What failed along the way?": the weak-supervision loss split,
+    the verifier's sparse-frame bias, the worst night arm, and (only when true)
+    the hero recovery's own low-confidence honesty line."""
+    st.markdown("**What failed along the way?**")
+    wrote_recorded = False
+
+    headline_rows = data.loss.loc[data.loss["headline"]]
+    if not headline_rows.empty:
+        row = headline_rows.iloc[0]
+        st.markdown(
+            f"Weak (VLM-verified) labels kept {float(row['retention']):.1%} of the "
+            f"ground-truth gain for the `{row['base_arm']}` pair: "
+            f"{float(row['dropped_frame_share']):.1%} was lost with the frames the "
+            f"verifier dropped, {float(row['label_share']):.1%} to label noise on "
+            "the ones it kept."
+        )
+        wrote_recorded = True
+
+    if {"gt_boxes_per_accepted_frame", "gt_boxes_per_rejected_frame"} <= set(
+        data.weaksup.columns
+    ):
+        for weak_row in data.weaksup.itertuples(index=False):
+            st.markdown(
+                "The verifier kept sparse frames: "
+                f"{float(weak_row.gt_boxes_per_accepted_frame):.2f} vs "
+                f"{float(weak_row.gt_boxes_per_rejected_frame):.2f} GT boxes per accepted "
+                f"vs rejected frame ({weak_row.arm})."
+            )
+            wrote_recorded = True
+
+    # The real weak-supervision arms only: "weak_<base>" trained on pseudo labels,
+    # never the "weak_<base>_gt" twin export_weak_loss_decomposition uses to
+    # compute the loss split above (that arm is GT-trained, not weak -- it is not
+    # a weak-supervision RESULT to call worst).
+    weak_arms = data.arms.loc[
+        data.arms["arm"].str.startswith("weak_") & ~data.arms["arm"].str.endswith("_gt")
+    ]
+    if not weak_arms.empty:
+        worst = weak_arms.loc[weak_arms["delta_night"].idxmin()]
+        st.markdown(
+            f"`{worst['arm']}` is the worst night result of the {len(data.arms)} arms "
+            f"({float(worst['delta_night']):+.4f})."
+        )
+        wrote_recorded = True
+
+    if wrote_recorded:
+        provenance(
+            "recorded",
+            "weak_loss_decomposition.parquet, weak_supervision_results.parquet, "
+            "active_learning_results.parquet",
+        )
+
+    hero_conf = _hero_recovery_conf(data) if _hero_recovery_is_low_conf(data) else None
+    if hero_conf is not None:
+        st.markdown(
+            f"The hero frame's pedestrian recovery is a low-confidence claim "
+            f"(conf {hero_conf:.3f}) — counted as a hit by the matching rule, not a "
+            "confident detection."
+        )
+        provenance("recomputed", "claim confidence from predictions.parquet")
+
+    if not wrote_recorded and hero_conf is None:
+        st.info(STALE_PACKAGE_NOTE)
+
+
+def _render_result(data: _TourData) -> None:
+    """Step 6 — the result screen (spec §2): four bordered answers, every number
+    read from the same package tables every earlier step reads. The loop
+    breadcrumb lights all four stages here (see ``_STEPS`` below) -- by this
+    screen the tour has walked the whole loop, not one stage of it."""
+    with st.container(border=True):
+        _result_weakness(data)
+    with st.container(border=True):
+        _result_data_added(data)
+    with st.container(border=True):
+        _result_improved(data)
+    with st.container(border=True):
+        _result_failures(data)
 
 
 _STEPS: tuple[_Step, ...] = (
@@ -799,8 +1043,18 @@ _STEPS: tuple[_Step, ...] = (
     _Step(
         key="result",
         title="What we found, added, gained — and what failed",
-        stage="Evaluate",
-        render=_render_placeholder,
+        # All four stages, lit together: this screen doesn't add a stage of its
+        # own, it closes the loop the first six screens walked one stage at a time.
+        stage=LOOP_STAGES,
+        render=_render_result,
+        links=(
+            ("overview", "Overview — the whole loop and the flagship numbers"),
+            ("failures", "Failure Explorer — the whole val split, filterable"),
+            ("scenarios", "Scenario Search — every preset, every matching event"),
+            ("active_learning", "Active Learning — the whole mined set and its communities"),
+            ("weak_supervision", "Weak Supervision — where the rest of the gain went"),
+            ("chat_replay", "Ask the Dataset — recorded chat replays"),
+        ),
     ),
 )
 
@@ -856,10 +1110,20 @@ def render() -> None:
     )
 
     current = _STEPS[step]
-    loop_breadcrumb([current.stage] if current.stage else None)
+    # ``stage`` is a single name for an ordinary step, a tuple for the result
+    # screen (all four, lit together), or None -- loop_breadcrumb already takes a
+    # Sequence[str] | None, so a bare string is the only shape that needs wrapping.
+    lit: Sequence[str] | None
+    if current.stage is None:
+        lit = None
+    elif isinstance(current.stage, str):
+        lit = [current.stage]
+    else:
+        lit = current.stage
+    loop_breadcrumb(lit)
     st.caption(f"Step {step + 1} of {len(_STEPS)} · {current.title}")
     with st.container(border=True):
         current.render(data)
     _render_go_deeper(current)
     if step == last:
-        st.button("Restart", key="tour_restart", on_click=_set_step, args=(0,))
+        st.button("Restart the tour", key="tour_restart", on_click=_set_step, args=(0,))

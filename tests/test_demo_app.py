@@ -2395,6 +2395,106 @@ def test_tour_walks_steps_2_to_5(
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
 
 
+def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Step 6 (screen 7): four bordered answers -- the weakness, what was added,
+    whether the model improved, and what failed -- every number read straight off
+    the fixture package (results.json's baseline/graph_rate_night rows,
+    weak_loss_decomposition's headline pair, weak_supervision_results' one arm),
+    six "Go deeper" links to every other page, and Restart back to step 0."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(
+        text.startswith("Step 7 of 7 · What we found, added, gained") for text in captions
+    )
+    assert at.button(key="tour_next").disabled is True
+
+    markdowns = [str(block.value) for block in at.markdown]
+    for heading in (
+        "**What weakness did we find?**",
+        "**What data did we add?**",
+        "**Did the model improve?**",
+        "**What failed along the way?**",
+    ):
+        assert any(heading in text for text in markdowns), heading
+
+    # the breadcrumb lights every stage on the result screen
+    breadcrumb = next(text for text in markdowns if ":orange-badge[Diagnose]" in text)
+    for stage in ("Diagnose", "Mine", "Train", "Evaluate"):
+        assert f":orange-badge[{stage}]" in breadcrumb
+
+    # (1) the weakness -- baseline's night vs overall, straight off results.json,
+    # plus the recomputed miss count step 0 already pins (1 of 1)
+    assert any("Night mAP50-95 0.1000 vs overall 0.2000." in text for text in markdowns)
+    assert any(
+        "1 of 1 night validation frames carry at least one baseline miss" in text
+        for text in markdowns
+    )
+
+    # (2) what was added -- the arm's mined-set composition vs the random comparator
+    # (this fixture has no "mined" arm, so that comparator clause is skipped)
+    assert any(
+        "mined 20 frames across 1 scenes, 100% at night" in text
+        and "random covered 1 scenes at 0% night" in text
+        for text in markdowns
+    )
+    assert not any("similarity mining" in text for text in markdowns)
+
+    # (3) did it improve -- the same night-mAP sentence step 5 shows, the night
+    # pedestrian slice, and the overall delta (the fixture's best-overall arm IS
+    # the tour's own arm, so the "best overall" sentence is correctly skipped)
+    assert any(
+        "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
+        for text in markdowns
+    )
+    assert any("Night pedestrian mAP50-95 0.0500 → 0.0900." in text for text in markdowns)
+    assert any("Overall mAP50-95 +0.0300 against baseline." in text for text in markdowns)
+    assert not any("best overall arm" in text for text in markdowns)
+
+    # (4) what failed -- the headline weak/GT pair's loss split (0.0018/0.01 =
+    # 18.0% retained, 50.0% dropped-frame, 32.0% label cost), the verifier's
+    # sparse-frame bias (3.00 vs 0.00 GT boxes/frame for "random"), and the worst
+    # night arm ("weak_random", the only non-"_gt" weak arm in this fixture)
+    assert any(
+        "Weak (VLM-verified) labels kept 18.0% of the ground-truth gain for the "
+        "`random` pair: 50.0% was lost with the frames the verifier dropped, "
+        "32.0% to label noise on the ones it kept." in text
+        for text in markdowns
+    )
+    assert any(
+        "The verifier kept sparse frames: 3.00 vs 0.00 GT boxes per accepted vs "
+        "rejected frame (random)." in text
+        for text in markdowns
+    )
+    assert any(
+        "`weak_random` is the worst night result of the 5 arms (+0.0050)." in text
+        for text in markdowns
+    )
+    # the hero's own recovery is a confident tp in this fixture (conf 0.800), not
+    # the low-confidence claim the shipped package's hero is -- the honesty line
+    # must not fire on a claim that isn't actually low-confidence.
+    assert not any("low-confidence claim" in text for text in markdowns)
+
+    provenance_captions = " ".join(captions)
+    assert "recorded experiment output" in provenance_captions
+    assert "recomputed in this app" in provenance_captions
+
+    # "Go deeper" -> every page but the tour itself
+    links = [str(link.proto.label) for link in at.get("page_link")]
+    assert len(links) >= 6
+
+    # --- Restart -> step 0 ------------------------------------------------------
+    at.button(key="tour_restart").click().run(timeout=30)
+    assert not at.exception
+    assert any(
+        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        for caption in at.caption
+    )
+
+
 def test_tour_deep_link_buttons_set_state(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
