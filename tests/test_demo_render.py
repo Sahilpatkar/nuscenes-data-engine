@@ -28,6 +28,7 @@ from render import (  # noqa: E402
     chip_row_text,
     draw_overlay,
     loop_breadcrumb_text,
+    metric_cards,
     provenance_text,
 )
 
@@ -516,3 +517,23 @@ def test_chip_row_text_joins_badges_and_is_empty_for_no_chips() -> None:
     assert chip_row_text(["night", "pedestrian"]) == ":blue-badge[night] :blue-badge[pedestrian]"
     assert chip_row_text(["night"], color="orange") == ":orange-badge[night]"
     assert chip_row_text([]) == ""
+
+
+def test_metric_cards_accepts_two_and_three_tuples_and_passes_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """metric_cards's items may mix plain (label, value) cards with (label, value,
+    delta) ones in the same call (Phase 9a final review: a card whose value would
+    otherwise pack an arrow into a truncating st.metric column shows the
+    after-figure alone, with the change moved to the delta) -- only the 3-tuple
+    form passes ``delta=`` through to ``st.metric``."""
+    calls: list[tuple[str, str, str | None]] = []
+
+    class _FakeColumn:
+        def metric(self, label: str, value: str, delta: str | None = None) -> None:
+            calls.append((label, value, delta))
+
+    monkeypatch.setattr("render.st.columns", lambda n: [_FakeColumn() for _ in range(n)])
+    metric_cards([("A", "1"), ("B", "2", "+1 vs baseline")])
+
+    assert calls == [("A", "1", None), ("B", "2", "+1 vs baseline")]

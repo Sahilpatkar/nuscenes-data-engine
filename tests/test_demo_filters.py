@@ -1275,6 +1275,38 @@ def test_tour_frame_candidates_sorts_unranked_frames_after_ranked_ones() -> None
     ) == ["night3", "night1", "night2", "night0", "day2"]
 
 
+def test_tour_frame_candidates_na_is_night_sorts_as_day() -> None:
+    """``is_night`` NA (``pd.NA``/``None``, e.g. a frame the enrichment pass never
+    reached) must not crash the sort -- ``bool(pd.NA)`` raises. It sorts as day
+    (the arm is night-targeted, so an unknown-night frame does not get to lead),
+    matching the NA-safe ``.fillna(False)`` pattern used elsewhere in this
+    module."""
+    manifest = pd.concat(
+        [
+            _tour_manifest(),
+            pd.DataFrame({
+                "sample_data_token": ["nanight"],
+                "al_selected_by": ["graph_rate_night"],
+                "is_night": pd.array([None], dtype="boolean"),
+            }),
+        ],
+        ignore_index=True,
+    )
+    explain = pd.concat(
+        [
+            _tour_explain(),
+            pd.DataFrame({
+                "sample_data_token": ["nanight"],
+                "community_mass_rank": pd.array([1], dtype="Int64"),
+            }),
+        ],
+        ignore_index=True,
+    )
+    gt = _tour_gt()
+    candidates = tour_frame_candidates(manifest, explain, gt, arm="graph_rate_night")
+    assert candidates == ["night1", "night2", "night0", "night3", "day2", "nanight"]
+
+
 def test_tour_frame_candidates_empty_manifest_or_explain_is_empty_list() -> None:
     manifest, explain, gt = _tour_manifest(), _tour_explain(), _tour_gt()
     assert tour_frame_candidates(manifest.iloc[0:0], explain, gt, arm="graph_rate_night") == []

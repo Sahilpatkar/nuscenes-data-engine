@@ -1233,6 +1233,58 @@ def test_overview_hero_renders_overlay(
     assert any("defeats all three models" in caption for caption in hero_captions)
 
 
+def test_overview_hero_overlay_keeps_a_gt_box_whose_visibility_flag_is_na(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 9a final review item 6: ``_hero_overlay`` reads visibility through
+    the shared ``filters.visible_gt`` helper, not an ad-hoc
+    ``~gt_token["below_visibility_min"]`` -- a plain ``~`` on the nullable-boolean
+    column propagates NA into the mask and silently drops the row, instead of
+    keeping it the way ``visible_gt_boxes``'s own NA-is-not-below-the-floor rule
+    says it should.
+
+    Proven by the strongest signal this function exposes: with the hero token's
+    only GT box's visibility flag left NA and no baseline predictions staged for
+    it, the ad-hoc filter would leave BOTH the GT rows and the predictions empty
+    and fall back to ``None`` (the plain-crop path, per the function's own
+    ``if gt_token.empty and preds_token.empty`` check) -- the shared helper keeps
+    the NA row, so an Image must come back instead.
+    """
+    pytest.importorskip("streamlit")
+    gt_path = built_demo_data / "gt_boxes.parquet"
+    gt = pd.read_parquet(gt_path)
+    gt = gt.loc[gt["sample_data_token"] != "v0"].copy()
+    gt = pd.concat(
+        [
+            gt,
+            pd.DataFrame({
+                "annotation_token": ["a2"], "sample_data_token": ["v0"],
+                "category_group": ["pedestrian"],
+                "x_min": [10.0], "y_min": [10.0], "x_max": [30.0], "y_max": [30.0],
+                "matched_baseline": pd.array([False], dtype="boolean"),
+                "matched_graph_rate_night": pd.array([True], dtype="boolean"),
+                "below_visibility_min": pd.array([None], dtype="boolean"),
+            }),
+        ],
+        ignore_index=True,
+    )
+    gt.to_parquet(gt_path, index=False)
+
+    preds_path = built_demo_data / "predictions.parquet"
+    preds = pd.read_parquet(preds_path)
+    preds = preds.loc[
+        ~((preds["sample_data_token"] == "v0") & (preds["model"] == "baseline"))
+    ].copy()
+    preds.to_parquet(preds_path, index=False)
+
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    from views import overview
+
+    assert overview._hero_overlay("v0") is not None
+
+
 # --- Scenario Search page (Task 3, Phase 5) -----------------------------------------
 #
 # built_demo_data's scenario_events.parquet ends up with exactly two events (see the
@@ -2449,8 +2501,14 @@ def test_tour_walks_steps_0_and_1(
 
 
 def _walk_to_step(at: Any, index: int) -> Any:
-    """Click "Next →" until the tour sits on its ``index``-th step (0-based, i.e.
-    the screen captioned "Step {index + 1} of 7").
+    """Click "Next →" ``index`` times from the tour's CURRENT step -- not to an
+    absolute 0-based target. On a fresh ``at`` (the common case, step 0), that is
+    the same thing: ``index`` clicks land on the screen captioned "Step {index +
+    1} of 7". But a second call on the same ``at`` (e.g.
+    ``test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf``, which
+    calls this three times on one ``at`` with 1/4/1) advances ``index`` steps
+    PAST wherever the walk already was, so its calls land on steps 1, 5 and 6
+    (0-based) -- not 1, 4 and 1.
 
     The walk is deliberately a real click sequence rather than a session_state
     poke: the Back/Next callbacks are the only thing that moves ``tour_step``, and
@@ -2514,10 +2572,12 @@ def test_tour_walks_steps_2_to_5(
     assert [str(metric.label) for metric in at.metric] == [
         "Frames mined", "Scenes covered", "Night share", "Training images",
     ]
-    # "Training images" carries the noun, so the VALUE is just the two figures --
-    # 13 characters on the real package ("7,035 → 8,535"), which fits st.metric's
-    # narrow column instead of wrapping mid-arrow (Phase 9a review 5a).
-    assert [str(metric.value) for metric in at.metric] == ["20", "1", "100%", "100 → 120"]
+    # "Training images" carries the noun, so the VALUE is just the after-count --
+    # the "100 → 120" arrow is 13 characters on the real package
+    # ("7,035 → 8,535") and truncates in a 1-of-4 st.metric card at <=1200px
+    # (Phase 9a final review), so the mined total moves to the delta instead.
+    assert [str(metric.value) for metric in at.metric] == ["20", "1", "100%", "120"]
+    assert str(at.metric[3].delta) == "+20 mined frames"
     assert len(at.get("vega_lite_chart")) == 1
     assert any("recorded experiment output" in text for text in captions)
 
@@ -2722,11 +2782,14 @@ def test_tour_step_4_says_flagship_and_rejected_when_the_frame_really_is(
 ) -> None:
     """Review I3: the "why this frame was picked" step carries two CONDITIONAL
     sentences -- the frame is itself a flagship event, and the weak verifier later
-    rejected it -- and on the real package the frame the new ordering lands on
-    (`0f70138f…`, flagship #12, later rejected) fires both. The base fixture fires
-    neither, so the package is given both properties here: its chosen frame is
-    added to the flagship preset's event rows, and its weak verdict is flipped to
-    "rejected".
+    rejected it -- but on the real v0.7 package the frame the new ordering lands
+    on (`00740c25baf64f12a411963aadb5c81c`, community #10301, 916 frames all at
+    night, failure mass 395.19 at rank 3 of 97, quota 323, degree rank 1 of 916,
+    a night-pass pick) fires NEITHER: it is not one of the flagship preset's
+    events, and its `weak_verdict` is `accepted`. The base fixture also fires
+    neither, so the package is given both properties here instead: its chosen
+    frame is added to the flagship preset's event rows, and its weak verdict is
+    flipped to "rejected".
     """
     pytest.importorskip("streamlit")
     events_path = built_demo_data / "scenario_events.parquet"
@@ -3159,3 +3222,71 @@ def test_night_inversion_callout_drops_its_superlatives_when_the_table_disagrees
     # ... and neither superlative
     assert "best night arm" not in learned[0]
     assert "is the worst" not in learned[0]
+
+
+def test_night_inversion_callout_counts_only_ranked_arms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 9a final review item 7: "of N arms" must count the arms actually
+    RANKED by delta_night (``ranked = arms.dropna(subset=["delta_night"])``,
+    already used to compute best/worst just above), not every row in the table
+    -- an arm this package never evaluated for night delta (NaN) is not one of
+    "the N arms" the superlative names. A direct call, not an AppTest: the
+    function under test is a pure ``learned(text)`` builder once ``load_overview``
+    is stubbed."""
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    from views import active_learning
+
+    calls: list[str] = []
+    monkeypatch.setattr(active_learning, "learned", calls.append)
+    monkeypatch.setattr(
+        active_learning, "load_overview",
+        lambda: {"results": {"best_night_arm": "graph_rate_night"}},
+    )
+    arms = pd.DataFrame({
+        "arm": ["baseline", "graph_rate_night", "weak_graph_rate_night", "unranked"],
+        "delta_night": [0.0, 0.03, -0.01, float("nan")],
+    })
+    active_learning._render_night_inversion_callout(arms)
+    assert len(calls) == 1
+    assert "is the best night arm of 3" in calls[0]
+
+
+def test_night_rank_caption_counts_only_ranked_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 9a final review item 7, Weak Supervision's own version: ``total =
+    len(ordered)`` must count the arms the ranking actually has an opinion on. A
+    direct call: ``_night_rank_caption`` is a pure function of ``(arms,
+    weak_arm) -> str``."""
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    from views import weak_supervision
+
+    arms = pd.DataFrame({
+        "arm": ["baseline", "random", "weak_random", "unranked"],
+        "delta_night": [0.0, 0.01, -0.02, float("nan")],
+    })
+    text = weak_supervision._night_rank_caption(arms, "weak_random")
+    assert "is the worst night result of the 3 arms" in text
+
+
+def test_loss_learned_callout_counts_only_ranked_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 9a final review item 7, the third site: the loss-split "what we
+    learned" sentence's own "worst night result of the N arms" clause."""
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    from views import weak_supervision
+
+    calls: list[str] = []
+    monkeypatch.setattr(weak_supervision, "learned", calls.append)
+    loss = pd.DataFrame({
+        "base_arm": ["random", "graph_rate_night"],
+        "retention": [0.18, 0.394],
+        "dropped_frame_share": [0.5, 0.1],
+        "label_share": [0.32, 0.2],
+        "headline": [True, False],
+    })
+    arms = pd.DataFrame({
+        "arm": ["baseline", "weak_random", "weak_graph_rate_night", "unranked"],
+        "delta_night": [0.0, -0.005, -0.02, float("nan")],
+    })
+    weak_supervision._render_loss_learned_callout(loss, arms)
+    assert len(calls) == 1
+    assert "posted the worst night result of the 3 arms" in calls[0]

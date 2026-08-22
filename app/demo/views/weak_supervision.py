@@ -139,8 +139,17 @@ def _night_pedestrian_pair(loss: pd.DataFrame, arms: pd.DataFrame) -> tuple[str,
 
 def _night_rank_caption(arms: pd.DataFrame, weak_arm: str) -> str:
     """Whether the weak arm really is the worst night arm in THIS package's table --
-    computed, never asserted, so a package with different arms says the true rank."""
-    ordered = arms.sort_values("delta_night", kind="stable").reset_index(drop=True)
+    computed, never asserted, so a package with different arms says the true rank.
+
+    Ranked over the arms with a known ``delta_night`` only (Phase 9a final review
+    item 7): ``sort_values`` keeps NA rows (sorted last) rather than dropping
+    them, so counting ``len(ordered)`` without first dropping them would count an
+    arm this package never evaluated for night delta as one of "the N arms"."""
+    ordered = (
+        arms.dropna(subset=["delta_night"])
+        .sort_values("delta_night", kind="stable")
+        .reset_index(drop=True)
+    )
     position = int(ordered.index[ordered["arm"] == weak_arm][0])
     delta = float(ordered.iloc[position]["delta_night"])
     total = len(ordered)
@@ -237,18 +246,22 @@ def _render_loss_learned_callout(loss: pd.DataFrame, arms: pd.DataFrame) -> None
     )
 
     other_rows = loss.loc[loss["base_arm"] != base_arm]
-    if not other_rows.empty and not arms.empty:
+    # Ranked over arms with a known delta_night only (Phase 9a final review item
+    # 7): an arm this package never evaluated for night delta (NaN) is not one of
+    # "the N arms" the superlative names.
+    night_ranked = arms.dropna(subset=["delta_night"])
+    if not other_rows.empty and not night_ranked.empty:
         other_row = other_rows.iloc[0]
         other = str(other_row["base_arm"])
         other_retention = float(other_row["retention"])
         other_weak_arm = f"weak_{other}"
-        worst_row = arms.loc[arms["delta_night"].idxmin()]
+        worst_row = night_ranked.loc[night_ranked["delta_night"].idxmin()]
         if str(worst_row["arm"]) == other_weak_arm:
             worst_delta = float(worst_row["delta_night"])
             text += (
                 f" The `{other}` pair retained {other_retention:.1%}, but its "
-                f"weak arm posted the worst night result of the {len(arms)} arms "
-                f"({worst_delta:+.4f})."
+                f"weak arm posted the worst night result of the {len(night_ranked)} "
+                f"arms ({worst_delta:+.4f})."
             )
 
     learned(text)

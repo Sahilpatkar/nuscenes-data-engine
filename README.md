@@ -53,9 +53,9 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
 FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
-two-job CI (quality + CPU smoke-train). **Demo phases 1–8 shipped:** the six-page
-public demo above runs entirely off the committed `demo_data/` package and is
-deployable to Streamlit Community Cloud.
+two-job CI (quality + CPU smoke-train). **Demo phases 1–9a shipped:** the guided
+tour plus six-page public demo above runs entirely off the committed `demo_data/`
+package and is deployable to Streamlit Community Cloud.
 
 ## Architecture
 

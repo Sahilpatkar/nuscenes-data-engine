@@ -1097,13 +1097,17 @@ def tour_frame_candidates(
         rows = visible_gt(gt, token)
         return int((rows["category_group"] == "pedestrian").sum())
 
+    # NA-safe: an unenriched frame's is_night can be pd.NA/None, and bool(pd.NA)
+    # raises rather than sorting -- it goes last (as if day), the same as every
+    # other night-unknown frame, rather than crashing the tour's step.
+    night = selected["is_night"].fillna(False).astype(bool)
     ranked = sorted(
         (
-            not bool(row.is_night),
+            not is_night,
             mass_ranks.get(str(row.sample_data_token), unranked),
             -_pedestrian_count(str(row.sample_data_token)),
             str(row.sample_data_token),
         )
-        for row in selected.itertuples(index=False)
+        for is_night, row in zip(night, selected.itertuples(index=False), strict=True)
     )
     return [token for _night, _mass_rank, _peds, token in ranked]

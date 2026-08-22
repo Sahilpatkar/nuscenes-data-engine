@@ -204,7 +204,7 @@ def _render_night_inversion_callout(arms: pd.DataFrame) -> None:
     if str(best["arm"]) == night_arm and str(worst["arm"]) == weak_arm:
         learned(
             f"Targeting night bought night: `{night_arm}` ({delta_night:+.4f} night "
-            f"mAP50-95) is the best night arm of {len(arms)}, while its "
+            f"mAP50-95) is the best night arm of {len(ranked)}, while its "
             f"weak-supervised twin `{weak_arm}` ({weak_delta_night:+.4f}) is the "
             "worst — the night gain came from the frames, not from cheaper labels."
         )

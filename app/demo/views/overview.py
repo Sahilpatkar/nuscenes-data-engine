@@ -15,6 +15,7 @@ from typing import Any
 import nav
 import pandas as pd
 import streamlit as st
+from filters import visible_gt
 from PIL import Image
 from render import draw_overlay, loop_breadcrumb, metric_cards, provenance
 
@@ -101,10 +102,7 @@ def _hero_overlay(hero_token: str) -> Image.Image | None:
     crop = crop_path(hero_token)
     if not crop.is_file():
         return None
-    gt = load_gt_boxes()
-    gt_token = gt.loc[gt["sample_data_token"] == hero_token]
-    if "below_visibility_min" in gt_token.columns:
-        gt_token = gt_token.loc[~gt_token["below_visibility_min"]]
+    gt_token = visible_gt(load_gt_boxes(), hero_token)
     if "matched_baseline" not in gt_token.columns:
         return None
     gt_token = gt_token.rename(columns={"matched_baseline": "matched"})
@@ -117,11 +115,18 @@ def _hero_overlay(hero_token: str) -> Image.Image | None:
     return draw_overlay(Image.open(crop), gt_token, preds_token, mode="overlay", scale=0.6)
 
 
-def _night_pedestrian_card(arms: pd.DataFrame, arm_name: str | None) -> tuple[str, str] | None:
-    """("Night pedestrian mAP50-95", "0.083 → 0.117"), or None when either row is
-    absent from this package's arm table or carries no night-pedestrian slice (an
-    older results.json never wrote ``night.per_class``) -- the headline row omits
-    the card entirely rather than showing "nan"."""
+def _night_pedestrian_card(
+    arms: pd.DataFrame, arm_name: str | None
+) -> tuple[str, str, str] | None:
+    """("Night pedestrian mAP50-95", "0.117", "+0.0345 vs baseline"), or None when
+    either row is absent from this package's arm table or carries no
+    night-pedestrian slice (an older results.json never wrote
+    ``night.per_class``) -- the headline row omits the card entirely rather than
+    showing "nan".
+
+    A single figure plus a delta, not the "0.083 → 0.117" arrow: the arrow is
+    13 characters and truncates in a 1-of-4 st.metric card at <=1200px (Phase 9a
+    final review)."""
     if arm_name is None:
         return None
     base_rows = arms.loc[arms["arm"] == _baseline_arm()]
@@ -132,7 +137,12 @@ def _night_pedestrian_card(arms: pd.DataFrame, arm_name: str | None) -> tuple[st
     arm_ped = arm_rows.iloc[0].get("night_ped_map5095")
     if base_ped is None or arm_ped is None or pd.isna(base_ped) or pd.isna(arm_ped):
         return None
-    return ("Night pedestrian mAP50-95", f"{float(base_ped):.3f} → {float(arm_ped):.3f}")
+    base_ped, arm_ped = float(base_ped), float(arm_ped)
+    return (
+        "Night pedestrian mAP50-95",
+        f"{arm_ped:.3f}",
+        f"{arm_ped - base_ped:+.4f} vs baseline",
+    )
 
 
 def _loop_beats(results: dict[str, Any], arms: pd.DataFrame) -> list[str | None]:

@@ -27,11 +27,14 @@ Usage
 
 Each page is loaded, given time to finish its first run, and -- where the page has
 a frame gallery -- has its first "View" button clicked so the detail panel is open
-in the shot rather than an empty placeholder. The three pages in `NO_CLICK` have no
-such gallery on their first screen; those are captured at scroll position 0 instead,
-so the title is visible rather than whatever the click would have landed on. Exits
-non-zero if any page rendered a Streamlit exception, so a broken page cannot quietly
-become a README screenshot.
+in the shot rather than an empty placeholder. The four pages in `NO_CLICK` have no
+such gallery on their first screen: Scenario Search's own per-event "View" buttons
+sit below its title, breadcrumb and preset buttons, so a blind first-match click
+opens an event's detail panel and leaves the shot scrolled past all three. Those
+four pages are captured at scroll position 0 instead, so the title is visible
+rather than whatever the click would have landed on. Exits non-zero if any page
+rendered a Streamlit exception, so a broken page cannot quietly become a README
+screenshot.
 
 Any capture over 300 KB is quantized in place to a 256-colour palette PNG
 (Pillow, already an app dependency) so the committed screenshots stay small; the
@@ -68,7 +71,9 @@ PAGES: tuple[tuple[str, str], ...] = (
 
 # Pages with no frame gallery on their first screen: skip the "View" click and
 # capture at scroll position 0 (title visible) instead of clicking blind.
-NO_CLICK: frozenset[str] = frozenset({"tour", "active_learning", "weak_supervision"})
+NO_CLICK: frozenset[str] = frozenset(
+    {"tour", "scenarios", "active_learning", "weak_supervision"}
+)
 
 VIEWPORT = {"width": 1200, "height": 900}
 STATUS_WIDGET = '[data-testid="stStatusWidget"]'  # Streamlit's "Running..." indicator

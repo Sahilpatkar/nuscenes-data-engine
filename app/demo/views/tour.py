@@ -637,7 +637,7 @@ def _render_retrain(data: _TourData) -> None:
     # A card whose value is NA is omitted, never rendered as "nan": n_scenes/
     # night_share come from the arm's own mined-set composition, which an older
     # results.json (or an arm with no extra-frames file) never wrote.
-    cards: list[tuple[str, str]] = []
+    cards: list[tuple[str, str] | tuple[str, str, str]] = []
     base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
     sizes_known = bool(pd.notna(base_n)) and bool(pd.notna(arm_n))
     if sizes_known:
@@ -651,9 +651,15 @@ def _render_retrain(data: _TourData) -> None:
     if sizes_known:
         # "Training images", not "Training set" + a trailing " images": st.metric
         # renders its VALUE in a narrow column and the 22-character
-        # "7,035 → 8,535 images" wrapped mid-arrow; moving the noun into the label
-        # leaves a 13-character value that fits (Phase 9a review 5a).
-        cards.append(("Training images", f"{int(base_n):,} → {int(arm_n):,}"))
+        # "7,035 → 8,535 images" wrapped mid-arrow (Phase 9a review 5a). The
+        # 13-character "7,035 → 8,535" arrow value on its own still truncates in
+        # a 1-of-4 st.metric card at <=1200px (Phase 9a final review), so show
+        # the after-count alone with the mined total as the delta.
+        cards.append((
+            "Training images",
+            f"{int(arm_n):,}",
+            f"+{int(arm_n) - int(base_n):,} mined frames",
+        ))
     metric_cards(cards)
 
     ordered = (
@@ -985,7 +991,7 @@ def _result_failures(data: _TourData) -> None:
         worst_arm = str(worst["arm"])
         if worst_arm.startswith("weak_") and not worst_arm.endswith("_gt"):
             st.markdown(
-                f"`{worst_arm}` is the worst night result of the {len(data.arms)} arms "
+                f"`{worst_arm}` is the worst night result of the {len(night_ranked)} arms "
                 f"({float(worst['delta_night']):+.4f})."
             )
             wrote_recorded = True

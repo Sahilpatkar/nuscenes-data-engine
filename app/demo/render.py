@@ -12,12 +12,21 @@ import streamlit as st
 from PIL import Image, ImageDraw
 
 
-def metric_cards(items: list[tuple[str, str]], per_row: int = 4) -> None:
-    """A row of st.metric cards: [(label, value), ...]."""
+def metric_cards(
+    items: Sequence[tuple[str, str] | tuple[str, str, str]], per_row: int = 4
+) -> None:
+    """A row of st.metric cards: [(label, value), ...] or, for a card that should
+    show a delta alongside a single figure rather than an arrow packed into the
+    value string, [(label, value, delta), ...]."""
     for start in range(0, len(items), per_row):
         chunk = items[start : start + per_row]
-        for col, (label, value) in zip(st.columns(len(chunk)), chunk, strict=True):
-            col.metric(label, value)
+        for col, item in zip(st.columns(len(chunk)), chunk, strict=True):
+            if len(item) == 3:
+                label, value, delta = item
+                col.metric(label, value, delta=delta)
+            else:
+                label, value = item
+                col.metric(label, value)
 
 
 def story_arrows(steps: list[tuple[str, str]]) -> None:

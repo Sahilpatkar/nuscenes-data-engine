@@ -68,8 +68,14 @@ Steps (stage → content; every value from the package):
 Amendment (2026-08-22, review): `tour_frame_candidates` orders night first, then
 community failure-mass rank, then pedestrian GT count — the step shows the frame
 whose community best exemplifies the mass → quota mechanism; on v0.7 that is
-`0f70138f…` (flagship #12, community #10823, quota 23 → 87, later rejected by the
-weak verifier), so both conditional sentences render.
+`00740c25baf64f12a411963aadb5c81c` (community #10301, 916 frames, 916 of them at
+night, failure mass 395.19 — rank 3 of 97 — quota 323, degree rank 1 of 916, a
+night-pass pick). It is not a flagship event and its `weak_verdict` is
+`accepted`, so on v0.7 **neither** conditional sentence renders. Both are
+exercised instead by
+`test_tour_step_4_says_flagship_and_rejected_when_the_frame_really_is`, which
+manufactures both properties (flagship rank, rejected verdict) on the fixture
+package.
 
 ## 2. Result screen (step 6) — derived sources
 
