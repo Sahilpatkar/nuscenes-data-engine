@@ -332,11 +332,17 @@ def _strategy_lesson(coverage: pd.DataFrame, arms: pd.DataFrame) -> str:
         and float(graph["night_share"]) > float(mined["night_share"])
         and _best_night_arm(arms) == "graph_rate_night"
     ):
+        # Same count/noun agreement as _strategy_triple (Phase 9b review M8): a
+        # one-scene arm must not read "1 scenes" here either.
+        mined_scenes = int(mined["n_scenes"])
+        graph_scenes = int(graph["n_scenes"])
         return (
-            f"Similarity mining found near-duplicates: {int(mined['n_scenes']):,} scenes, "
+            f"Similarity mining found near-duplicates: {mined_scenes:,} "
+            f"scene{'' if mined_scenes == 1 else 's'}, "
             f"{float(mined['night_share']):.0%} night, {float(mined['delta_night']):+.4f} "
             "night mAP50-95; graph-aware mining spread the same budget over "
-            f"{int(graph['n_scenes']):,} scenes at {float(graph['night_share']):.0%} night "
+            f"{graph_scenes:,} scene{'' if graph_scenes == 1 else 's'} at "
+            f"{float(graph['night_share']):.0%} night "
             f"and took the best night gain ({float(graph['delta_night']):+.4f})."
         )
     triples = "; ".join(_strategy_triple(row) for _, row in coverage.iterrows())
