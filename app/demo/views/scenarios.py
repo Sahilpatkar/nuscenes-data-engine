@@ -27,6 +27,7 @@ from filters import (
     graph_node_label,
     parity_caption,
     parity_short,
+    path_steps,
     rank_events,
     severity_caption,
     speed_caption,
@@ -142,6 +143,24 @@ _NODE_OFF_PATH_SIZE = 12
 _EDGE_OFF_PATH_COLOR = "#DDDDDD"
 _EDGE_LABEL_FONT = {"size": 10, "color": "#555555", "align": "middle"}
 
+# Phase 9b (Task 5): the progressive reveal's two on-path states. "Amber" IS the
+# Phase-6 path color -- a step at or before the slider's position keeps it, so the
+# legend's "Orange = the matched path" stays literally true and the default (last
+# step) draws exactly what this panel always drew. A path node whose step hasn't
+# been reached yet goes HOLLOW instead of disappearing: white fill, grey rim, grey
+# label. It has to stay in the node set or vis.js re-solves the force layout at
+# every step and the graph jumps around under the viewer.
+_AMBER = _NODE_ON_PATH_COLOR
+_NODE_HOLLOW_FILL = "#FFFFFF"
+_NODE_HOLLOW_BORDER = _NODE_OFF_PATH_COLOR
+_NODE_HOLLOW_BORDER_WIDTH = 2
+_NODE_HOLLOW_LABEL_COLOR = "#777777"
+
+# The reveal's two widget keys -- read through their own return values (both
+# widgets are instantiated ABOVE the graph), never written.
+_PATH_STEP_KEY = "scenario_path_step"
+_GRAPH_CONTEXT_KEY = "scenario_graph_context"
+
 # Only these relationship types get their label drawn. A Sample hub carries up to 14
 # HAS_OBJECT edges, each to an OF_CATEGORY edge of its own, so labeling those turned
 # the star around the hub into an unreadable pile of repeated words (visual check,
@@ -154,6 +173,20 @@ _GRAPH_LEGEND = (
     "Category); grey = context (other observations, nearest 12 kept). Edge labels "
     "are shown for structural edges only. Click a node for its properties. "
     "Node types: Scene · Sample · EgoPose · ObjectObservation · Category · Location"
+)
+# Phase 9b (Task 5): one more line under the (unchanged) legend, for the two states
+# only the reveal can produce.
+_GRAPH_REVEAL_LEGEND = (
+    "Amber = revealed up to the slider's step; hollow = on the matched path but not "
+    "revealed yet. Every path node stays drawn at every step, so the layout does "
+    "not jump as you reveal it."
+)
+# The detail column's own caption under the step facts: the export has no CAN node
+# of its own, so this says where the two CAN readings actually live rather than
+# letting the panel imply a node that isn't there.
+_STEP_FACTS_CAPTION = (
+    "CAN speed and minimum longitudinal acceleration are properties of the EgoPose "
+    "node — the graph export has no separate CAN node."
 )
 _GRAPH_ABSENT_NOTE = "graph export not included in this package"
 # Distinct from _GRAPH_ABSENT_NOTE (item M3, Phase 6 review): the package DOES carry
@@ -284,16 +317,34 @@ def _render_parity_line(preset_name: str, preset: _Preset, n_shown: int) -> None
     provenance("recorded", "SQL and Cypher counts computed at build (demo subgraphs)")
 
 
-def _node_font(on_path: bool) -> dict[str, Any]:
+def _node_font(on_path: bool, *, revealed: bool = True) -> dict[str, Any]:
     """vis.js font spec for one node's label -- readable at the size the panel draws.
 
     On-path labels are bigger, near-black, and sit on a translucent white plate so
     they stay legible where the force-directed layout overlaps them on an edge; the
-    context nodes' labels are small and grey so the matched path reads first.
+    context nodes' labels are small and grey so the matched path reads first. A path
+    node the reveal hasn't reached yet (Task 5) keeps the size and the plate -- the
+    layout must not shift when it lights up -- and goes grey with its outline.
     """
     if on_path:
-        return {"size": 13, "color": "#222222", "background": "#FFFFFFCC"}
+        color = "#222222" if revealed else _NODE_HOLLOW_LABEL_COLOR
+        return {"size": 13, "color": color, "background": "#FFFFFFCC"}
     return {"size": 10, "color": "#777777"}
+
+
+def _node_color(on_path: bool, revealed: bool) -> str | dict[str, str]:
+    """One node's vis.js color: the path amber once its step is revealed, a hollow
+    white-on-grey outline before it, today's flat grey for a context node.
+
+    vis.js reads a STRING as "fill and border alike", which is why hollow has to be
+    the dict form -- a white string would draw a white node with a white rim, i.e.
+    an invisible one.
+    """
+    if not on_path:
+        return _NODE_OFF_PATH_COLOR
+    if revealed:
+        return _AMBER
+    return {"background": _NODE_HOLLOW_FILL, "border": _NODE_HOLLOW_BORDER}
 
 
 def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
@@ -309,6 +360,15 @@ def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
     just isn't in it (unreachable for a package built since the stale-staging
     guard in build.py::_include_subgraphs, but the page still reports what it
     actually found rather than a note that would be wrong).
+
+    Phase 9b (Task 5) makes the panel a PROGRESSIVE reveal rather than 27 nodes at
+    once: `filters.path_steps` turns the export's own `path` chains into the ordered
+    story (Scene → keyframe → each matching object, nearest first → ego pose), a
+    `select_slider` walks it, and a toggle folds the context nodes away. Two rules
+    keep it honest and stable: every ON-PATH node is drawn at every step (only its
+    colour changes, so vis.js keeps solving the same graph and the layout doesn't
+    jump), and an edge is only drawn when both of its endpoints are. The default is
+    the LAST step -- the whole path revealed, which is exactly what Phase 6 drew.
 
     `streamlit_agraph` is imported here (not at module level) so a package/
     environment missing it still renders every other page element -- an
@@ -343,6 +403,53 @@ def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
     nodes_by_id = {n["id"]: n for n in nodes_data}
     on_path_ids = {n["id"] for n in nodes_data if n.get("on_path")}
 
+    # Phase 9b (Task 5): the reveal's two widgets sit ABOVE the graph, so their
+    # return values are already in hand when the node list below is built -- no
+    # session_state read-before-the-widget dance (and neither key is ever written).
+    steps = path_steps(event_subgraph)
+    labels = [step.label for step in steps]
+    step_column, context_column = st.columns([3, 1])
+    with step_column:
+        selected_label = (
+            st.select_slider(
+                "Reveal the matched path",
+                options=labels,
+                value=labels[-1],   # the whole path, revealed: this panel's Phase-6 state
+                key=_PATH_STEP_KEY,
+            )
+            if labels
+            else None
+        )
+    with context_column:
+        show_context = st.toggle("Show context nodes", value=False, key=_GRAPH_CONTEXT_KEY)
+
+    # A stale step from the previously-selected event deserializes back to the
+    # default (streamlit's SelectSliderSerde falls back when the stored option is
+    # gone), so this only has to cover the no-steps case.
+    selected_index = (
+        labels.index(selected_label)
+        if selected_label is not None and selected_label in labels
+        else len(labels) - 1
+    )
+    step_of_node: dict[str, int] = {}
+    for index, step in enumerate(steps):
+        for node_id in step.node_ids:
+            step_of_node.setdefault(node_id, index)
+
+    def _revealed(node_id: str) -> bool:
+        """Whether a node's step has been reached. With no path chains staged there
+        is nothing to reveal progressively and every on-path node is drawn in the
+        path color, exactly as this panel did before the reveal existed. An on-path
+        node no chain names (defensive) belongs to the last step."""
+        if not steps:
+            return True
+        return step_of_node.get(node_id, len(steps) - 1) <= selected_index
+
+    # The on-path nodes are ALWAYS in the node set -- only their color changes with
+    # the step, so vis.js keeps solving the same graph and the layout stays put.
+    # Context nodes are the ones the toggle adds or removes.
+    visible_ids = {n["id"] for n in nodes_data if n.get("on_path") or show_context}
+
     agraph_nodes = [
         Node(
             id=n["id"],
@@ -352,25 +459,36 @@ def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
             label=graph_node_label(n),
             title=f"{n['label']} {n['id'].split(':', 1)[-1]}",
             size=_NODE_ON_PATH_SIZE if n.get("on_path") else _NODE_OFF_PATH_SIZE,
-            color=_NODE_ON_PATH_COLOR if n.get("on_path") else _NODE_OFF_PATH_COLOR,
-            font=_node_font(bool(n.get("on_path"))),
+            color=_node_color(bool(n.get("on_path")), _revealed(n["id"])),
+            borderWidth=(
+                _NODE_HOLLOW_BORDER_WIDTH
+                if n.get("on_path") and not _revealed(n["id"])
+                else 1
+            ),
+            font=_node_font(bool(n.get("on_path")), revealed=_revealed(n["id"])),
         )
         for n in nodes_data
+        if n["id"] in visible_ids
     ]
 
     agraph_edges = []
     for edge in edges_data:
+        # An edge whose other end isn't drawn would dangle -- the context object and
+        # the matched one share a Category node, so this has to check BOTH ends.
+        if edge["source"] not in visible_ids or edge["target"] not in visible_ids:
+            continue
         # An edge is on the path only when BOTH its endpoints are -- a HAS_OBJECT
         # edge from the (on-path) Sample hub to a CONTEXT object is context, not
-        # path.
+        # path -- and it lights up only once both of them have been revealed.
         on_path = edge["source"] in on_path_ids and edge["target"] in on_path_ids
+        revealed = on_path and _revealed(edge["source"]) and _revealed(edge["target"])
         agraph_edges.append(
             Edge(
                 source=edge["source"],
                 target=edge["target"],
                 label=edge["label"] if edge["label"] in _STRUCTURAL_EDGES else "",
-                color=_NODE_ON_PATH_COLOR if on_path else _EDGE_OFF_PATH_COLOR,
-                width=2 if on_path else 1,
+                color=_AMBER if revealed else _EDGE_OFF_PATH_COLOR,
+                width=2 if revealed else 1,
                 font=dict(_EDGE_LABEL_FONT),
             )
         )
@@ -387,14 +505,29 @@ def _render_graph_panel(row: pd.Series, preset_name: str) -> None:
     with detail_col:
         clicked_node = nodes_by_id.get(clicked) if clicked else None
         if clicked_node is not None:
+            # A clicked node still wins the column: the viewer asked for THAT node's
+            # properties, not for the step they happen to be standing on.
             meta = clicked_node.get("meta", {})
             st.table(
                 pd.DataFrame({"key": list(meta.keys()), "value": [str(v) for v in meta.values()]})
             )
-        else:
-            st.caption(subgraph_narrative(event_subgraph))
+        elif steps:
+            step = steps[selected_index]
+            st.table(
+                pd.DataFrame({
+                    "fact": [label for label, _ in step.facts],
+                    "value": [value for _, value in step.facts],
+                })
+            )
+            st.caption(_STEP_FACTS_CAPTION)
+        # The "why this event" one-liner stays visible in both states -- it is the
+        # whole path in one sentence, which is what a step's facts deliberately are
+        # not.
+        st.caption(subgraph_narrative(event_subgraph))
 
     st.caption(_GRAPH_LEGEND)
+    if steps:
+        st.caption(_GRAPH_REVEAL_LEGEND)
 
 
 def _render_preset_buttons() -> None:

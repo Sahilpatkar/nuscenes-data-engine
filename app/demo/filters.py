@@ -452,6 +452,206 @@ def graph_node_label(node: Mapping[str, Any]) -> str:
     return label
 
 
+# --- Phase 9b (Task 5): the graph panel's progressive path reveal -----------------
+#
+# The panel used to draw all ~27 nodes of an event's subgraph at once, which reads
+# as a hairball rather than as the reason this event matched. `path_steps` turns the
+# export's own `path` -- the ordered id chains `assemble_subgraph` wrote -- into the
+# story a select_slider walks one step at a time: Scene, the keyframe, each MATCHING
+# object nearest first, then the ego pose (spec docs/superpowers/specs/2026-08-22-
+# demo-phase9b-design.md §3). Pure, like everything else here: the view supplies the
+# widgets and the colours, this supplies the order, the labels and the facts.
+
+# Every fact is read straight off a node's own `meta`. A field the export didn't
+# carry reads as this, never as a guess, a "None" literal or a "nan m".
+_NA_TEXT = "n/a"
+
+
+@dataclass(frozen=True)
+class PathStep:
+    """One step of a matched path: the slider's option text for it, the nodes it
+    reveals, and the ``(label, value)`` facts the detail column shows beside it.
+
+    ``label`` carries a 1-based index prefix ("3 · Pedestrian · 2.1 m") because
+    ``st.select_slider`` needs distinct options and two matching objects of the same
+    group at the same distance would otherwise collide.
+    """
+
+    label: str
+    node_ids: tuple[str, ...]
+    facts: tuple[tuple[str, str], ...]
+
+
+def _is_missing(value: Any) -> bool:
+    """True when a meta field is absent/NA -- pd.isna over anything it can't judge
+    (a list, an odd object) is False, not an exception."""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _text_fact(value: Any) -> str:
+    """A meta value as display text, or "n/a" when it is missing or blank."""
+    if _is_missing(value):
+        return _NA_TEXT
+    return str(value).strip() or _NA_TEXT
+
+
+def _flag_fact(value: Any) -> str:
+    """A boolean meta field as "yes"/"no" -- "n/a" when the export has no value,
+    which is NOT the same statement as "no"."""
+    return _NA_TEXT if _is_missing(value) else ("yes" if bool(value) else "no")
+
+
+def _lighting_fact(is_night: Any) -> str:
+    return _NA_TEXT if _is_missing(is_night) else ("night" if bool(is_night) else "day")
+
+
+def _object_step_name(meta: Mapping[str, Any]) -> str:
+    """An ObjectObservation's display name: its taxonomy GROUP ("pedestrian" ->
+    "Pedestrian"), falling back to the category's own tail when the export carried
+    no group."""
+    group = meta.get("group")
+    if _is_missing(group) or not str(group).strip():
+        category = meta.get("category")
+        group = None if _is_missing(category) else str(category).rsplit(".", 1)[-1]
+    if group is None or not str(group).strip():
+        return _DEFAULT_CATEGORY_TAIL.capitalize()
+    return str(group).strip().replace("_", " ").capitalize()
+
+
+def path_steps(event: Mapping[str, Any]) -> list[PathStep]:
+    """One event's subgraph as the ordered reveal: Scene → Keyframe → each matching
+    object, NEAREST FIRST → Ego pose.
+
+    WHICH nodes each step reveals comes from ``path`` itself (segment 0 is the
+    backbone ``[scene, sample, egopose]``, each later segment a ``[sample, object,
+    category]`` chain), never from re-deciding which objects matched -- the export
+    already made that call, and this must not disagree with the narrative or the
+    card caption that read the same chains. The sample id belongs to the Keyframe
+    step alone, even though every object chain also starts with it, and a node
+    already revealed by an earlier step (two matching objects can share a Category)
+    is not claimed again by a later one.
+
+    An event with no chains at all -- ``{}``, an empty ``path``, the empty subgraph
+    ``assemble_subgraph`` returns for a record-less event -- has no story to reveal
+    and returns ``[]``; the panel then draws its on-path nodes all at once, as it
+    did before this existed. Missing meta reads "n/a" (see ``_text_fact``).
+    """
+    nodes = event.get("nodes") or []
+    by_id = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
+    chains = [list(chain) for chain in (event.get("path") or []) if chain]
+    if not chains:
+        return []
+
+    # The backbone is located by its EgoPose-labelled TAIL, not by position (item
+    # I3, the same rule subgraph_narrative follows): assemble_subgraph appends it
+    # only when both the Scene and the EgoPose exist, so on a subgraph missing
+    # either one, path[0] is already an object chain.
+    backbone_index = next(
+        (
+            index
+            for index, chain in enumerate(chains)
+            if len(chain) == 3 and (by_id.get(chain[2]) or {}).get("label") == "EgoPose"
+        ),
+        None,
+    )
+    backbone = chains[backbone_index] if backbone_index is not None else None
+    object_chains = [
+        chain
+        for index, chain in enumerate(chains)
+        if index != backbone_index and len(chain) >= 2
+    ]
+    scene_id = backbone[0] if backbone is not None else None
+    ego_id = backbone[2] if backbone is not None else None
+    sample_id = backbone[1] if backbone is not None else (
+        object_chains[0][0] if object_chains else None
+    )
+
+    def _meta(node_id: str) -> Mapping[str, Any]:
+        node = by_id.get(node_id) or {}
+        meta: Mapping[str, Any] = node.get("meta") or {}
+        return meta
+
+    def _distance(node_id: str) -> float | None:
+        return _numeric(_meta(node_id).get("distance_to_ego_m"))
+
+    unlabelled: list[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]]] = []
+
+    if scene_id is not None:
+        meta = _meta(scene_id)
+        name = _text_fact(meta.get("name"))
+        unlabelled.append((
+            "Scene" if name == _NA_TEXT else f"Scene {name}",
+            (scene_id,),
+            (
+                ("Scene", name),
+                ("Location", _text_fact(meta.get("location"))),
+                ("Lighting", _lighting_fact(meta.get("is_night"))),
+                ("Rain", _flag_fact(meta.get("is_rain"))),
+            ),
+        ))
+
+    if sample_id is not None:
+        meta = _meta(sample_id)
+        unlabelled.append((
+            "Keyframe",
+            (sample_id,),
+            (
+                ("Timestamp", _text_fact(meta.get("timestamp"))),
+                ("Lighting", _lighting_fact(meta.get("is_night"))),
+                ("Rain", _flag_fact(meta.get("is_rain"))),
+            ),
+        ))
+
+    # Nearest first, ties broken by id so the order is deterministic -- the same
+    # (distance, token) key assemble_subgraph itself sorts the chains by, applied
+    # here too rather than trusted, since a hand-staged or older export need not
+    # have been written in that order.
+    for chain in sorted(object_chains, key=lambda c: (_distance(c[1]) or float("inf"), str(c[1]))):
+        object_id = chain[1]
+        meta = _meta(object_id)
+        distance = _distance(object_id)
+        name = _object_step_name(meta)
+        unlabelled.append((
+            name if distance is None else f"{name} · {distance:.1f} m",
+            (object_id, *chain[2:3]),
+            (
+                ("Category", _text_fact(meta.get("category"))),
+                ("Distance to ego", _NA_TEXT if distance is None else f"{distance:.1f} m"),
+                ("Visibility", _text_fact(meta.get("visibility"))),
+            ),
+        ))
+
+    if ego_id is not None:
+        meta = _meta(ego_id)
+        speed = _numeric(meta.get("can_speed_kmh"))
+        accel = _numeric(meta.get("accel_long_min_mps2"))
+        unlabelled.append((
+            "Ego pose",
+            (ego_id,),
+            (
+                ("CAN speed", _NA_TEXT if speed is None else f"{speed:.1f} km/h"),
+                (
+                    "Min longitudinal accel",
+                    _NA_TEXT if accel is None else f"{accel:.2f} m/s²",
+                ),
+                ("Hard braking", _flag_fact(meta.get("is_hard_braking"))),
+            ),
+        ))
+
+    steps: list[PathStep] = []
+    claimed: set[str] = set()
+    for index, (label, node_ids, facts) in enumerate(unlabelled, start=1):
+        fresh = tuple(node_id for node_id in node_ids if node_id not in claimed)
+        claimed.update(fresh)
+        steps.append(PathStep(label=f"{index} · {label}", node_ids=fresh, facts=facts))
+    return steps
+
+
 def parity_caption(
     sql_count: int, cypher_count: int | None, parity: bool | None, n_shown: int
 ) -> str:

@@ -14,6 +14,7 @@ sys.path.insert(0, str(APP_DEMO))
 from filters import (  # noqa: E402
     FILMSTRIP_STEPS,
     FilmstripStep,
+    PathStep,
     braking_caption,
     community_jump,
     confidence_caption,
@@ -30,6 +31,7 @@ from filters import (  # noqa: E402
     model_label,
     parity_caption,
     parity_short,
+    path_steps,
     rank_events,
     replay_tool_counts,
     selection_factors,
@@ -576,6 +578,262 @@ def test_graph_node_label_category_and_location_keep_their_full_tail() -> None:
 
 def test_graph_node_label_unknown_type_falls_back_to_the_label() -> None:
     assert graph_node_label(_node("thing:abc123", "SomethingElse", False, {})) == "SomethingElse"
+
+
+# --- path_steps (Phase 9b Task 5: the graph panel's progressive path reveal) -------
+#
+# One event's exported subgraph (assemble_subgraph's {nodes, edges, path}) as the
+# ordered story the select_slider walks: Scene -> the keyframe -> each MATCHING
+# object, nearest first -> the ego pose the CAN readings hang off (spec
+# docs/superpowers/specs/2026-08-22-demo-phase9b-design.md §3). Node ids come from
+# `path`'s own chains, never from re-deriving which nodes matched; a meta field the
+# export doesn't carry reads "n/a" rather than being invented.
+
+
+def _path_event(
+    *,
+    car_distance: object = 7.5,
+    path: list[list[str]] | None = None,
+) -> dict[str, object]:
+    """A hand-built subgraph in ``assemble_subgraph``'s shape: the backbone chain
+    plus one ``[sample, object, category]`` chain per matching object, one off-path
+    context object no chain names, and the two Categories.
+
+    The object chains are deliberately FAR-FIRST (car before pedestrian) so the
+    nearest-first ordering has to come from ``path_steps`` reading
+    ``distance_to_ego_m``, not from the order the chains happen to be in.
+    """
+    return {
+        "nodes": [
+            {
+                "id": "scene:sc1", "label": "Scene", "group": "scene", "on_path": True,
+                "meta": {
+                    "name": "scene-1084", "location": "boston-seaport",
+                    "is_night": True, "is_rain": False,
+                },
+            },
+            {
+                "id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True,
+                "meta": {
+                    "timestamp": 1533151603547590, "scene": "scene-1084",
+                    "is_night": True, "is_rain": False,
+                },
+            },
+            {
+                "id": "egopose:sa1", "label": "EgoPose", "group": "egopose", "on_path": True,
+                "meta": {
+                    "speed_mps": 8.6, "accel_long_min_mps2": -4.46,
+                    "is_hard_braking": True, "can_speed_kmh": 31.0,
+                },
+            },
+            {
+                "id": "object:ped", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": True,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 2.1, "ego_rel_x": 1.9, "ego_rel_y": -0.8,
+                    "visibility": "4",
+                },
+            },
+            {
+                "id": "category:human.pedestrian.adult", "label": "Category",
+                "group": "pedestrian", "on_path": True,
+                "meta": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+            },
+            {
+                "id": "object:car", "label": "ObjectObservation", "group": "car",
+                "on_path": True,
+                "meta": {
+                    "category": "vehicle.car", "group": "car",
+                    "distance_to_ego_m": car_distance, "ego_rel_x": 7.0,
+                    "ego_rel_y": 2.6, "visibility": "3",
+                },
+            },
+            {
+                "id": "category:vehicle.car", "label": "Category", "group": "car",
+                "on_path": True, "meta": {"name": "vehicle.car", "group": "car"},
+            },
+            {
+                "id": "object:far", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": False,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 21.4, "visibility": "2",
+                },
+            },
+        ],
+        "edges": [
+            {"source": "sample:sa1", "target": "scene:sc1", "label": "IN_SCENE"},
+            {"source": "sample:sa1", "target": "egopose:sa1", "label": "AT_POSE"},
+            {"source": "sample:sa1", "target": "object:ped", "label": "HAS_OBJECT"},
+            {"source": "sample:sa1", "target": "object:car", "label": "HAS_OBJECT"},
+            {"source": "sample:sa1", "target": "object:far", "label": "HAS_OBJECT"},
+        ],
+        "path": [
+            ["scene:sc1", "sample:sa1", "egopose:sa1"],
+            ["sample:sa1", "object:car", "category:vehicle.car"],
+            ["sample:sa1", "object:ped", "category:human.pedestrian.adult"],
+        ] if path is None else path,
+    }
+
+
+def test_path_steps_orders_scene_keyframe_nearest_objects_then_ego_pose() -> None:
+    steps = path_steps(_path_event())
+    assert [step.label for step in steps] == [
+        "1 · Scene scene-1084",
+        "2 · Keyframe",
+        "3 · Pedestrian · 2.1 m",
+        "4 · Car · 7.5 m",
+        "5 · Ego pose",
+    ]
+    assert all(isinstance(step, PathStep) for step in steps)
+
+
+def test_path_steps_node_ids_come_from_the_exported_path_chains() -> None:
+    """Each step owns exactly the ids ``path`` names for it -- the sample belongs to
+    the Keyframe step, NOT to each object chain that also starts with it (drawing it
+    twice would reveal the hub before its own step)."""
+    steps = path_steps(_path_event())
+    assert [step.node_ids for step in steps] == [
+        ("scene:sc1",),
+        ("sample:sa1",),
+        ("object:ped", "category:human.pedestrian.adult"),
+        ("object:car", "category:vehicle.car"),
+        ("egopose:sa1",),
+    ]
+    # Every on-path node is revealed by exactly one step, and no context node is.
+    revealed = [node_id for step in steps for node_id in step.node_ids]
+    assert len(revealed) == len(set(revealed))
+    assert "object:far" not in revealed
+
+
+def test_path_steps_facts_are_read_from_the_nodes_own_meta() -> None:
+    scene, keyframe, pedestrian, car, ego = path_steps(_path_event())
+    assert scene.facts == (
+        ("Scene", "scene-1084"),
+        ("Location", "boston-seaport"),
+        ("Lighting", "night"),
+        ("Rain", "no"),
+    )
+    assert keyframe.facts == (
+        ("Timestamp", "1533151603547590"),
+        ("Lighting", "night"),
+        ("Rain", "no"),
+    )
+    assert pedestrian.facts == (
+        ("Category", "human.pedestrian.adult"),
+        ("Distance to ego", "2.1 m"),
+        ("Visibility", "4"),
+    )
+    assert car.facts[1] == ("Distance to ego", "7.5 m")
+    # The CAN reading and the braking flag are properties of the EgoPose node --
+    # the export has no separate CAN node (spec §3).
+    ego_text = " ".join(f"{label} {value}" for label, value in ego.facts).lower()
+    assert "31" in ego_text
+    assert "hard braking" in ego_text
+    assert ego.facts == (
+        ("CAN speed", "31.0 km/h"),
+        ("Min longitudinal accel", "-4.46 m/s²"),
+        ("Hard braking", "yes"),
+    )
+
+
+def test_path_steps_without_a_path_is_empty_not_an_exception() -> None:
+    """An event the exporter staged with no chains at all (and the empty-subgraph
+    shape assemble_subgraph returns for a record-less event) has no story to
+    reveal -- the panel then draws every on-path node at once, as it always did."""
+    assert path_steps({}) == []
+    assert path_steps({"nodes": [], "edges": [], "path": []}) == []
+    assert path_steps(_path_event(path=[])) == []
+
+
+def test_path_steps_missing_distance_sorts_last_and_reads_n_a() -> None:
+    """A distance the export doesn't carry is never invented: the object still gets
+    its step (it IS on the path), sorts behind every object that has one, and shows
+    "n/a" instead of a fabricated figure or a "nan m" literal."""
+    for missing in (None, float("nan")):
+        steps = path_steps(_path_event(car_distance=missing))
+        assert [step.label for step in steps] == [
+            "1 · Scene scene-1084",
+            "2 · Keyframe",
+            "3 · Pedestrian · 2.1 m",
+            "4 · Car",
+            "5 · Ego pose",
+        ]
+        assert steps[3].facts == (
+            ("Category", "vehicle.car"),
+            ("Distance to ego", "n/a"),
+            ("Visibility", "3"),
+        )
+
+
+def test_path_steps_labels_are_unique_so_they_can_be_slider_options() -> None:
+    """Two matching objects of the same group at the same distance would collide
+    without the 1-based index prefix -- and st.select_slider needs its options
+    distinct."""
+    event = _path_event()
+    car = next(node for node in event["nodes"] if node["id"] == "object:car")
+    car["meta"]["distance_to_ego_m"] = 2.1     # as close as the pedestrian ...
+    car["meta"]["group"] = "pedestrian"        # ... and now the same group text
+    labels = [step.label for step in path_steps(event)]
+    assert len(labels) == len(set(labels))
+    assert labels[2:4] == ["3 · Pedestrian · 2.1 m", "4 · Pedestrian · 2.1 m"]
+
+
+def test_path_steps_without_the_backbone_chain_keeps_the_object_story() -> None:
+    """``assemble_subgraph`` appends the backbone chain ONLY when both the Scene and
+    the EgoPose exist, so a subgraph without them carries object chains alone. The
+    keyframe step is then read off a chain's own first element, and the two steps
+    whose nodes the export never wrote are simply absent -- never filled in with a
+    guess."""
+    event = {
+        "nodes": [
+            {
+                "id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True,
+                "meta": {"timestamp": 1533151603547590, "is_night": None, "is_rain": None},
+            },
+            {
+                "id": "object:ped", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": True,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 2.1, "visibility": "4",
+                },
+            },
+            {
+                "id": "category:human.pedestrian.adult", "label": "Category",
+                "group": "pedestrian", "on_path": True,
+                "meta": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+            },
+        ],
+        "edges": [],
+        "path": [["sample:sa1", "object:ped", "category:human.pedestrian.adult"]],
+    }
+    steps = path_steps(event)
+    assert [step.label for step in steps] == ["1 · Keyframe", "2 · Pedestrian · 2.1 m"]
+    assert steps[0].node_ids == ("sample:sa1",)
+    assert steps[0].facts == (("Timestamp", "1533151603547590"), ("Lighting", "n/a"), ("Rain", "n/a"))
+
+
+def test_path_steps_reads_n_a_for_meta_the_export_did_not_carry() -> None:
+    event = {
+        "nodes": [
+            {"id": "scene:sc1", "label": "Scene", "group": "scene", "on_path": True, "meta": {}},
+            {"id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True, "meta": {}},
+            {"id": "egopose:sa1", "label": "EgoPose", "group": "egopose", "on_path": True, "meta": {}},
+        ],
+        "edges": [],
+        "path": [["scene:sc1", "sample:sa1", "egopose:sa1"]],
+    }
+    scene, keyframe, ego = path_steps(event)
+    assert scene.label == "1 · Scene"
+    assert scene.facts == (
+        ("Scene", "n/a"), ("Location", "n/a"), ("Lighting", "n/a"), ("Rain", "n/a"),
+    )
+    assert keyframe.facts == (("Timestamp", "n/a"), ("Lighting", "n/a"), ("Rain", "n/a"))
+    assert ego.facts == (
+        ("CAN speed", "n/a"), ("Min longitudinal accel", "n/a"), ("Hard braking", "n/a"),
+    )
 
 
 def test_parity_caption_pluralizes_keyframe_on_count() -> None:

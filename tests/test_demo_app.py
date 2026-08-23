@@ -1651,6 +1651,189 @@ def test_scenario_graph_panel_shows_parity_narrative_and_legend(
     )
 
 
+# Phase 9b (Task 5): the graph panel's progressive path reveal. The Phase-6 path
+# colour doubles as the reveal's "amber" (views/scenarios.py's _NODE_ON_PATH_COLOR
+# / _AMBER, so the legend's "Orange = the matched path" stays true) -- pinned here
+# as a literal, like every other page string this file asserts on.
+_AMBER = "#FF851B"
+
+
+def _capture_agraph(
+    monkeypatch: pytest.MonkeyPatch, *, clicked: str | None = None
+) -> list[dict[str, Any]]:
+    """Capture the Node/Edge/Config objects the graph panel hands to
+    ``streamlit_agraph.agraph``, and decide what a click returns.
+
+    ``_render_graph_panel`` imports ``agraph`` INSIDE the function (so a missing
+    streamlit-agraph degrades to a warning instead of a fatal module import),
+    which is exactly what makes this patch bite: the name is resolved on the
+    module at call time. AppTest never round-trips a custom component, so without
+    this the real ``agraph`` returns its default (None) and everything the panel
+    computed -- which nodes it drew, in which colour -- stays unobservable.
+    """
+    streamlit_agraph = pytest.importorskip("streamlit_agraph")
+    calls: list[dict[str, Any]] = []
+
+    def _fake_agraph(nodes: Any, edges: Any, config: Any) -> str | None:
+        calls.append({"nodes": list(nodes), "edges": list(edges), "config": config})
+        return clicked
+
+    monkeypatch.setattr(streamlit_agraph, "agraph", _fake_agraph)
+    return calls
+
+
+def test_scenario_graph_path_reveal(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 9b Task 5) The select_slider walks the matched path one step at a
+    time and the toggle folds the context nodes away.
+
+    The fixture's flagship subgraph ("s1", built by _stage_subgraphs_with_event
+    through the real assemble_subgraph) has 5 on-path nodes -- scene:sceneX,
+    sample:s1, object:f1 (+ its Category) and egopose:s1 -- and 3 context ones:
+    the 20 m pedestrian object:f2, the next Sample sample:v1, and
+    location:boston-seaport.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    calls = _capture_agraph(monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    slider = at.select_slider(key="scenario_path_step")
+    assert list(slider.options) == [
+        "1 · Scene scene-X", "2 · Keyframe", "3 · Pedestrian · 5.0 m", "4 · Ego pose",
+    ]
+    assert slider.value == slider.options[-1]   # the whole path is revealed by default
+
+    # --- context nodes off (the default): the on-path 5, and no dangling edge ----
+    drawn = calls[-1]
+    ids = [node.id for node in drawn["nodes"]]
+    assert len(ids) == 5
+    assert set(ids) == {
+        "scene:sceneX", "sample:s1", "egopose:s1", "object:f1",
+        "category:human.pedestrian.adult",
+    }
+    # object:f2 (context) hangs off the SAME Category node as the matched
+    # pedestrian, so an edge filter that only checked its source would leave that
+    # OF_CATEGORY edge pointing at a node the panel never drew.
+    assert all(edge.source in set(ids) and edge.to in set(ids) for edge in drawn["edges"])
+    assert all(node.color == _AMBER for node in drawn["nodes"])
+
+    # --- the facts table for the selected step (the ego pose, by default) --------
+    tables = [table.value for table in at.table]
+    assert any(
+        list(table["fact"]) == ["CAN speed", "Min longitudinal accel", "Hard braking"]
+        and list(table["value"]) == ["36.0 km/h", "-7.50 m/s²", "yes"]
+        for table in tables
+    )
+    captions = [str(caption.value) for caption in at.caption]
+    assert any("EgoPose node" in caption for caption in captions)   # where CAN lives
+    assert any("Amber" in caption and "hollow" in caption for caption in captions)
+
+    # --- context nodes on: the full subgraph ------------------------------------
+    at.toggle(key="scenario_graph_context").set_value(True).run(timeout=30)
+    assert not at.exception
+    with_context = calls[-1]
+    assert len(with_context["nodes"]) == 8
+    assert {"object:f2", "sample:v1", "location:boston-seaport"} <= {
+        node.id for node in with_context["nodes"]
+    }
+    assert len(with_context["edges"]) == 8
+
+    # --- step 1: only the Scene node is revealed --------------------------------
+    at.select_slider(key="scenario_path_step").set_value("1 · Scene scene-X").run(timeout=30)
+    assert not at.exception
+    first_step = calls[-1]
+    amber = [node.id for node in first_step["nodes"] if node.color == _AMBER]
+    assert amber == ["scene:sceneX"]
+    # The other four on-path nodes are still DRAWN (the force layout must not jump
+    # between steps) -- just hollow: white fill, grey border.
+    hollow = [
+        node.id for node in first_step["nodes"]
+        if isinstance(node.color, dict) and node.color.get("background") == "#FFFFFF"
+    ]
+    assert sorted(hollow) == [
+        "category:human.pedestrian.adult", "egopose:s1", "object:f1", "sample:s1",
+    ]
+    tables = [table.value for table in at.table]
+    assert any(list(table["fact"]) == ["Scene", "Location", "Lighting", "Rain"] for table in tables)
+
+
+def test_scenario_graph_reveal_survives_switching_to_another_event(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 9b Task 5) The step the viewer left the slider on belongs to the
+    PREVIOUS event: "3 · Pedestrian · 5.0 m" is s1's third step and no step of
+    v1's at all (its matched pedestrian is at 7 m). Selecting another event must
+    fall back to that event's own last step -- the whole path revealed -- not
+    raise, and not silently reveal a step number that means something else here.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    calls = _capture_agraph(monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    at.select_slider(key="scenario_path_step").set_value("3 · Pedestrian · 5.0 m").run(timeout=30)
+    assert not at.exception
+
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.session_state["scenario_token"] = "v1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    slider = at.select_slider(key="scenario_path_step")
+    assert list(slider.options) == [
+        "1 · Scene scene-X", "2 · Keyframe", "3 · Pedestrian · 7.0 m", "4 · Ego pose",
+    ]
+    assert slider.value == "4 · Ego pose"
+    assert all(node.color == _AMBER for node in calls[-1]["nodes"])
+    # v1's OWN ego readings (can_speed_kmh 18.0, accel -0.5, not hard braking) --
+    # the facts follow the selected event, not the one the slider was set on.
+    tables = [table.value for table in at.table]
+    assert any(
+        list(table["value"]) == ["18.0 km/h", "-0.50 m/s²", "no"] for table in tables
+    )
+
+
+def test_scenario_graph_click_still_shows_the_clicked_nodes_meta(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 6 behaviour, kept through Task 5's reveal) A clicked node's own
+    ``meta`` table takes precedence over the selected step's facts table -- and
+    the path narrative stays on screen either way."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    _capture_agraph(monkeypatch, clicked="object:f1")
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    tables = [table.value for table in at.table]
+    # object:f1's own meta, key order as the staged JSON carries it (sorted).
+    assert any(
+        list(table["key"]) == [
+            "category", "distance_to_ego_m", "ego_rel_x", "ego_rel_y", "group", "visibility",
+        ]
+        and list(table["value"]) == [
+            "human.pedestrian.adult", "5.0", "3.0", "-1.0", "pedestrian", "4",
+        ]
+        for table in tables
+    )
+    # The step facts table is NOT drawn while a node is selected.
+    assert not any("fact" in table.columns for table in tables)
+    assert any(
+        "pedestrian at 5.00 m" in str(caption.value) for caption in at.caption
+    )
+
+
 def test_scenario_parity_mismatch_is_a_warning_not_grey_small_print(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3630,3 +3813,4 @@ def test_loss_learned_callout_counts_only_ranked_arms(monkeypatch: pytest.Monkey
     weak_supervision._render_loss_learned_callout(loss, arms)
     assert len(calls) == 1
     assert "posted the worst night result of the 3 arms" in calls[0]
+
