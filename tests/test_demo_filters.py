@@ -48,6 +48,8 @@ from filters import (  # noqa: E402
     tour_frame_candidates,
     verdict_line,
     weak_frame_summary,
+    weak_result_token,
+    weak_showcase_token,
 )
 
 
@@ -1955,3 +1957,164 @@ def test_filmstrip_steps_accepts_a_dict_and_an_itertuples_row() -> None:
     from_dict = filmstrip_steps(_event_row().to_dict())
 
     assert from_tuple == from_dict == filmstrip_steps(_event_row())
+
+
+# --- Phase 9b (Task 8): the Weak Supervision page's two frame choices --------------
+#
+# "One frame, three views" needs two frames out of the package, each picked for what
+# it can SHOW: a train-pool frame the verifier accepted that actually carries pseudo
+# boxes AND a visible pedestrian (row 1), and a held-out val frame where the
+# GT-labelled twin detects a box the weak-labelled arm misses (row 2). Both choices
+# are pure functions over the package's own tables, so they are pinned here rather
+# than through an AppTest.
+
+_WEAK_ARM = "weak_graph_rate_night"
+_GT_ARM = "weak_graph_rate_night_gt"
+
+
+def _showcase_manifest() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sample_data_token": ["wA", "wB", "wC", "wR", "vA"],
+        "split": ["train_pool", "train_pool", "train_pool", "train_pool", "val"],
+        "weak_verdict": pd.array(
+            ["accepted", "accepted", "accepted", "rejected", "accepted"], dtype="string"
+        ),
+    })
+
+
+def _showcase_labels(extra: tuple[str, ...] = ()) -> pd.DataFrame:
+    """weak_labels.parquet rows: wC carries the MOST pseudo boxes, wA two, wB one,
+    wR none (rejected frames have none by construction)."""
+    tokens = ["wA", "wA", "wB", "wC", "wC", "wC", "vA", *extra]
+    return pd.DataFrame({
+        "sample_data_token": tokens,
+        "category_group": ["car"] * len(tokens),
+        "x_min": [50.0] * len(tokens), "y_min": [50.0] * len(tokens),
+        "x_max": [150.0] * len(tokens), "y_max": [150.0] * len(tokens),
+        "score": [0.73] * len(tokens),
+    })
+
+
+def _showcase_gt(*, pedestrians: bool = True) -> pd.DataFrame:
+    """One visible GT box per token -- a pedestrian everywhere except wC, whose only
+    box is a car (so wC is excluded despite having the most pseudo boxes)."""
+    tokens = ["wA", "wB", "wC", "wR", "vA"]
+    groups = ["pedestrian", "pedestrian", "car", "pedestrian", "pedestrian"]
+    return pd.DataFrame({
+        "annotation_token": [f"{token}-g" for token in tokens],
+        "sample_data_token": tokens,
+        "category_group": groups if pedestrians else ["car"] * len(tokens),
+        "below_visibility_min": pd.array([False] * len(tokens), dtype="boolean"),
+    })
+
+
+def test_weak_showcase_token_picks_an_accepted_frame_that_can_show_all_three_views() -> None:
+    """The row-1 frame has to carry every layer the row draws: the verifier's
+    ACCEPTED verdict, at least one pseudo box, and at least one visible pedestrian
+    GT box. wC has the most pseudo boxes but no pedestrian, wR was rejected (no
+    boxes by construction), vA is a val frame (row 1 is about the train pool) --
+    so the pick is wA, the accepted train-pool frame with the most pseudo boxes."""
+    assert weak_showcase_token(
+        _showcase_manifest(), _showcase_labels(), _showcase_gt()
+    ) == "wA"
+
+
+def test_weak_showcase_token_breaks_a_pseudo_box_tie_on_the_token() -> None:
+    """Ties go to the token, so the page shows the same frame on every rerun."""
+    tied = _showcase_labels(extra=("wB",))          # wB now has two boxes, like wA
+
+    assert weak_showcase_token(_showcase_manifest(), tied, _showcase_gt()) == "wA"
+
+
+def test_weak_showcase_token_is_none_when_no_frame_qualifies() -> None:
+    """Each requirement on its own is enough to leave the page with no showcase
+    frame -- and an older package without ``weak_verdict`` at all is not a crash."""
+    manifest, labels, gt = _showcase_manifest(), _showcase_labels(), _showcase_gt()
+
+    assert weak_showcase_token(manifest, labels.iloc[0:0], gt) is None
+    assert weak_showcase_token(manifest, labels, _showcase_gt(pedestrians=False)) is None
+    assert weak_showcase_token(manifest.drop(columns=["weak_verdict"]), labels, gt) is None
+    rejected = manifest.assign(
+        weak_verdict=pd.array(["rejected"] * len(manifest), dtype="string")
+    )
+    assert weak_showcase_token(rejected, labels, gt) is None
+    assert weak_showcase_token(manifest.iloc[0:0], labels, gt) is None
+
+
+def _result_manifest() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sample_data_token": ["d0", "n1", "n2", "n3", "x0", "t0"],
+        "split": ["val", "val", "val", "val", "val", "train_pool"],
+        # x0's is_night is NA (an unenriched frame): bool(pd.NA) raises, so it has
+        # to sort as a day frame rather than take the page down.
+        "is_night": pd.array([False, True, True, True, None, True], dtype="boolean"),
+    })
+
+
+def _result_boxes(fixes: dict[str, int]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``gt_boxes``/``predictions`` rows for the tokens in ``fixes``: one box both
+    arms detect, plus ``n`` boxes only the GT-labelled twin detects (the weak arm
+    never claims them at all)."""
+    gt_records, pred_records = [], []
+    for token, n_fixed in fixes.items():
+        boxes = [(f"{token}-shared", True)] + [(f"{token}-b{i}", False) for i in range(n_fixed)]
+        for annotation, by_weak in boxes:
+            gt_records.append({
+                "annotation_token": annotation, "sample_data_token": token,
+                "category_group": "pedestrian", "distance_to_ego_m": 12.0,
+                "below_visibility_min": False,
+                f"matched_{_WEAK_ARM}": by_weak, f"matched_{_GT_ARM}": True,
+            })
+            models = [_GT_ARM, _WEAK_ARM] if by_weak else [_GT_ARM]
+            for model in models:
+                pred_records.append({
+                    "sample_data_token": token, "model": model, "status": "tp",
+                    "conf": 0.8, "matched_annotation_token": annotation,
+                })
+    return pd.DataFrame(gt_records), pd.DataFrame(pred_records)
+
+
+def test_weak_result_token_ranks_night_then_most_fixed_boxes_then_token() -> None:
+    """Row 2's frame is the one where the control detector most visibly beats the
+    weak-labelled arm: night first (the arm these checkpoints were trained for is
+    night-targeted), then the most boxes the twin fixes, then the token. d0 has the
+    most fixed boxes but is a day frame, n3 ties n2 on count, t0 is a train-pool
+    frame (neither checkpoint ran on it) -- so the pick is n2."""
+    gt, preds = _result_boxes({"d0": 3, "n1": 1, "n2": 2, "n3": 2, "x0": 2, "t0": 4})
+
+    assert weak_result_token(
+        _result_manifest(), gt, preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) == "n2"
+
+
+def test_weak_result_token_is_none_on_a_package_without_the_weak_arms() -> None:
+    """A package built before the two checkpoints ran carries no ``matched_weak_*``
+    column at all -- the page then says the held-out predictions are missing rather
+    than comparing two models one of which was never evaluated."""
+    gt, preds = _result_boxes({"n1": 1})
+    manifest = _result_manifest()
+
+    assert weak_result_token(
+        manifest, gt.drop(columns=[f"matched_{_WEAK_ARM}"]), preds,
+        weak_arm=_WEAK_ARM, gt_arm=_GT_ARM,
+    ) is None
+    assert weak_result_token(
+        manifest, gt.drop(columns=[f"matched_{_GT_ARM}"]), preds,
+        weak_arm=_WEAK_ARM, gt_arm=_GT_ARM,
+    ) is None
+
+
+def test_weak_result_token_is_none_when_no_val_frame_shows_a_difference() -> None:
+    """Both arms detecting the same boxes is not a before/after -- and a package
+    whose val split is empty has no frame to show either."""
+    gt, preds = _result_boxes({"n1": 0, "d0": 0})
+    manifest = _result_manifest()
+
+    assert weak_result_token(
+        manifest, gt, preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) is None
+    train_pool_only = manifest.assign(split=["train_pool"] * len(manifest))
+    fixed_gt, fixed_preds = _result_boxes({"n1": 2})
+    assert weak_result_token(
+        train_pool_only, fixed_gt, fixed_preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) is None

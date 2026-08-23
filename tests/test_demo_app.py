@@ -475,6 +475,44 @@ def _stage_chat_replays(staging_dir: Path) -> None:
     (out / "chat_replay_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
+# Phase 9b (Task 8): four staged models, so `demo infer` writes twelve ordered
+# fixes_fn_vs_<a>_<b> exemplar columns rather than the two a two-model package had.
+# Generated from the frames' own matched_<model> flags (below) with infer.py's own
+# rule -- "A missed a GT box that B caught" -- so the fixture cannot drift out of
+# agreement with the gt_boxes/predictions rows it is derived from.
+_FIXTURE_MODELS = (
+    "baseline", "graph_rate_night", "weak_graph_rate_night", "weak_graph_rate_night_gt",
+)
+_V0_MATCHED = {
+    "baseline": {"a1": True, "a2": False},
+    "graph_rate_night": {"a1": True, "a2": True},
+    "weak_graph_rate_night": {"a1": True, "a2": False},
+    "weak_graph_rate_night_gt": {"a1": True, "a2": True},
+}
+
+
+def _fixes_fn_columns() -> dict[str, Any]:
+    """``fixes_fn_vs_<a>_<b>`` for every ordered model pair, over the fixture's four
+    manifest rows (v0, v1, wA, wR): computed on v0, False on v1 (no GT rows at all,
+    so there is no false negative to fix) and NA on the two train-pool frames (no
+    model ever ran on them)."""
+    return {
+        f"fixes_fn_vs_{model_a}_{model_b}": pd.array(
+            [
+                any(
+                    not _V0_MATCHED[model_a][box] and _V0_MATCHED[model_b][box]
+                    for box in ("a1", "a2")
+                ),
+                False, pd.NA, pd.NA,
+            ],
+            dtype="boolean",
+        )
+        for model_a in _FIXTURE_MODELS
+        for model_b in _FIXTURE_MODELS
+        if model_a != model_b
+    }
+
+
 @pytest.fixture()
 def built_demo_data(tmp_path: Path) -> Path:
     """A real (tiny) demo_data/ package, built through the actual exporters/build path.
@@ -723,44 +761,69 @@ def built_demo_data(tmp_path: Path) -> Path:
         "is_night": [True, False, True, False], "is_rain": [False, False, False, False],
         "n_preds_baseline": pd.array([1, 2, pd.NA, pd.NA], dtype="Int64"),
         "n_preds_graph_rate_night": pd.array([2, 2, pd.NA, pd.NA], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array(
-            [True, False, pd.NA, pd.NA], dtype="boolean"
-        ),
-        "fixes_fn_vs_graph_rate_night_baseline": pd.array(
-            [False, False, pd.NA, pd.NA], dtype="boolean"
-        ),
+        # Phase 9b (Task 8): the two weak checkpoints found 1/2 boxes on v0 and
+        # nothing on v1 -- 0 is a recorded finding, NA is "never ran" (the two
+        # train-pool frames).
+        "n_preds_weak_graph_rate_night": pd.array([1, 0, pd.NA, pd.NA], dtype="Int64"),
+        "n_preds_weak_graph_rate_night_gt": pd.array([2, 0, pd.NA, pd.NA], dtype="Int64"),
+        **_fixes_fn_columns(),
     }).to_parquet(staging / "frame_manifest.parquet")
+    # Phase 9b (Task 8): `demo infer` now runs the two weak-supervision checkpoints
+    # over the held-out val frames as well -- `weak_graph_rate_night` (trained on the
+    # VLM-verified pseudo labels) and `weak_graph_rate_night_gt` (the GT-labelled
+    # twin over the same frames). On v0 the twin catches the pedestrian a2 that the
+    # weak arm misses, which is exactly the before/after the Weak Supervision page's
+    # "One frame, three views" row 2 draws. Neither weak checkpoint claims anything
+    # on v1 -- a RECORDED finding of zero (n_preds 0 below), not "never ran".
     pd.DataFrame({
-        "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
+        "sample_data_token": ["v0"] * 6 + ["v1"] * 4,
         "model": [
             "baseline", "graph_rate_night", "graph_rate_night",
+            "weak_graph_rate_night", "weak_graph_rate_night_gt",
+            "weak_graph_rate_night_gt",
             "baseline", "baseline", "graph_rate_night", "graph_rate_night",
         ],
-        "category_group": ["car", "car", "pedestrian", "car", "car", "car", "car"],
-        "x_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
-        "y_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
-        "x_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
-        "y_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
-        "conf": [0.9, 0.9, 0.8, 0.4, 0.5, 0.4, 0.5],
+        "category_group": [
+            "car", "car", "pedestrian", "car", "car", "pedestrian",
+            "car", "car", "car", "car",
+        ],
+        "x_min": [1.0, 1.0, 10.0, 1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "y_min": [1.0, 1.0, 10.0, 1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "x_max": [2.0, 2.0, 30.0, 2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "y_max": [2.0, 2.0, 30.0, 2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "conf": [0.9, 0.9, 0.8, 0.85, 0.86, 0.77, 0.4, 0.5, 0.4, 0.5],
         # v0: baseline only ever claims a1 (misses a2); graph_rate_night claims
-        # both a1 and a2 (a genuine catch). v1 has zero GT rows, so every claim
-        # from either model is necessarily a false positive.
-        "status": ["tp", "tp", "tp", "fp", "fp", "fp", "fp"],
-        "matched_annotation_token": ["a1", "a1", "a2", None, None, None, None],
+        # both a1 and a2 (a genuine catch); the weak arm claims a1 only and its
+        # GT-labelled twin claims both. v1 has zero GT rows, so every claim
+        # from either of the first two models is necessarily a false positive.
+        "status": ["tp", "tp", "tp", "tp", "tp", "tp", "fp", "fp", "fp", "fp"],
+        "matched_annotation_token": [
+            "a1", "a1", "a2", "a1", "a1", "a2", None, None, None, None,
+        ],
     }).to_parquet(staging / "predictions.parquet")
+    # a3 (Phase 9b, Task 8): one visible PEDESTRIAN GT box on the accepted weak
+    # frame "wA" -- the Weak Supervision page's row-1 showcase frame has to carry
+    # both a pseudo box and a visible pedestrian, and wA carried no GT row at all
+    # before. Every matched_<model> is NA on it: it is a train-pool frame, so no
+    # model ever evaluated it ("not evaluated" is not "missed").
     pd.DataFrame({
-        "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
-        "category_group": ["car", "pedestrian"],
-        "x_min": [1.0, 10.0], "y_min": [1.0, 10.0],
-        "x_max": [2.0, 30.0], "y_max": [2.0, 30.0],
-        "matched_baseline": pd.array([True, False], dtype="boolean"),
-        "matched_graph_rate_night": pd.array([True, True], dtype="boolean"),
+        "annotation_token": ["a1", "a2", "a3"],
+        "sample_data_token": ["v0", "v0", "wA"],
+        "category_group": ["car", "pedestrian", "pedestrian"],
+        "x_min": [1.0, 10.0, 20.0], "y_min": [1.0, 10.0, 20.0],
+        "x_max": [2.0, 30.0, 60.0], "y_max": [2.0, 30.0, 60.0],
+        "matched_baseline": pd.array([True, False, None], dtype="boolean"),
+        "matched_graph_rate_night": pd.array([True, True, None], dtype="boolean"),
+        # The two weak checkpoints, same shape as their predictions above: the
+        # pseudo-labelled arm misses a2, its GT-labelled twin catches it.
+        "matched_weak_graph_rate_night": pd.array([True, False, None], dtype="boolean"),
+        "matched_weak_graph_rate_night_gt": pd.array([True, True, None], dtype="boolean"),
         # below_visibility_min: real gt_boxes always carries this column: the
         # Failure Explorer drops such rows everywhere (rendering + the box table),
         # so it must be present for the page to even read gt_boxes.parquet. v1 has
         # no gt_boxes rows at all (the zero-GT case both review-fix regression
         # tests below depend on).
-        "below_visibility_min": [False, False],
+        "below_visibility_min": [False, False, False],
     }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
@@ -880,6 +943,11 @@ def built_demo_data(tmp_path: Path) -> Path:
         "models": {
             "baseline": {"run": "runX", "imgsz": 640},
             "graph_rate_night": {"run": "runY", "imgsz": 640},
+            # Phase 9b (Task 8): configs/demo.yaml's two weak-supervision
+            # checkpoints -- configured models, so run_build validates that every
+            # val token has recorded coverage from all four.
+            "weak_graph_rate_night": {"run": "runW", "imgsz": 640},
+            "weak_graph_rate_night_gt": {"run": "runWG", "imgsz": 640},
         },
         "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
@@ -1048,6 +1116,35 @@ def built_demo_data_without_chat_replay(built_demo_data: Path) -> Path:
     manifest = json.loads(manifest_path.read_text())
     manifest["validation"]["chat_replay"] = "absent"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
+
+
+@pytest.fixture()
+def built_demo_data_without_weak_models(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo infer` wrote it: the three original
+    models only, with no held-out predictions from the two weak-supervision
+    checkpoints.
+
+    Same edit-the-built-package idiom as ``built_demo_data_without_explain`` -- the
+    page's absent branch keys off the ``matched_<model>`` columns being absent
+    (``filters.weak_result_token``), which is exactly what an older `demo infer`
+    leaves behind.
+    """
+    gt_path = built_demo_data / "gt_boxes.parquet"
+    gt = pd.read_parquet(gt_path)
+    gt.drop(
+        columns=[column for column in gt.columns if column.startswith("matched_weak_")]
+    ).to_parquet(gt_path, index=False)
+
+    preds_path = built_demo_data / "predictions.parquet"
+    preds = pd.read_parquet(preds_path)
+    preds.loc[~preds["model"].str.startswith("weak_")].to_parquet(preds_path, index=False)
+
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    manifest.drop(
+        columns=[column for column in manifest.columns if "weak_graph_rate_night" in column]
+    ).to_parquet(manifest_path, index=False)
     return built_demo_data
 
 
@@ -1345,10 +1442,17 @@ def test_failure_explorer_model_radio_sits_beside_the_image(
     assert [r.key for r in at.sidebar.radio] == ["failure_type_select"]
     model_radio = at.radio(key="failure_model")   # ... but the widget still exists
     # AppTest reports the option list as the widget sends it (format_func applied).
-    # filters.model_label leaves any name it has no entry for untouched, so the
-    # fixture's two models read the same either way -- this pins the raw values the
-    # page filters on, not the champion/weak_* display labels.
-    assert model_radio.options == ["baseline", "graph_rate_night"]
+    # filters.model_label leaves any name it has no entry for untouched, so the two
+    # detection models read as their raw names, while the two weak-supervision
+    # checkpoints (Phase 9b) carry the labels that keep them apart -- the arm
+    # trained on pseudo labels and its GT-labelled twin differ by a `_gt` suffix
+    # alone, which is exactly the distinction the page must not blur.
+    assert model_radio.options == [
+        "baseline",
+        "graph_rate_night",
+        "weak_graph_rate_night (pseudo labels, yolov8n)",
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+    ]
     assert model_radio.value == "baseline"
 
     # The radio really drives the detail beside it: v0's per-box table is its 2 GT
@@ -2395,7 +2499,15 @@ def test_active_learning_page_renders_story_chart_and_exemplar_table(
     # (e) exemplar controls: the selectbox over al_exemplars.json's tokens and the
     # model radio, whose options are the package's own model labels.
     assert at.selectbox(key="al_exemplar")
-    assert at.radio(key="al_model").options == ["baseline", "graph_rate_night"]
+    # The package's own model labels (filters.model_label): the two detection
+    # models by their raw names, the Phase-9b weak pair by the labels that say what
+    # each was trained on.
+    assert at.radio(key="al_model").options == [
+        "baseline",
+        "graph_rate_night",
+        "weak_graph_rate_night (pseudo labels, yolov8n)",
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+    ]
 
     # (e) the per-box table: v0's GT box a2 is caught by graph_rate_night (tp 0.8)
     # and never claimed by baseline -- exactly one upgraded row.
@@ -2604,9 +2716,12 @@ def test_active_learning_why_selected_panel_leads_with_reason_chips(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """(d) Spec sec4: the per-frame panel opens with the frame's selection facts as
-    chips, above the factor lines that spell the same facts out. "wA" has no
-    visible GT and no routed failure mass, so neither chip is written -- and no
-    chip anywhere says "rate" (there is no per-frame failure rate in the package).
+    chips, above the factor lines that spell the same facts out. "wA" carries one
+    visible pedestrian GT box and no routed failure mass, so the pedestrian chip is
+    written and the routed-failures chip is not -- and no chip anywhere says "rate"
+    (there is no per-frame failure rate in the package; the zero-pedestrian branch
+    is pinned in tests/test_demo_filters.py::test_reason_chips_count_and_pluralise_
+    visible_pedestrian_gt).
     """
     pytest.importorskip("streamlit")
     at = _active_learning_apptest(built_demo_data, monkeypatch)
@@ -2617,7 +2732,8 @@ def test_active_learning_why_selected_panel_leads_with_reason_chips(
     markdowns = [str(m.value) for m in at.markdown]
     chips = next(text for text in markdowns if ":blue-badge[night]" in text)
     assert chips == (
-        ":blue-badge[night] :blue-badge[community #0 · 10 frames] "
+        ":blue-badge[night] :blue-badge[1 pedestrian GT box] "
+        ":blue-badge[community #0 · 10 frames] "
         ":blue-badge[mass rank 1 of 2] :blue-badge[quota 1] "
         ":blue-badge[night-pass pick (floor 1)] :blue-badge[degree rank 2 of 10]"
     )
@@ -3017,6 +3133,215 @@ def test_weak_supervision_page_on_a_pre_phase_7_package(
     assert any("needs demo_data >= 0.6" in str(i.value) for i in at.info)
     # the one thing the old package does carry is still on screen
     assert any(m.label == "Verifier retention — random" for m in at.metric)
+
+
+# --- Phase 9b (Task 8): Weak Supervision's one frame, three views -------------------
+#
+# Spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec6: the page stops
+# stating the weak-supervision result only as a retention number. Row 1 shows what the
+# VLM's counts bought on ONE accepted train-pool frame (GT | pseudo labels | the
+# verdict and the count vote), row 2 what the two checkpoints trained on those frames
+# then did on a held-out val frame neither of them saw -- the weak-labelled arm beside
+# its GT-labelled twin, with the per-box difference underneath. The count-bucket chart
+# below the loss split is the same story from the verifier's side. Every pinned string
+# and key of the earlier phases survives verbatim (asserted in the tests above).
+
+# filters._FIXED_BOX_COLUMNS, copied rather than imported (this module never imports
+# the app package at collection time; the page tests reach it through AppTest only).
+_FIXED_BOX_COLUMNS = [
+    "annotation_token", "category_group", "distance_to_ego_m", "baseline_claim", "arm_claim",
+]
+_WEAK_ARM_LABEL = "weak_graph_rate_night (pseudo labels, yolov8n)"
+_GT_ARM_LABEL = "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)"
+_RESULT_ABSENT_NOTE = "held-out weak-arm predictions need demo_data >= 0.8 — rerun demo build"
+_BUCKETS_ABSENT_NOTE = "count-bucket chart needs demo_data >= 0.8 — rerun demo build"
+
+
+def _image_captions(at: Any) -> list[str]:
+    """Every caption the page attached to an ``st.image``. The six "One frame, three
+    views" images are the only captioned ones on this page (the galleries caption
+    their thumbs with a separate ``st.caption``), so this is also how the section's
+    two rows of three are counted."""
+    return [caption for image in at.image for caption in image.captions if caption]
+
+
+def _bucket_chart(at: Any) -> tuple[dict[str, Any], Any] | None:
+    """The count-bucket chart's spec and the frame Streamlit hoisted it into --
+    identified by the ``bucket`` column, the way ``_strategy_chart_frames`` finds the
+    strategy chart."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    for chart in at.get("vega_lite_chart"):
+        for dataset in chart.proto.datasets:
+            frame = convert_arrow_bytes_to_pandas_df(dataset.data.data)
+            if "bucket" in frame.columns:
+                return json.loads(chart.proto.spec), frame
+    return None
+
+
+def test_weak_supervision_one_frame_three_views(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The section's two rows: the train-pool showcase frame (wA -- accepted, one
+    pseudo box, one visible pedestrian GT box) and the held-out val frame (v0 --
+    the GT-labelled twin catches the pedestrian a2 the weak arm misses), three
+    images each, with the pair's provenance stated for what it is."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "One frame, three views" in [str(h.value) for h in at.subheader]
+    captions = _image_captions(at)
+    assert len(captions) == 6
+    # row 1: the same train-pool frame under three layers
+    assert any(caption.startswith("ground truth") for caption in captions)
+    assert any(caption.startswith("pseudo labels") for caption in captions)
+    assert any(caption.startswith("both layers") for caption in captions)
+    # row 2: the two checkpoints, each named for what it was trained on
+    assert _WEAK_ARM_LABEL in captions
+    assert _GT_ARM_LABEL in captions
+
+    page_captions = [str(c.value) for c in at.caption]
+    assert any(
+        "held-out val frame — neither detector saw it in training" in caption
+        for caption in page_captions
+    )
+    # the inference is RECORDED output of an offline run, labelled as such
+    assert any(
+        "demo infer, CPU, checkpoint of the training run" in caption
+        for caption in page_captions
+    )
+    assert any(
+        "pseudo boxes from weak_labels.parquet" in caption for caption in page_captions
+    )
+    # row 1's count vote is a static table, so the galleries' own count dataframes
+    # stay the only two of that shape on the page (pinned above).
+    vote = [t.value for t in at.table if list(getattr(t.value, "columns", [])) == [
+        "vlm_count", "gt_count"
+    ]]
+    assert len(vote) == 1
+
+
+def test_weak_supervision_result_table_follows_the_detector_radio(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The radio picks which of the two detectors the per-box table credits. It
+    opens on the GT-labelled twin -- the frame was chosen because the twin fixes
+    something -- whose one upgraded box is v0's pedestrian a2; the weak-labelled
+    arm upgrades nothing over the twin, and the page says so rather than showing an
+    empty grid."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    radio = at.radio(key="ws_result_model")
+    assert radio.options == [_WEAK_ARM_LABEL, _GT_ARM_LABEL]
+    assert radio.value == "weak_graph_rate_night_gt"
+    boxes = [
+        d.value for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == _FIXED_BOX_COLUMNS
+    ]
+    assert len(boxes) == 1
+    assert list(boxes[0]["annotation_token"]) == ["a2"]
+
+    at.radio(key="ws_result_model").set_value("weak_graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert not [
+        d for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == _FIXED_BOX_COLUMNS
+    ]
+    assert any("no such box on this frame" in str(c.value) for c in at.caption)
+
+
+def test_weak_supervision_count_bucket_chart_and_callout(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The crowding buckets, drawn from vlm_count_buckets.parquet: one bar per
+    bucket in count order, ``n`` named as frame-class PAIRS (the exporter pools the
+    ten count fields, so a bucket counts pairs, not frames), and a callout whose
+    numbers are the table's own MAEs (this fixture: 1/17 wrong on the 17 empty
+    pairs, then 1, 1 and 2).
+    """
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    found = _bucket_chart(at)
+    assert found is not None
+    spec, frame = found
+    assert list(frame["bucket"]) == ["0", "1-3", "4-9", "10+"]
+    assert spec["encoding"]["x"]["sort"] == ["0", "1-3", "4-9", "10+"]
+    assert spec["encoding"]["y"]["title"] == "count MAE"
+
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "n = frame-class pairs" in caption and "0 → 17" in caption and "10+ → 1" in caption
+        for caption in captions
+    )
+    assert any("vlm_count_buckets.parquet" in caption for caption in captions)
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Why crowded frames defeat the VLM" in text
+        and "0.06" in text and "1.00" in text and "2.00" in text
+        for text in learned
+    )
+
+
+def test_weak_supervision_without_the_count_buckets(
+    built_demo_data_without_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before 0.8 carries no bucket table: the note names the
+    version and the rebuild, and no chart or callout is drawn from nothing."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_without_buckets, monkeypatch)
+    assert not at.exception
+
+    assert any(_BUCKETS_ABSENT_NOTE in str(i.value) for i in at.info)
+    assert _bucket_chart(at) is None
+    assert not any(
+        "Why crowded frames defeat the VLM" in str(m.value) for m in at.markdown
+    )
+
+
+def test_weak_supervision_without_the_weak_arm_predictions(
+    built_demo_data_without_weak_models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the two checkpoints' held-out predictions there is no second row to
+    draw: the page says which package version carries them instead of comparing a
+    model this package never evaluated. Row 1 is unaffected -- it needs no
+    predictions at all."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_without_weak_models, monkeypatch)
+    assert not at.exception
+
+    assert any(_RESULT_ABSENT_NOTE in str(i.value) for i in at.info)
+    assert not [r for r in at.radio if r.key == "ws_result_model"]
+    assert len(_image_captions(at)) == 3
+    assert "Weak-arm detections on this frame" not in [
+        str(e.label) for e in at.get("expander")
+    ]
+
+
+def test_weak_supervision_folds_the_weak_arms_out_of_the_gallery_panel(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gallery's downstream panel keeps its arm-level lines in the open and
+    folds the weak checkpoints' own story away: the curated frames are train-pool
+    frames, so neither checkpoint has a detection on them, and saying so belongs
+    behind an expander rather than beside the result."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    at.session_state["ws_accepted_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert "Weak-arm detections on this frame" in [str(e.label) for e in at.get("expander")]
+    folded = [
+        str(m.value) for m in at.markdown
+        if "`weak_graph_rate_night`" in str(m.value) and "held-out val frames" in str(m.value)
+    ]
+    assert len(folded) == 1
 
 
 def _chat_replay_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:

@@ -29,9 +29,21 @@ Three honesty rules this page is built around:
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pandas as pd
 import streamlit as st
-from filters import crowding_long, gt_for_render, loss_long, visible_gt, weak_frame_summary
+from filters import (
+    crowding_long,
+    fixed_boxes,
+    gt_for_render,
+    loss_long,
+    model_label,
+    visible_gt,
+    weak_frame_summary,
+    weak_result_token,
+    weak_showcase_token,
+)
 from PIL import Image
 from render import (
     bar_chart,
@@ -52,6 +64,8 @@ from data import (
     load_al_results,
     load_frame_manifest,
     load_gt_boxes,
+    load_predictions,
+    load_vlm_count_buckets,
     load_vlm_counts,
     load_weak_by_class,
     load_weak_labels,
@@ -92,6 +106,49 @@ _LEGEND = (
     "emits counts, never boxes, so the number on the label is the detector's "
     "confidence. Train-pool frames carry no model predictions."
 )
+
+# The overlay legend the Active Learning page and the guided tour already show for a
+# per-model overlay, verbatim: row 2 below draws exactly that picture (GT plus one
+# model's own boxes), and a second wording for the same colours would read as a
+# second rule.
+_OVERLAY_LEGEND = (
+    "Green = ground truth, orange dashed = a GT box this model missed, white = its "
+    "true positives, yellow dotted = a claim below the confidence floor, red = a "
+    "false positive."
+)
+
+# --- Phase 9b (Task 8): one frame, three views ------------------------------------
+#
+# Spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec6. Row 1 is the
+# pipeline's INPUT side on one accepted train-pool frame (what a human labelled, what
+# the detector proposed and the VLM's counts kept, and the verdict that kept it); row
+# 2 its OUTPUT side on a val frame neither checkpoint ever trained on -- the arm
+# trained on those pseudo labels beside the twin trained on the GT for the same
+# frames. Both rows compare boxes ON THE FRAME SHOWN; what either arm is worth
+# overall is a number, and stays in the cards and the loss split.
+
+_SHOWCASE_ABSENT_NOTE = (
+    "no accepted train-pool frame in this package carries both a pseudo box and a "
+    "visible pedestrian GT box, so there is no frame to show all three layers on"
+)
+# The two held-out checkpoints are a package-0.8 group (`demo infer` over five
+# models): an older package carries no matched_/prediction rows for either of them.
+_RESULT_ABSENT_NOTE = (
+    "held-out weak-arm predictions need demo_data >= 0.8 — rerun demo build"
+)
+_NO_RESULT_FRAME_NOTE = (
+    "no held-out val frame in this package carries a GT box the GT-labelled twin "
+    "detects and the weak-labelled arm misses — the two detectors agree on every "
+    "box that was scored"
+)
+_NO_CROP_NOTE = "this frame's crop is not in the package, so its views cannot be drawn"
+_NO_UPGRADED_BOX_NOTE = "no such box on this frame"
+
+_BUCKETS_ABSENT_NOTE = "count-bucket chart needs demo_data >= 0.8 — rerun demo build"
+# eval_count_buckets' own cut points (autolabel/evaluate.py), in count order -- the x
+# axis is nominal, so the order has to be pinned or altair sorts "10+" between "0"
+# and "1-3".
+_BUCKET_ORDER = ("0", "1-3", "4-9", "10+")
 
 
 def _ordered_pairs(loss: pd.DataFrame) -> pd.DataFrame:
@@ -224,6 +281,212 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
         st.caption(_night_rank_caption(arms, pair[1]))
 
 
+def _frame_image(token: str) -> tuple[Image.Image, float] | None:
+    """One curated frame's image and the scale its boxes need, or ``None`` when the
+    package carries neither a crop nor a thumbnail for it.
+
+    Boxes are stored in native 1600x900 coordinates, so the scale belongs to the
+    image that was found: 0.6 for a crop, 0.16 for a thumb (draw_overlay's own
+    convention). Shared by the frame panel and by both rows of "One frame, three
+    views" -- three overlays of the same frame open the file once.
+    """
+    path, scale = crop_path(token), 0.6
+    if not path.is_file():
+        path, scale = thumb_path(token), 0.16
+    if not path.is_file():
+        return None
+    return Image.open(path), scale
+
+
+def _result_arms(gt: pd.DataFrame) -> tuple[str, str] | None:
+    """The (weak-labelled arm, GT-labelled twin) pair this package was evaluated
+    with, read off ``gt_boxes``' own ``matched_<model>`` columns.
+
+    `demo infer` writes one ``matched_<model>`` column per configured model, and the
+    control checkpoint's name is the arm's with a ``_gt`` suffix (configs/demo.yaml
+    `models:`) -- so the pair is DISCOVERED here rather than written into this file,
+    and a package whose infer run predates the two checkpoints simply has no pair.
+    """
+    models = {
+        column.removeprefix("matched_")
+        for column in gt.columns
+        if column.startswith("matched_")
+    }
+    pairs = sorted(
+        (twin.removesuffix("_gt"), twin)
+        for twin in models
+        if twin.endswith("_gt") and twin.removesuffix("_gt") in models
+    )
+    return pairs[0] if pairs else None
+
+
+def _render_showcase_row(
+    token: str, frames: pd.DataFrame, *, gt: pd.DataFrame, labels: pd.DataFrame,
+    counts: pd.DataFrame,
+) -> None:
+    """Row 1: one accepted train-pool frame as three layers -- the human labels, the
+    pseudo labels, and the two together with the verdict that kept the frame."""
+    row = frames.loc[frames["sample_data_token"] == token].iloc[0]
+    vlm_rows = labels.loc[labels["sample_data_token"] == token]
+    counts_rows = counts.loc[counts["sample_data_token"] == token]
+    counts_row = None if counts_rows.empty else counts_rows.iloc[0]
+    summary = weak_frame_summary(row.get("weak_verdict"), vlm_rows, counts_row)
+    gt_rows = gt_for_render(visible_gt(gt, token))
+
+    opened = _frame_image(token)
+    views: list[tuple[str, Image.Image]] = []
+    if opened is not None:
+        image, scale = opened
+        views = [
+            (
+                "ground truth — the boxes a human annotator drew on this train-pool frame",
+                draw_overlay(image, gt_rows, pd.DataFrame(), mode="gt", scale=scale),
+            ),
+            (
+                "pseudo labels — the baseline detector's proposals the VLM's counts kept",
+                draw_overlay(
+                    image, pd.DataFrame(), pd.DataFrame(), mode="gt", scale=scale,
+                    pseudo_boxes=vlm_rows,
+                ),
+            ),
+            (
+                "both layers — what the verifier's vote was about",
+                draw_overlay(
+                    image, gt_rows, pd.DataFrame(), mode="gt", scale=scale,
+                    pseudo_boxes=vlm_rows,
+                ),
+            ),
+        ]
+
+    columns = st.columns(3)
+    for column, (caption, rendered) in zip(columns, views, strict=False):
+        with column:
+            st.image(rendered, caption=caption)
+    with columns[2]:
+        st.markdown(f"**{summary['verdict_label']}**")
+        st.markdown("**The VLM's counts vs ground truth**")
+        # st.table, not st.dataframe: five rows in a third-width column read better
+        # as a static table than in a scrollable grid, and the galleries below keep
+        # their own count tables as the page's only dataframes of this shape.
+        st.table(summary["table"].set_index("class"))
+
+    if not views:
+        st.info(_NO_CROP_NOTE)
+    else:
+        st.caption(_LEGEND)
+    st.caption(
+        f"Train-pool frame `{token}` ({row.get('scene_name')}) — the verifier compared "
+        "COUNTS, never boxes: it never saw the green layer, and the blue layer is "
+        "what its vote let through."
+    )
+    provenance(
+        "recomputed", "GT from gt_boxes.parquet; pseudo boxes from weak_labels.parquet"
+    )
+
+
+def _render_result_row(
+    token: str, frames: pd.DataFrame, *, gt: pd.DataFrame, preds: pd.DataFrame,
+    weak_arm: str, gt_arm: str,
+) -> None:
+    """Row 2: a held-out val frame with the same three-panel shape -- ground truth,
+    then each checkpoint's own boxes over it -- and the per-box difference between
+    the two, on this frame only."""
+    row = frames.loc[frames["sample_data_token"] == token].iloc[0]
+    gt_token = gt.loc[gt["sample_data_token"] == token]
+    visible = visible_gt(gt, token)
+    preds_token = preds.loc[preds["sample_data_token"] == token]
+
+    opened = _frame_image(token)
+    views: list[tuple[str, Image.Image]] = []
+    if opened is not None:
+        image, scale = opened
+        views = [
+            (
+                "ground truth — every visible GT box on this held-out val frame",
+                draw_overlay(
+                    image, gt_for_render(visible), pd.DataFrame(), mode="gt", scale=scale
+                ),
+            ),
+            *(
+                (
+                    model_label(model),
+                    draw_overlay(
+                        image, gt_for_render(visible, model),
+                        preds_token.loc[preds_token["model"] == model],
+                        mode="overlay", scale=scale,
+                    ),
+                )
+                for model in (weak_arm, gt_arm)
+            ),
+        ]
+
+    if not views:
+        st.info(_NO_CROP_NOTE)
+    else:
+        for column, (caption, rendered) in zip(st.columns(3), views, strict=True):
+            with column:
+                st.image(rendered, caption=caption)
+        st.caption(_OVERLAY_LEGEND)
+    st.caption(
+        f"`{token}` ({row.get('scene_name')}) is a held-out val frame — neither "
+        "detector saw it in training."
+    )
+    provenance("recorded", "demo infer, CPU, checkpoint of the training run")
+
+    # The radio credits a detector, and the table under it lists what that detector
+    # claims and the other one does not (fixed_boxes' upgrade rule). It opens on the
+    # GT-labelled twin because that is the direction this frame was CHOSEN for
+    # (weak_result_token) -- the reverse direction is one click away and is usually
+    # empty, which is itself the finding.
+    choice = st.radio(
+        "Detector", [weak_arm, gt_arm], index=1, horizontal=True,
+        key="ws_result_model", format_func=model_label,
+    )
+    other = gt_arm if choice == weak_arm else weak_arm
+    upgraded = fixed_boxes(gt_token, preds_token, baseline=other, arm=choice)
+    st.markdown(f"**GT boxes `{choice}` detects that `{other}` does not**")
+    if upgraded.empty:
+        st.caption(_NO_UPGRADED_BOX_NOTE)
+    else:
+        st.dataframe(upgraded, hide_index=True)
+    st.caption(
+        "Counted on this frame only — what each arm was worth overall is in the "
+        "cards above and in the loss split below."
+    )
+
+
+def _render_three_views(
+    *, frames: pd.DataFrame, gt: pd.DataFrame, preds: pd.DataFrame,
+    labels: pd.DataFrame, counts: pd.DataFrame, arms: tuple[str, str] | None,
+) -> None:
+    """The section: the input row on a train-pool frame, the output row on a
+    held-out val frame. Each row degrades to its own note -- they need different
+    parts of the package, and one missing group must not take the other row down."""
+    st.subheader("One frame, three views")
+    st.caption(
+        "What the VLM's counts bought on one curated frame — and what the two "
+        "checkpoints trained on those frames then did on a frame neither of them saw."
+    )
+
+    showcase = weak_showcase_token(frames, labels, gt)
+    if showcase is None:
+        st.info(_SHOWCASE_ABSENT_NOTE)
+    else:
+        _render_showcase_row(showcase, frames, gt=gt, labels=labels, counts=counts)
+
+    if arms is None:
+        st.info(_RESULT_ABSENT_NOTE)
+        return
+    weak_arm, gt_arm = arms
+    result = weak_result_token(frames, gt, preds, weak_arm=weak_arm, gt_arm=gt_arm)
+    if result is None:
+        st.info(_NO_RESULT_FRAME_NOTE)
+        return
+    _render_result_row(
+        result, frames, gt=gt, preds=preds, weak_arm=weak_arm, gt_arm=gt_arm
+    )
+
+
 def _render_loss_learned_callout(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
     """Phase 9a (Task 6): the loss-split "what we learned" sentence, from the
     documented headline pair (``headline == True``) -- skipped when this package
@@ -299,6 +562,80 @@ def _render_decomposition(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
     _render_loss_learned_callout(loss, arms)
 
 
+def _bucket_phrase(bucket: str, mae: float) -> str:
+    """One bucket's MAE as prose. The "0" bucket is not "zero objects" in the
+    ordinary sense: it is a frame-class pair the frame holds none of, which is
+    exactly the pair the VLM finds easiest."""
+    if bucket == "0":
+        return f"{mae:.2f} on empty frame-class pairs"
+    return f"{mae:.2f} at {bucket} objects"
+
+
+def _render_count_buckets(buckets: pd.DataFrame) -> None:
+    """The VLM's count error against how crowded the frame actually is -- the
+    verifier's sparse-frame bias (the panel below) seen from the other side.
+
+    ``n`` counts frame-class PAIRS: the builder pools the ten count fields into one
+    bucket table, so a bucket holds one entry per (frame, class), not per frame, and
+    the caption says so.
+    """
+    st.subheader("Where the VLM's counting breaks down")
+    if buckets.empty:
+        st.info(_BUCKETS_ABSENT_NOTE)
+        return
+
+    # One model per package today (the Phase-6b labelling run); the table carries
+    # the name, so the caption states which VLM these errors belong to rather than
+    # leaving the reader to assume.
+    model = str(buckets["model"].iloc[0])
+    rows = buckets.loc[buckets["model"] == model].assign(
+        bucket=buckets.loc[buckets["model"] == model, "bucket"].astype(str)
+    )
+    order = [bucket for bucket in _BUCKET_ORDER if bucket in set(rows["bucket"])]
+    ordered = rows.set_index("bucket").loc[order].reset_index()
+
+    st.altair_chart(
+        bar_chart(
+            ordered, x="bucket", y="mae", sort=order, zero_line=False,
+            y_title="count MAE",
+            title="The VLM's mean count error by how many objects the frame actually holds",
+        ),
+        width="stretch",
+    )
+    pairs = ", ".join(
+        f"{bucket} → {int(n):,}"
+        for bucket, n in zip(ordered["bucket"], ordered["n"], strict=True)
+    )
+    st.caption(
+        f"n = frame-class pairs: {pairs}. The five classes are pooled, so a bucket "
+        f"counts (frame, class) entries rather than frames. VLM: {model}."
+    )
+    provenance(
+        "recorded",
+        "vlm_count_buckets.parquet — recomputed at build from the VLM's label table "
+        "and the GT annotations",
+    )
+
+    maes = [float(value) for value in ordered["mae"]]
+    # Computed, never asserted (the 9a rule): "rises" is a claim about THIS table,
+    # so it is only written when the table's own MAEs never fall.
+    trend = (
+        "rises with the crowd"
+        if all(later >= earlier for earlier, later in pairwise(maes))
+        else "moves with the crowd"
+    )
+    phrases = ", ".join(
+        _bucket_phrase(str(bucket), mae)
+        for bucket, mae in zip(ordered["bucket"], maes, strict=True)
+    )
+    learned(
+        f"Why crowded frames defeat the VLM — its mean count error {trend}: "
+        f"{phrases}. The verifier's bias toward sparse frames, in the panel below, "
+        "is this curve seen from the other side: the frames the VLM can count are "
+        "the frames the rule keeps."
+    )
+
+
 def _render_crowding(weaksup: pd.DataFrame, by_class: pd.DataFrame) -> None:
     """(c) The bias the verifier's agreement rule introduces, per arm and per class."""
     st.subheader("What the verifier's rule selects for")
@@ -365,13 +702,12 @@ def _render_frame(
     counts_row = None if counts_rows.empty else counts_rows.iloc[0]
     summary = weak_frame_summary(row.get("weak_verdict"), vlm_rows, counts_row)
 
-    image_path, scale = crop_path(token), 0.6
-    if not image_path.is_file():
-        image_path, scale = thumb_path(token), 0.16
-    if image_path.is_file():
+    opened = _frame_image(token)
+    if opened is not None:
+        image, scale = opened
         st.image(
             draw_overlay(
-                Image.open(image_path), gt_for_render(visible_gt(gt, token)), pd.DataFrame(),
+                image, gt_for_render(visible_gt(gt, token)), pd.DataFrame(),
                 mode="gt", scale=scale, pseudo_boxes=vlm_rows,
             )
         )
@@ -457,7 +793,9 @@ def _render_gallery(
     _render_frame(str(chosen), frames, gt=gt, labels=labels, counts=counts)
 
 
-def _render_downstream(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
+def _render_downstream(
+    loss: pd.DataFrame, arms: pd.DataFrame, *, weak_pair: tuple[str, str] | None
+) -> None:
     """(d) The result, stated where it actually exists: at arm level."""
     st.markdown("**What training on those frames did**")
     for row in _ordered_pairs(loss).itertuples(index=False):
@@ -474,6 +812,22 @@ def _render_downstream(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
             f"trained arm `{weak_arm}`: Δnight {float(arm_row['delta_night']):+.4f}, "
             f"Δoverall {float(arm_row['delta_overall']):+.4f} (train-pool frames carry "
             "no predictions — the result is arm-level)"
+        )
+
+    # Folded (Phase 9b, spec §6): the two checkpoints DID run per frame, just not on
+    # these frames, and a viewer looking at a gallery frame reasonably wonders where
+    # their boxes are. The answer is a null result, so it belongs behind a fold
+    # rather than beside the arm-level one.
+    if weak_pair is None:
+        return
+    weak_arm, gt_arm = weak_pair
+    with st.expander("Weak-arm detections on this frame"):
+        st.markdown(
+            f"`{weak_arm}` and `{gt_arm}` ran over the held-out val frames only "
+            "(`demo infer`, on CPU, from the training runs' own checkpoints). Every "
+            "frame in these galleries is a TRAIN-POOL frame, so neither checkpoint "
+            "has a detection on any of them — their frame-by-frame comparison is in "
+            "*One frame, three views*, at the top of this page."
         )
 
 
@@ -566,18 +920,31 @@ def render() -> None:
 
     _render_cards(loss, weaksup, arms)
 
+    # Loaded once, here: the three-views section and the galleries below read the
+    # same four tables, and every loader is @st.cache_data anyway.
+    manifest = load_frame_manifest()
+    gt = load_gt_boxes()
+    labels = load_weak_labels()
+    counts = load_vlm_counts()
+    preds = load_predictions()
+    weak_pair = _result_arms(gt)
+
+    st.divider()
+    _render_three_views(
+        frames=manifest, gt=gt, preds=preds, labels=labels, counts=counts, arms=weak_pair
+    )
+
     st.divider()
     _render_decomposition(loss, arms)
+
+    st.divider()
+    _render_count_buckets(load_vlm_count_buckets())
 
     st.divider()
     _render_crowding(weaksup, load_weak_by_class())
 
     st.divider()
     st.subheader("What the VLM saw")
-    manifest = load_frame_manifest()
-    gt = load_gt_boxes()
-    labels = load_weak_labels()
-    counts = load_vlm_counts()
     if "weak_verdict" not in manifest.columns:
         st.info(_STALE_PACKAGE_NOTE)
     else:
@@ -588,7 +955,7 @@ def render() -> None:
                     manifest.loc[manifest["weak_verdict"] == verdict].reset_index(drop=True),
                     verdict=verdict, gt=gt, labels=labels, counts=counts,
                 )
-        _render_downstream(loss, arms)
+        _render_downstream(loss, arms, weak_pair=weak_pair)
 
     st.divider()
     _render_story(loss, weaksup, arms)

@@ -1295,6 +1295,99 @@ def crowding_long(results: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame.from_records(records, columns=_CROWDING_COLUMNS)
 
 
+# --- Phase 9b (Task 8): the Weak Supervision page's two frame choices --------------
+#
+# "One frame, three views" (spec docs/superpowers/specs/2026-08-22-demo-phase9b-
+# design.md sec6) draws two frames out of the package, and each has to be picked for
+# what it can actually SHOW -- a frame missing any one of its layers turns a row into
+# an absent note. Both picks are total orders over the package's own tables, so the
+# page renders the same frame on every rerun, and both return None (never a guess) on
+# a package that carries no such frame.
+
+
+def weak_showcase_token(
+    manifest: pd.DataFrame, weak_labels: pd.DataFrame, gt: pd.DataFrame
+) -> str | None:
+    """The train-pool frame row 1 draws: a candidate the verifier ACCEPTED that
+    carries at least one pseudo box and at least one VISIBLE pedestrian GT box.
+
+    All three conditions are what the row shows: the verdict badge, the blue pseudo
+    layer, and a pedestrian to compare the two layers on (the class this whole arm
+    was mined for, and the one the VLM miscounts most). Most pseudo boxes first --
+    a one-box frame makes a thin picture -- then the token, so the choice is stable.
+
+    ``None`` when nothing qualifies, including on a package whose manifest predates
+    ``weak_verdict`` (Phase 7): the page then says what is missing rather than
+    drawing a frame that cannot carry the row.
+    """
+    if manifest.empty or not {"split", "weak_verdict"} <= set(manifest.columns):
+        return None
+    accepted = manifest.loc[
+        (manifest["split"] == "train_pool") & (manifest["weak_verdict"] == "accepted")
+    ]
+    if accepted.empty or weak_labels.empty or "category_group" not in gt.columns:
+        return None
+    pseudo_counts = weak_labels.groupby("sample_data_token").size()
+
+    ranked = []
+    for token in accepted["sample_data_token"].astype(str):
+        n_pseudo = int(pseudo_counts.get(token, 0))
+        if n_pseudo == 0:
+            continue
+        visible = visible_gt(gt, token)
+        if not bool((visible["category_group"] == "pedestrian").any()):
+            continue
+        ranked.append((-n_pseudo, token))
+    return min(ranked)[1] if ranked else None
+
+
+def weak_result_token(
+    manifest: pd.DataFrame, gt: pd.DataFrame, preds: pd.DataFrame, *,
+    weak_arm: str, gt_arm: str,
+) -> str | None:
+    """The held-out val frame row 2 draws: one where the GT-labelled twin detects a
+    GT box the weak-labelled arm misses (``fixed_boxes``' own upgrade rule, the same
+    one `demo build` validates the hand-approved exemplars with).
+
+    Night frames first -- these two checkpoints were trained on a night-targeted
+    arm's frames, so the frame that shows what pseudo labels cost should be one of
+    the frames the arm was built for -- then the most upgraded boxes, then the token.
+
+    ``None`` on a package whose ``gt_boxes`` carries no ``matched_`` column for one
+    of the two arms (i.e. one of them never ran: `demo infer` predates them), and
+    ``None`` when no val frame shows a difference at all -- two detectors that agree
+    on every box are not a before/after, and the page says so instead.
+    """
+    if manifest.empty or "split" not in manifest.columns:
+        return None
+    if not {f"matched_{weak_arm}", f"matched_{gt_arm}"} <= set(gt.columns):
+        return None
+    val = manifest.loc[manifest["split"] == "val"]
+    if val.empty:
+        return None
+
+    # NA-safe, like tour_frame_candidates: an unenriched frame's is_night can be
+    # pd.NA, and bool(pd.NA) raises rather than sorting -- it goes with the day
+    # frames rather than taking the page down.
+    night = (
+        val["is_night"].fillna(False).astype(bool)
+        if "is_night" in val.columns
+        else pd.Series(False, index=val.index)
+    )
+    ranked = []
+    for is_night, row in zip(night, val.itertuples(index=False), strict=True):
+        token = str(row.sample_data_token)
+        upgraded = fixed_boxes(
+            gt.loc[gt["sample_data_token"] == token],
+            preds.loc[preds["sample_data_token"] == token],
+            baseline=weak_arm, arm=gt_arm,
+        )
+        if upgraded.empty:
+            continue
+        ranked.append((not is_night, -len(upgraded), token))
+    return min(ranked)[2] if ranked else None
+
+
 # --- the recorded chat replays ----------------------------------------------------
 #
 # The page reads `demo chat-record`'s own records (chat_record.RECORD_KEYS /
