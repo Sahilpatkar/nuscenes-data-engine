@@ -1,6 +1,6 @@
 {
-  "built_at": "2026-08-21T19:30:00-0700",
-  "git_sha": "6f871b413ebc2e221dccf652671a81b595915266",
+  "built_at": "2026-08-23T13:30:16-0700",
+  "git_sha": "97a793c8ddd90a885d468475b9e8d33a2b96466f",
   "inputs": {
     "configs/active_learning.yaml": "4a0a3f2a3ae7aa54e2104aa6ab0a2878904ef90c09f7a054488f65345c172712",
     "data/active_learning/autolabel_weak/labels.parquet": "b48d3f46abce1b4fd9409caff3da952415097331a29d24a0987be043752246b7",
@@ -19,15 +19,15 @@
     "data/demo_curation/al_explain/al_selection_explain.parquet": "917cb396bea3eb1993a47b36b985b1e83d5bc357c00567d7d4212b5f9dae8031",
     "data/demo_curation/chat_replays/chat_replay_summary.json": "7b6c9f77126d478635874b37c94fa0361a7ae89e7be7cd0a0e669e65817820f9",
     "data/demo_curation/chat_replays/chat_replays.json": "c3b1d3d26321fae9ae28e4e6238bb9c7e65d3622f97403838e06c535cda789ee",
-    "data/demo_curation/frame_manifest.parquet": "ef728efbf6490c91a94d6882f6a6192285a0cc0d365de95006c3e35e86575f7d",
+    "data/demo_curation/frame_manifest.parquet": "b8fa83208ab148604b8af2e2caad675520b427ae553c3177aef9f837d009255a",
     "data/demo_curation/graph_subgraphs/fast_cyclists.json": "62a9b8c33799f4e8c685111a44cb306dca226e9780fc75ed4893bbffc960c578",
     "data/demo_curation/graph_subgraphs/fn_pedestrians_night.json": "adfcc296fb2be9a617c67c927e3ddfc5d8e24b8a10e76a1f350c6b3834f6558a",
     "data/demo_curation/graph_subgraphs/hard_braking_near_pedestrians.json": "6a566321108a30ddc366c7bf81b8ef945c8d2858428c14c991feb6740f4332de",
     "data/demo_curation/graph_subgraphs/low_conf_braking.json": "41f94d2e793dd57a9d99354d05acb53d1e133a2405269c32d029ecbd23cb2d57",
     "data/demo_curation/graph_subgraphs/night_pedestrians.json": "a80cb7235ce0299b3a08e4bd33b885f467f800a3dc7ffd5e2eb1ece8ff6e6ff6",
     "data/demo_curation/graph_subgraphs/rain_vru.json": "d119a49d497ba6b3787de308975b2b733f8ff720a4304d5100ae4057f3ef348d",
-    "data/demo_curation/gt_boxes.parquet": "acbab40a6b37e51ad5f46186f75a26ad40394a93daf020f3cf5a4b9798c7989d",
-    "data/demo_curation/predictions.parquet": "ea191598c0c3b0465b11c075302e62fe06704bdc949a1401e92d40107da7cd4b",
+    "data/demo_curation/gt_boxes.parquet": "ad2cec2f4333194fb23fdccd8c98817011146457a794cdaeb282c1df66cc205d",
+    "data/demo_curation/predictions.parquet": "781e84f92cf591c68777864ec9c938e8b13df27fef228c6cf28e64e1a840f5cb",
     "data/demo_curation/semantic_search_results.parquet": "1c7a76d96f29f1af27998f2781f1932728df5afc6de45bc30668712c6fff1f50",
     "data/processed/annotations.parquet": "96889b4976b7520cb267e790254a4e43cce4f643a1f839f6a46dc938c6e92646",
     "data/processed/annotations_3d.parquet": "2c4c470b1ff8316f2bcd85c7d52ccb451da8de450e569728127061f46652e93e",
@@ -68,9 +68,9 @@
       "sha256": "c3b1d3d26321fae9ae28e4e6238bb9c7e65d3622f97403838e06c535cda789ee"
     },
     "frame_manifest.parquet": {
-      "bytes": 30325,
+      "bytes": 43943,
       "rows": 250,
-      "sha256": "2391d72ea92587187bbd6def4348b7dbbff33931ca9a2e9089f93d46f446a6ee"
+      "sha256": "295bcfc1987bd593a7ccb9f1a4c94affa8cf62e5f876246d712e24a3e691c6a3"
     },
     "graph_subgraphs/fast_cyclists.json": {
       "bytes": 425906,
@@ -97,18 +97,18 @@
       "sha256": "d119a49d497ba6b3787de308975b2b733f8ff720a4304d5100ae4057f3ef348d"
     },
     "gt_boxes.parquet": {
-      "bytes": 144956,
+      "bytes": 146631,
       "rows": 1595,
-      "sha256": "64852acb0ab5d87f89c4b5d9491a3d957e666c3039d5caa41943ef5058570a08"
+      "sha256": "0090015b4b8552ec05353f6b32f29a6364cce7bcda35f435ec4c84c0fcac07db"
     },
     "overview_metrics.json": {
       "bytes": 580,
       "sha256": "561e3619a054a42d0c5c5b0e2824d993cf9303a4920767e0fd000d754dd0df47"
     },
     "predictions.parquet": {
-      "bytes": 180062,
-      "rows": 3758,
-      "sha256": "ea191598c0c3b0465b11c075302e62fe06704bdc949a1401e92d40107da7cd4b"
+      "bytes": 276739,
+      "rows": 6206,
+      "sha256": "781e84f92cf591c68777864ec9c938e8b13df27fef228c6cf28e64e1a840f5cb"
     },
     "sample_frames/crops/000079cbe0f24e5b93d9eebddb047b0a.jpg": {
       "bytes": 54044,
@@ -3751,14 +3751,19 @@
       "sha256": "107283db4e475179222e642823782ba710fbb14b8b2195ac4ce16979539f5a18"
     },
     "scenario_events.parquet": {
-      "bytes": 64339,
+      "bytes": 71294,
       "rows": 126,
-      "sha256": "954e168c92f39553765bdfac501935046b672eb09f19751180f3f22f1808b37b"
+      "sha256": "622ae117662c843eaedbcf6c5e4bb2dc91771b4429b0bda8c5dc90ea94caadae"
     },
     "semantic_search_results.parquet": {
       "bytes": 5018,
       "rows": 30,
       "sha256": "1c7a76d96f29f1af27998f2781f1932728df5afc6de45bc30668712c6fff1f50"
+    },
+    "vlm_count_buckets.parquet": {
+      "bytes": 2856,
+      "rows": 4,
+      "sha256": "c670bfec4518dc19501a65f4d55d37c4a10de29016447c1a862fd71ba98ea93c"
     },
     "vlm_counts.parquet": {
       "bytes": 12437,
@@ -3786,7 +3791,7 @@
       "sha256": "74c3f31e65dd25992320f25c7d54d034e2ae5466b5be7cee2718aba1e804f97c"
     }
   },
-  "package_version": "0.7",
+  "package_version": "0.8",
   "validation": {
     "al_explain": "included",
     "chat_replay": "included",
@@ -3805,8 +3810,9 @@
     "n_vlm_counts": 78,
     "n_weak_arms": 2,
     "n_weak_labels": 91,
-    "package_mb": 25.43,
+    "package_mb": 25.55,
     "semsearch": "included",
-    "subgraphs": "included"
+    "subgraphs": "included",
+    "vlm_count_buckets": "included"
   }
 }
