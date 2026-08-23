@@ -1,7 +1,9 @@
 """Scenario Search — preset driving-scenario queries over ``scenario_events.parquet``,
-a synchronized event viewer (camera + ego dynamics + scene context + model context)
-with a t-2..t+2 filmstrip, and the recorded semantic gallery (design:
-docs/superpowers/specs/2026-08-20-demo-phase5-design.md).
+a one-screen event viewer (the frame beside its CAN speed/acceleration curves, one
+row of dynamics/context/model cards, a t-2..t+2 filmstrip whose step slider is the
+curves' cursor), and the recorded semantic gallery (designs:
+docs/superpowers/specs/2026-08-20-demo-phase5-design.md, and 2026-08-22-demo-phase9b-
+design.md §2 for the one-screen relayout).
 
 Two preset families, honestly separated — mirrors ``demo/events.py``'s own split:
 *dynamics* presets are dataset-wide, GT-only queries over every CAM_FRONT keyframe;
@@ -19,6 +21,9 @@ import pandas as pd
 import streamlit as st
 from filters import (
     FILMSTRIP_STEPS,
+    FilmstripCurve,
+    FilmstripStep,
+    filmstrip_steps,
     graph_node_label,
     parity_caption,
     parity_short,
@@ -28,7 +33,15 @@ from filters import (
     subgraph_narrative,
 )
 from PIL import Image
-from render import draw_overlay, loop_breadcrumb, provenance, recorded_banner
+from render import (
+    curve_caption,
+    curve_charts,
+    draw_overlay,
+    loop_breadcrumb,
+    metric_cards,
+    provenance,
+    recorded_banner,
+)
 
 from data import (
     crop_path,
@@ -171,6 +184,23 @@ _AFTER_STEPS: tuple[tuple[str, str], ...] = tuple(
     (column, label) for column, label in FILMSTRIP_STEPS[3:] if column is not None
 )
 _CURRENT_STEP = FILMSTRIP_STEPS[2][1]
+
+# label -> the neighbour's own column prefix, for the readings the filmstrip readout
+# still shows in the EVENT TABLE's units (m/s, from ego_pose) rather than the
+# curve's km/h -- filters.FilmstripStep carries the km/h reading and the token, not
+# which column the step came from.
+_STEP_COLUMNS: dict[str, str] = {
+    label: column for column, label in (*_BEFORE_STEPS, *_AFTER_STEPS)
+}
+
+# The filmstrip slider's key: read (never written) before the widget exists, so the
+# curves' rule follows the step the viewer last picked -- see _selected_step.
+_FILMSTRIP_KEY = "scenario_filmstrip"
+
+# Phase 9b (Task 4): the event header's provenance -- the dynamics figures on this
+# screen (the metric row, both curves, the filmstrip readout) all come from the one
+# table `demo build` computed from the CAN bus and the GT annotations.
+_EVENT_PROVENANCE_DETAIL = "CAN-bus and GT dynamics computed at build (scenario_events.parquet)"
 
 
 def _card_image_path(token: str) -> Path | None:
@@ -448,106 +478,175 @@ def _render_viewer(row: pd.Series) -> None:
     st.caption(_NOT_CURATED_CAPTION)
 
 
-def _render_ego_panel(row: pd.Series) -> None:
-    st.markdown("**Ego dynamics**")
-    columns = st.columns(3)
-    columns[0].metric("Speed", speed_caption(row.speed_mps))
-    accel = row.accel_long_min_mps2
-    # "Peak decel" only makes sense for a NEGATIVE (decelerating) reading -- 27/126
-    # real flagship-adjacent events have a positive accel_long_min_mps2 (the frame
-    # was accelerating, not braking, at its most extreme longitudinal sample), and
-    # labeling that a "decel" figure misrepresents the frame (item 1, consolidated
-    # review).
-    decel_label = "Peak decel" if pd.notna(accel) and accel < 0 else "Peak long. accel"
-    columns[1].metric(decel_label, f"{accel:.2f} m/s²" if pd.notna(accel) else "n/a")
-    columns[2].metric("Hard braking", "Yes" if row.is_hard_braking else "No")
+def _render_event_header(row: pd.Series, preset: _Preset, preset_name: str) -> None:
+    """The one-line answer to "what am I looking at": the scene, this preset's own
+    severity figure, the compact SQL<->Graph parity line, and where the numbers on
+    this screen came from.
+
+    The parity line (Phase 9a) is a dynamics preset's own trust indicator, distinct
+    from (and additional to) the preset header's pinned ``parity_caption`` line
+    higher up the page; model presets get nothing here, their GT-only note already
+    covers it. A package with no subgraphs staged simply omits the line rather than
+    making a stale claim.
+    """
+    st.markdown(f"**{row.scene_name}** · {severity_caption(preset_name, row.to_dict())}")
+    if preset["family"] == "dynamics":
+        subgraph_payload = load_subgraphs(preset_name) if subgraphs_available() else None
+        if subgraph_payload is not None:
+            st.caption(
+                parity_short(
+                    int(subgraph_payload["sql_count"]),
+                    subgraph_payload["cypher_count"],
+                    subgraph_payload["parity"],
+                )
+            )
+    provenance("recorded", _EVENT_PROVENANCE_DETAIL)
 
 
-def _render_context_panel(row: pd.Series) -> None:
-    st.markdown("**Scene context**")
-    dist_cols = st.columns(3)
-    dist_cols[0].metric(
-        "Min ped dist",
-        f"{row.min_dist_pedestrian_m:.1f} m" if pd.notna(row.min_dist_pedestrian_m) else "n/a",
-    )
-    dist_cols[1].metric(
-        "Min vehicle dist",
-        f"{row.min_dist_vehicle_m:.1f} m" if pd.notna(row.min_dist_vehicle_m) else "n/a",
-    )
-    dist_cols[2].metric(
-        "Min cyclist dist",
-        f"{row.min_dist_cyclist_m:.1f} m" if pd.notna(row.min_dist_cyclist_m) else "n/a",
-    )
+def _selected_step(curve: FilmstripCurve) -> str | None:
+    """Which step the curves' rule sits on, read BEFORE the filmstrip slider is
+    instantiated (so this run's charts follow the step the viewer just picked, not
+    the previous one) and never written back -- the widget owns its own key.
 
-    other_cols = st.columns(3)
-    other_cols[0].metric(
-        "Peds within 10m",
-        str(int(row.n_peds_within_10m)) if pd.notna(row.n_peds_within_10m) else "0",
-    )
-    other_cols[1].metric("Night", "Yes" if row.is_night else "No")
-    other_cols[2].metric("Rain", "Yes" if row.is_rain else "No")
+    A stored label the CURRENT event has no step for (the viewer moved the slider,
+    then opened an event whose scene edge drops that neighbour) falls back to the
+    event's own frame: ``render.line_chart`` refuses to draw a rule at a step that
+    is not on the axis, and silently pointing at nothing would be worse.
+    """
+    labels = [step.label for step in curve.steps]
+    if not labels:
+        return None
+    current = next((step.label for step in curve.steps if step.is_current), labels[0])
+    stored = str(st.session_state.get(_FILMSTRIP_KEY, current))
+    return stored if stored in labels else current
 
 
-def _render_model_panel(row: pd.Series, preset: _Preset) -> None:
-    st.markdown("**Model context**")
+def _render_curves(curve: FilmstripCurve, selected: str | None) -> None:
+    """The two step curves (CAN speed, CAN longitudinal acceleration) beside the
+    frame -- the motion cue a single still frame cannot give. Both are built by
+    ``render.curve_charts`` so tour step 2 draws the identical pair."""
+    if not curve.steps:
+        return
+    speed, accel = curve_charts(curve, selected=selected)
+    st.altair_chart(speed, width="stretch")
+    st.altair_chart(accel, width="stretch")
+    st.caption(curve_caption(curve))
+
+
+def _model_result(row: pd.Series) -> str:
+    """The model figure for the event frame: how many boxes ``_MODEL_FOR_RESULTS``
+    (the model whose predictions the overlay beside it draws) claimed on it.
+
+    Every other case is the page's own pinned "not in the curated prediction set"
+    wording -- the event outside the curated val split, and the curated event whose
+    ``frame_manifest`` row or per-model column the package doesn't carry, which is
+    exactly what the Phase-5 model panel said for those two cases before this row
+    merged them into one card.
+    """
     if not row.in_curated_set:
-        st.caption(_NOT_CURATED_CAPTION)
-        return
-
+        return _NOT_CURATED_CAPTION
     manifest = load_frame_manifest()
+    column = f"n_preds_{_MODEL_FOR_RESULTS}"
+    if column not in manifest.columns:
+        return _NOT_CURATED_CAPTION
     frame_rows = manifest.loc[manifest["sample_data_token"] == row.sample_data_token]
-    model_cols = [c for c in manifest.columns if c.startswith("n_preds_")]
-    if frame_rows.empty or not model_cols:
-        st.caption(_NOT_CURATED_CAPTION)
-        return
+    if frame_rows.empty or pd.isna(frame_rows.iloc[0][column]):
+        return _NOT_CURATED_CAPTION
+    count = int(frame_rows.iloc[0][column])
+    return f"{count} pred{'' if count == 1 else 's'} ({_MODEL_FOR_RESULTS})"
 
-    frame_row = frame_rows.iloc[0]
-    columns = st.columns(len(model_cols))
-    for column, model_col in zip(columns, model_cols, strict=True):
-        model_name = model_col.removeprefix("n_preds_")
-        column.metric(f"n_preds ({model_name})", str(frame_row.get(model_col)))
 
+def _render_metric_row(row: pd.Series, preset: _Preset, curve: FilmstripCurve) -> None:
+    """One row of six cards -- the ego-dynamics, scene-context and model panels'
+    figures merged so the viewer fits on one screen (spec sec2).
+
+    The speed card is the EVENT FRAME's own step of the curve above it, so the two
+    always agree (and it says "Ego speed" on a pre-0.8 package, where that reading
+    is the GT ego pose rather than the CAN bus). "Min long. accel" names the column
+    it shows (``accel_long_min_mps2``, the frame's most extreme longitudinal
+    sample) rather than the old panel's "Peak decel", which only made sense for a
+    negative reading -- 27 of the 126 shipped events are accelerating at that
+    sample, and calling that a deceleration figure misread the frame (item 1,
+    Phase-5 consolidated review; the sign-neutral name now covers both).
+    """
+    current = next((step for step in curve.steps if step.is_current), None)
+    speed = current.can_speed_kmh if current is not None else None
+    accel = row.accel_long_min_mps2
+    lighting = " · ".join([
+        "night" if row.is_night else "day", *(["rain"] if row.is_rain else [])
+    ])
+    metric_cards(
+        [
+            (
+                "CAN speed" if curve.speed_is_can else "Ego speed",
+                f"{speed:.1f} km/h" if speed is not None else "n/a",
+            ),
+            ("Min long. accel", f"{accel:.2f} m/s²" if pd.notna(accel) else "n/a"),
+            (
+                "Min ped dist",
+                f"{row.min_dist_pedestrian_m:.1f} m"
+                if pd.notna(row.min_dist_pedestrian_m)
+                else "n/a",
+            ),
+            (
+                "Peds within 10m",
+                str(int(row.n_peds_within_10m)) if pd.notna(row.n_peds_within_10m) else "0",
+            ),
+            ("Lighting / rain", lighting),
+            ("Model result", _model_result(row)),
+        ],
+        per_row=6,
+    )
     if preset["family"] == "model" and preset["verdict"]:
         st.caption(preset["verdict"])
 
 
-def _render_filmstrip(row: pd.Series) -> None:
+def _step_speed_mps(row: pd.Series, step: FilmstripStep) -> float:
+    """One step's GT ego-pose speed in m/s -- the filmstrip READOUT's own unit
+    since Phase 5, deliberately left as it is while the curve above plots CAN speed
+    in km/h: the readout answers "how fast at this step" in the unit the rest of
+    the page's speed captions use (``filters.speed_caption``)."""
+    column = _STEP_COLUMNS.get(step.label)
+    value = row.speed_mps if column is None else getattr(row, f"speed_{column}")
+    return float(value) if pd.notna(value) else float("nan")
+
+
+def _render_filmstrip(row: pd.Series, curve: FilmstripCurve) -> None:
+    """The t-2..t+2 strip, its step slider and the selected step's readout.
+
+    The steps come from ``filters.filmstrip_steps`` (which drops an NA neighbour at
+    a scene edge, as this strip always has) so the slider, the thumbnails and the
+    curves above are driven by ONE list -- a step the strip offered but the curve
+    did not draw would put the rule somewhere the viewer never selected.
+    """
     st.markdown("**Filmstrip**")
-
-    # (label, token, speed, accel) for every non-NA t-2..t+2 neighbor, plus the
-    # current frame in the middle -- NA neighbors (scene edges) are omitted from
-    # the strip entirely, per the design doc.
-    steps: list[tuple[str, str, float, float]] = []
-    for column, label in _BEFORE_STEPS:
-        token = getattr(row, column)
-        if pd.notna(token):
-            steps.append((label, token, getattr(row, f"speed_{column}"), getattr(row, f"accel_{column}")))
-    steps.append((_CURRENT_STEP, row.sample_data_token, row.speed_mps, row.accel_long_min_mps2))
-    for column, label in _AFTER_STEPS:
-        token = getattr(row, column)
-        if pd.notna(token):
-            steps.append((label, token, getattr(row, f"speed_{column}"), getattr(row, f"accel_{column}")))
-
-    by_label = {label: (token, speed, accel) for label, token, speed, accel in steps}
+    steps = curve.steps
+    if not steps:
+        return
+    labels = [step.label for step in steps]
     selected_label = st.select_slider(
-        "Step", options=[label for label, *_ in steps], value=_CURRENT_STEP, key="scenario_filmstrip"
+        "Step",
+        options=labels,
+        value=_CURRENT_STEP if _CURRENT_STEP in labels else labels[0],
+        key=_FILMSTRIP_KEY,
     )
 
     # All five ship already (item 12, consolidated review): a strip of every
     # available step's thumbnail, the selected one marked via its own caption --
     # not just the single selected image the slider alone would show.
     strip_columns = st.columns(len(steps))
-    for strip_col, (label, step_tok, _speed, _accel) in zip(strip_columns, steps, strict=True):
+    for strip_col, step in zip(strip_columns, steps, strict=True):
         with strip_col:
-            step_thumb = thumb_path(step_tok)
+            step_thumb = thumb_path(step.token)
             if step_thumb.is_file():
                 st.image(str(step_thumb))
-            marker = " (selected)" if label == selected_label else ""
-            st.caption(f"{label}{marker}")
+            marker = " (selected)" if step.label == selected_label else ""
+            st.caption(f"{step.label}{marker}")
 
-    _step_token, step_speed, step_accel = by_label[selected_label]
-    speed_text = speed_caption(step_speed)
-    accel_text = f"{step_accel:.2f} m/s²" if pd.notna(step_accel) else "n/a"
+    selected_step = next(step for step in steps if step.label == selected_label)
+    speed_text = speed_caption(_step_speed_mps(row, selected_step))
+    accel = selected_step.accel_mps2
+    accel_text = f"{accel:.2f} m/s²" if accel is not None else "n/a"
     st.caption(f"{selected_label}: {speed_text}, accel {accel_text}")
 
 
@@ -620,25 +719,25 @@ def render() -> None:
         row = ranked.loc[ranked["sample_data_token"] == selected_token].iloc[0]
         st.divider()
         st.subheader("Event viewer")
-        # Phase 9a (Task 6): the compact SQL<->Graph parity line -- a dynamics
-        # preset's own trust indicator, distinct from (and additional to) the
-        # preset header's pinned parity_caption line above. Model presets get
-        # nothing here (their GT-only note already covers it).
-        if preset["family"] == "dynamics":
-            subgraph_payload = load_subgraphs(preset_name) if subgraphs_available() else None
-            if subgraph_payload is not None:
-                st.caption(
-                    parity_short(
-                        int(subgraph_payload["sql_count"]),
-                        subgraph_payload["cypher_count"],
-                        subgraph_payload["parity"],
-                    )
-                )
-        _render_viewer(row)
-        _render_ego_panel(row)
-        _render_context_panel(row)
-        _render_model_panel(row, preset)
-        _render_filmstrip(row)
+        # Phase 9b (Task 4): the viewer on ONE screen -- header line, then the
+        # frame beside its two step curves, then the single merged metric row,
+        # then the filmstrip that drives the curves' rule. The three stacked
+        # full-width panels this replaced (ego dynamics / scene context / model
+        # context) pushed the filmstrip and the graph below two scrolls, so the
+        # motion the event is ABOUT was never on screen with the frame.
+        _render_event_header(row, preset, preset_name)
+        curve = filmstrip_steps(row)
+        # Read the slider's step BEFORE the widget that owns it is instantiated
+        # further down: on the rerun after a move, session_state already holds the
+        # new step, so the charts drawn here follow it in the same run.
+        selected_step = _selected_step(curve)
+        frame_column, curve_column = st.columns([3, 2])
+        with frame_column:
+            _render_viewer(row)
+        with curve_column:
+            _render_curves(curve, selected_step)
+        _render_metric_row(row, preset, curve)
+        _render_filmstrip(row, curve)
         # Phase-6 slot (item 11, consolidated review): implemented -- the
         # interactive subgraph panel (Task 3).
         _render_graph_panel(row, preset_name)

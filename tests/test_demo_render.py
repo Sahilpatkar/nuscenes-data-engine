@@ -633,3 +633,80 @@ def test_line_chart_axis_labels_are_flat_never_truncated_or_thinned() -> None:
     assert axis["labelLimit"] == 0
     assert axis["title"] is None
     assert spec["height"] == 120
+
+
+# --- Phase 9b (Task 4): the shared curve pair -------------------------------------
+
+
+def _filmstrip_curve(*, speed_is_can: bool = True):
+    """A three-step ``filters.FilmstripCurve`` -- the shape ``curve_charts`` takes
+    from ``filters.filmstrip_steps`` on a scene-edge event."""
+    from filters import FilmstripCurve, FilmstripStep
+
+    return FilmstripCurve(
+        steps=[
+            FilmstripStep("t-1", "a", 41.0, -1.2, False),
+            FilmstripStep("current", "b", 36.0, -7.5, True),
+            FilmstripStep("t+1", "c", 28.0, -0.5, False),
+        ],
+        speed_is_can=speed_is_can,
+    )
+
+
+def test_curve_charts_pairs_the_can_speed_and_accel_series() -> None:
+    """One builder, two charts, so the Scenario viewer and tour step 2 draw the
+    identical pair: CAN speed over the steps, CAN longitudinal acceleration with
+    the y = 0 rule, both with the vertical rule at the selected step."""
+    from render import curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(), selected="t+1")
+
+    speed_spec, accel_spec = speed.to_dict(), accel.to_dict()
+    assert speed_spec["layer"][0]["encoding"]["y"]["title"] == "CAN speed (km/h)"
+    assert accel_spec["layer"][0]["encoding"]["y"]["title"] == "CAN longitudinal accel (m/s²)"
+    for spec in (speed_spec, accel_spec):
+        assert spec["layer"][0]["encoding"]["x"]["sort"] == ["t-1", "current", "t+1"]
+        rule = spec["layer"][1]
+        assert spec["datasets"][rule["data"]["name"]] == [{"step": "t+1"}]
+    # the acceleration curve runs mostly negative -- it gets the zero rule, the
+    # speed curve (never negative) does not.
+    assert len(speed_spec["layer"]) == 2
+    assert len(accel_spec["layer"]) == 3
+
+    values = speed_spec["datasets"][speed_spec["layer"][0]["data"]["name"]]
+    assert [row["step"] for row in values] == ["t-1", "current", "t+1"]
+    assert [row["speed_kmh"] for row in values] == [41.0, 36.0, 28.0]
+
+
+def test_curve_charts_titles_ego_speed_when_the_speed_is_not_can() -> None:
+    """The honesty rule: on a pre-0.8 package the speed series is the GT ego pose
+    converted to km/h, and every label that describes it says so. The
+    acceleration series is CAN on every package, so its title never changes."""
+    from render import curve_caption, curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(speed_is_can=False), selected="current")
+
+    assert speed.to_dict()["layer"][0]["encoding"]["y"]["title"] == "ego speed (km/h)"
+    assert accel.to_dict()["layer"][0]["encoding"]["y"]["title"] == (
+        "CAN longitudinal accel (m/s²)"
+    )
+    assert curve_caption(_filmstrip_curve(speed_is_can=False)) == (
+        "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+        "acceleration from the CAN bus"
+    )
+    assert curve_caption(_filmstrip_curve()) == (
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the CAN bus"
+    )
+
+
+def test_curve_charts_draws_no_rule_without_a_selected_step() -> None:
+    """``selected=None`` is a curve with no cursor (the rule is the only thing the
+    slider drives), and an unknown step still raises through ``line_chart``."""
+    from render import curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(), selected=None)
+    assert len(speed.to_dict()["layer"]) == 1
+    assert len(accel.to_dict()["layer"]) == 2      # the zero rule only
+
+    with pytest.raises(ValueError, match="unknown selected step"):
+        curve_charts(_filmstrip_curve(), selected="t+2")

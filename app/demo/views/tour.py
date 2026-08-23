@@ -42,6 +42,8 @@ from render import (
     LOOP_STAGES,
     bar_chart,
     chip_row,
+    curve_caption,
+    curve_charts,
     draw_overlay,
     loop_breadcrumb,
     metric_cards,
@@ -467,6 +469,31 @@ def _render_event_filmstrip(row: pd.Series) -> None:
             st.caption(step.label)
 
 
+def _render_event_curves(row: pd.Series) -> None:
+    """The event's CAN speed and CAN longitudinal acceleration over the same steps
+    the strip above shows -- the motion cue a single still frame cannot give.
+
+    Built by ``render.curve_charts`` from ``filters.filmstrip_steps``, exactly as
+    the Scenario page builds its pair, so this step and the deep page behind it
+    draw the identical curves (the page adds only its slider; here the rule is
+    pinned to the event's own frame, since a tour screen is one visual rather than
+    a control panel). The caption is the builder's own: it says what the two series
+    ARE, and on a package older than v0.8 it says "ego speed" instead of CAN --
+    never the other way round.
+    """
+    curve = filmstrip_steps(row)
+    if not curve.steps:
+        return
+    current = next((step.label for step in curve.steps if step.is_current), None)
+    speed, accel = curve_charts(curve, selected=current)
+    speed_column, accel_column = st.columns(2)
+    with speed_column:
+        st.altair_chart(speed, width="stretch")
+    with accel_column:
+        st.altair_chart(accel, width="stretch")
+    st.caption(curve_caption(curve))
+
+
 def _render_mine(data: _TourData) -> None:
     """Step 2 — the weakness as a population: the flagship scenario query's top
     event, its own facts, and how many of the matching events are at night."""
@@ -496,6 +523,7 @@ def _render_mine(data: _TourData) -> None:
             *(["rain"] if bool(row["is_rain"]) else []),
         ])
     _render_event_filmstrip(row)
+    _render_event_curves(row)
 
     # The parity line is a trust indicator, not a claim about this event: a package
     # with no subgraphs staged simply omits it (the Scenario page's own no-op).

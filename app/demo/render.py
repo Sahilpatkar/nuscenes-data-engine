@@ -9,6 +9,7 @@ from typing import Any, cast
 import altair as alt
 import pandas as pd
 import streamlit as st
+from filters import FilmstripCurve
 from PIL import Image, ImageDraw
 
 
@@ -482,6 +483,91 @@ def line_chart(
     if title:
         properties["title"] = title
     return cast("alt.LayerChart", alt.layer(*layers)).properties(**properties)
+
+
+# --- Phase 9b (Task 4): the event's step curve, drawn the same way twice ----------
+#
+# The Scenario viewer (with its filmstrip slider as the cursor) and guided-tour step
+# 2 (no slider, cursor pinned to the event's own frame) show the SAME two curves, so
+# they build them here rather than each assembling its own pair -- the titles and the
+# caption below are the whole point: they say what the two series ARE, and a page
+# that wrote its own could label an ego-pose reading as CAN.
+
+_CURVE_STEP_COLUMN = "step"
+_CURVE_SPEED_COLUMN = "speed_kmh"
+_CURVE_ACCEL_COLUMN = "accel_mps2"
+
+# Both titles carry the unit, because neither reading is the one the page's other
+# figures use (the filmstrip readout is m/s, the severity caption is g).
+CAN_SPEED_TITLE = "CAN speed (km/h)"
+EGO_SPEED_TITLE = "ego speed (km/h)"
+CAN_ACCEL_TITLE = "CAN longitudinal accel (m/s²)"
+
+# The x axis is the nominal step label, so the caption is where the viewer learns
+# what a step is worth in seconds (~0.5 s between nuScenes keyframes) and where the
+# two series came from. The second wording is the pre-0.8 package's: the speed is
+# then the GT ego pose converted to km/h, never a CAN reading (spec's honesty rule
+# "a CAN curve must be CAN"), and the acceleration is CAN on every package.
+_CURVE_CAPTION_CAN = (
+    "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the CAN bus"
+)
+_CURVE_CAPTION_EGO = (
+    "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+    "acceleration from the CAN bus"
+)
+
+
+def curve_frame(curve: FilmstripCurve) -> pd.DataFrame:
+    """One row per filmstrip step: its label and the two readings plotted against
+    it. NA readings stay NA -- altair simply breaks the line there, which is the
+    honest picture of a step whose CAN row is missing."""
+    return pd.DataFrame({
+        _CURVE_STEP_COLUMN: [step.label for step in curve.steps],
+        _CURVE_SPEED_COLUMN: [step.can_speed_kmh for step in curve.steps],
+        _CURVE_ACCEL_COLUMN: [step.accel_mps2 for step in curve.steps],
+    })
+
+
+def curve_caption(curve: FilmstripCurve) -> str:
+    """What the pair of curves is, in one line -- CAN wording only when the speed
+    really is the CAN reading (``FilmstripCurve.speed_is_can``)."""
+    return _CURVE_CAPTION_CAN if curve.speed_is_can else _CURVE_CAPTION_EGO
+
+
+def curve_charts(
+    curve: FilmstripCurve, *, selected: str | None = None, height: int = 150
+) -> tuple[alt.LayerChart, alt.LayerChart]:
+    """``(speed, acceleration)`` over the filmstrip's steps, both with the vertical
+    rule at ``selected`` (the Scenario page passes its slider's step; the tour
+    passes the event's own frame).
+
+    The acceleration chart gets the y = 0 rule: the series runs mostly negative and
+    without the rule a hard deceleration reads as just a lower point. ``selected``
+    must name one of the curve's steps -- ``line_chart`` raises otherwise, rather
+    than letting vega drop a rule that points at nothing.
+    """
+    frame = curve_frame(curve)
+    order = [step.label for step in curve.steps]
+    speed = line_chart(
+        frame,
+        x=_CURVE_STEP_COLUMN,
+        y=_CURVE_SPEED_COLUMN,
+        order=order,
+        y_title=CAN_SPEED_TITLE if curve.speed_is_can else EGO_SPEED_TITLE,
+        selected=selected,
+        height=height,
+    )
+    accel = line_chart(
+        frame,
+        x=_CURVE_STEP_COLUMN,
+        y=_CURVE_ACCEL_COLUMN,
+        order=order,
+        y_title=CAN_ACCEL_TITLE,
+        selected=selected,
+        zero_line=True,
+        height=height,
+    )
+    return speed, accel
 
 
 # --- Phase 9a (Task 1): trust chrome ----------------------------------------------

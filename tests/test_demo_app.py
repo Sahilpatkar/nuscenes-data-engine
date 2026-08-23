@@ -1827,6 +1827,209 @@ def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
     assert not any("no image available" in str(c.value) for c in at.caption)
 
 
+# --- Phase 9b (Task 4): the one-screen event viewer + its CAN curve -------------
+#
+# The viewer's two curves are built by render.curve_charts from
+# filters.filmstrip_steps, so the Scenario page and tour step 2 draw the SAME pair
+# (spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec2). These tests
+# read the charts back off the wire the way Streamlit sends them: st.altair_chart
+# marshals the vega-lite spec as a JSON string on the element proto and hoists each
+# layer's own data into a named, Arrow-encoded dataset beside it.
+
+_CAN_SPEED_TITLE = "CAN speed (km/h)"
+_EGO_SPEED_TITLE = "ego speed (km/h)"
+_CAN_ACCEL_TITLE = "CAN longitudinal accel (m/s²)"
+
+
+def _chart_specs(at: Any) -> list[dict[str, Any]]:
+    return [json.loads(chart.proto.spec) for chart in at.get("vega_lite_chart")]
+
+
+def _y_titles(at: Any) -> list[str]:
+    """One y-axis title per chart on the page -- the line layer's, which is the
+    layer that carries the series (the rule layers encode x only)."""
+    return [str(spec["layer"][0]["encoding"]["y"]["title"]) for spec in _chart_specs(at)]
+
+
+def _rule_steps(chart: Any) -> list[str]:
+    """The step label(s) the chart's selected-step rule sits on, decoded from the
+    Arrow dataset Streamlit hoisted the rule's own one-row frame into."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    spec = json.loads(chart.proto.spec)
+    rule = spec["layer"][1]
+    datasets = {
+        dataset.name: convert_arrow_bytes_to_pandas_df(dataset.data.data)
+        for dataset in chart.proto.datasets
+    }
+    return [str(value) for value in datasets[rule["data"]["name"]]["step"]]
+
+
+@pytest.fixture()
+def built_demo_data_without_can_speed(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo build` would have written it: no
+    per-step CAN speed on ``scenario_events.parquet``.
+
+    Same edit-the-built-package idiom as ``built_demo_data_without_explain`` --
+    the app's own fallback keys off the COLUMNS being absent
+    (``filters.filmstrip_steps``), so dropping them from the built table is
+    exactly the state an older package puts the page in.
+    """
+    path = built_demo_data / "scenario_events.parquet"
+    events = pd.read_parquet(path)
+    events = events.drop(columns=[c for c in events.columns if c.startswith("can_speed")])
+    assert not [c for c in events.columns if c.startswith("can_speed")]
+    events.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_scenario_viewer_is_one_screen_with_can_curve(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The viewer is one screen: the frame beside the two CAN curves, then ONE
+    metric row, then the filmstrip -- not the six stacked full-width panels the
+    page drew before (spec sec2).
+
+    The fixture's flagship event ("s1") has exactly two filmstrip steps (its only
+    non-NA neighbour is "v1" at t+1), so the curves' x order is ["current", "t+1"]
+    -- read straight off the chart spec, which is also what proves the axis is the
+    nominal step sequence rather than a time axis.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    # (a) the two curves, titled as CAN readings (the package carries can_speed_*)
+    titles = _y_titles(at)
+    assert _CAN_SPEED_TITLE in titles
+    assert _CAN_ACCEL_TITLE in titles
+    specs = _chart_specs(at)
+    for spec in specs:
+        assert spec["layer"][0]["encoding"]["x"]["sort"] == ["current", "t+1"]
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the "
+        "CAN bus" in c
+        for c in captions
+    )
+
+    # (b) one metric row, six cards -- the ego/context/model panels' figures merged
+    assert len(at.metric) == 6
+    labels = [str(m.label) for m in at.metric]
+    assert labels == [
+        "CAN speed", "Min long. accel", "Min ped dist", "Peds within 10m",
+        "Lighting / rain", "Model result",
+    ]
+    values = {str(m.label): str(m.value) for m in at.metric}
+    assert values["CAN speed"] == "36.0 km/h"
+    assert values["Min long. accel"] == "-7.50 m/s²"
+    assert values["Min ped dist"] == "5.0 m"
+    assert values["Peds within 10m"] == "1"
+    assert values["Lighting / rain"] == "day"
+    # "s1" is not in the curated prediction set -- the card says so in the page's
+    # own pinned wording rather than inventing a model figure for it.
+    assert values["Model result"] == "not in the curated prediction set"
+
+    # (c) the three stacked panels' headings are gone
+    markdowns = [str(m.value) for m in at.markdown]
+    for heading in ("Ego dynamics", "Scene context", "Model context"):
+        assert not any(heading in text for text in markdowns), heading
+
+    # (d) the viewer's pinned trust chrome survives the relayout
+    assert any("1 event found · SQL 1 / Graph 1 ✓" in c for c in captions)
+    assert any("recorded experiment output" in c for c in captions)
+
+    # (e) ... and a model-family preset still gets the graph-holds-GT-only note
+    at.session_state["scenario_preset"] = "fn_pedestrians_night"
+    at.run(timeout=30)
+    assert not at.exception
+    assert any(
+        "graph holds GT only — model verdict comes from the prediction set" in str(c.value)
+        for c in at.caption
+    )
+
+
+def test_scenario_curve_rule_follows_the_filmstrip_slider(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filmstrip slider is the curves' cursor: moving it moves the vertical
+    rule on BOTH charts, so the strip and the curve always point at the same
+    keyframe."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+    charts = at.get("vega_lite_chart")
+    assert len(charts) == 2
+    assert all(_rule_steps(chart) == ["current"] for chart in charts)
+
+    at.select_slider(key="scenario_filmstrip").set_value("t+1").run(timeout=30)
+    assert not at.exception
+    charts = at.get("vega_lite_chart")
+    assert len(charts) == 2
+    assert all(_rule_steps(chart) == ["t+1"] for chart in charts)
+
+
+def test_scenario_viewer_titles_ego_speed_on_an_old_package(
+    built_demo_data_without_can_speed: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The honesty rule "a CAN curve must be CAN": a package built before v0.8 has
+    no per-step CAN speed, so the speed series falls back to the GT ego pose and
+    the chart says "ego speed" -- it never labels an ego-pose reading as CAN. The
+    acceleration series IS CAN on every package, so its title is unchanged."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data_without_can_speed, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    titles = _y_titles(at)
+    assert _EGO_SPEED_TITLE in titles
+    assert _CAN_SPEED_TITLE not in titles
+    assert _CAN_ACCEL_TITLE in titles
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+        "acceleration from the CAN bus" in c
+        for c in captions
+    )
+    assert not any("speed and longitudinal acceleration from the CAN bus" in c for c in captions)
+    # ... and the metric card names the same source as the chart it sits under.
+    assert "Ego speed" in [str(m.label) for m in at.metric]
+    assert "CAN speed" not in [str(m.label) for m in at.metric]
+
+
+def test_tour_step_2_shows_the_can_curve(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tour step 2 draws the SAME pair of curves under its filmstrip (no slider --
+    a tour screen is one visual, not a control panel), so the condensed step and
+    the deep page tell the identical story about the ego's motion."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 2)
+    assert not at.exception
+
+    titles = _y_titles(at)
+    assert titles == [_CAN_SPEED_TITLE, _CAN_ACCEL_TITLE]
+    charts = at.get("vega_lite_chart")
+    assert all(_rule_steps(chart) == ["current"] for chart in charts)
+    assert any(
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the "
+        "CAN bus" in str(c.value)
+        for c in at.caption
+    )
+
+
 # --- Phase 7 (Task 4): the Active Learning page --------------------------------
 
 
