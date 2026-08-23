@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from filters import failure_counts, filter_frames, sort_frames
+from filters import failure_counts, filter_frames, sort_frames, visible_gt_boxes
 from PIL import Image
-from render import draw_overlay
+from render import draw_overlay, loop_breadcrumb, provenance
 
 from data import crop_path, load_frame_manifest, load_gt_boxes, load_predictions, thumb_path
 
@@ -60,6 +60,7 @@ def _frame_image_path(token: str) -> Path | None:
 
 def render() -> None:
     st.title("Failure Explorer")
+    loop_breadcrumb(["Diagnose"])
     st.caption(
         "GT vs prediction overlays for the held-out val split, filterable by "
         "condition, class, and failure type. The train pool carries no "
@@ -78,8 +79,10 @@ def render() -> None:
     # today's ingested data is all-False (the visibility floor is already applied
     # at ingestion) and Phase 3's UI "should not build ghost-box rendering ...
     # without first confirming ghost rows occur in the data it is fed" -- so this
-    # page drops them instead of building that unconfirmed rendering mode.
-    gt = gt.loc[~gt["below_visibility_min"]].reset_index(drop=True)
+    # page drops them instead of building that unconfirmed rendering mode. The
+    # filter itself is filters.visible_gt_boxes -- one definition of the rule,
+    # shared with the guided tour and the per-frame filters.visible_gt.
+    gt = visible_gt_boxes(gt).reset_index(drop=True)
 
     val_manifest = manifest.loc[manifest["split"] == "val"]
     gt_models = _models_from_gt(gt)
@@ -230,6 +233,7 @@ def render() -> None:
             Image.open(crop), gt_for_render, preds_token, mode=_MODE_LABELS[mode_label], scale=0.6
         )
         st.image(image)
+        provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
 
     meta_cols = st.columns(4)
     meta_cols[0].metric("Scene", str(frame_row.get("scene_name", "n/a")))

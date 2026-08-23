@@ -15,6 +15,8 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from render import (  # noqa: E402
+    LOOP_STAGES,
+    PROVENANCE,
     STYLE_FN,
     STYLE_FP,
     STYLE_GT,
@@ -23,7 +25,11 @@ from render import (  # noqa: E402
     STYLE_TP,
     BoxStyle,
     _draw_rect,
+    chip_row_text,
     draw_overlay,
+    loop_breadcrumb_text,
+    metric_cards,
+    provenance_text,
 )
 
 
@@ -327,10 +333,16 @@ def test_bar_chart_grouped_without_color_field_raises() -> None:
         bar_chart(quotas, x="community", y="frames", grouped=True, zero_line=False)
 
 
-def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
+def test_bar_chart_axis_labels_are_never_truncated_dropped_or_forced_flat() -> None:
     """13 arm names across ~1100 px were clipped to "weak_graph_rate..." -- an arm
     name is an identifier, and a clipped one names nothing (real-browser finding 2);
-    a melted table's "value" column names nothing either (finding 3)."""
+    a melted table's "value" column names nothing either (finding 3).
+
+    ``labelOverlap: False`` is the same promise against a different default (Phase
+    9a review 5b): Streamlit's Vega theme sets ``labelOverlap: true``, the "parity"
+    strategy that hides every other label on a crowded categorical axis, so half a
+    13-arm chart came out unlabelled -- and an unlabelled bar is indistinguishable
+    from a missing one."""
     from render import bar_chart
 
     encoding = bar_chart(
@@ -339,12 +351,14 @@ def test_bar_chart_axis_labels_are_never_truncated_and_can_be_angled() -> None:
     ).to_dict()["encoding"]
 
     assert encoding["x"]["axis"]["labelLimit"] == 0
+    assert encoding["x"]["axis"]["labelOverlap"] is False
     assert encoding["x"]["axis"]["labelAngle"] == -45
     assert encoding["y"]["title"] == "mAP50-95 gain over baseline"
 
-    # no angle asked for -> no labelAngle in the spec at all, but still no truncation
+    # no angle asked for -> no labelAngle in the spec at all, but still no
+    # truncation and still no thinning
     plain = bar_chart(_arms(), x="arm", y="delta_night", zero_line=False).to_dict()["encoding"]
-    assert plain["x"]["axis"] == {"labelLimit": 0}
+    assert plain["x"]["axis"] == {"labelLimit": 0, "labelOverlap": False}
     assert plain["y"]["title"] == "delta night"
 
 
@@ -445,3 +459,81 @@ def test_bar_chart_line_mark() -> None:
 
     with pytest.raises(ValueError, match="unknown mark"):
         bar_chart(counted, x="hour", y="n", mark="area", zero_line=False)
+
+
+# --- Phase 9a (Task 1): trust chrome primitives -----------------------------------
+
+
+def test_loop_breadcrumb_text_lights_only_active_stages() -> None:
+    """The lit stage(s) draw an orange badge, every other LOOP_STAGES entry a grey
+    one -- one active stage, two, and None (nothing lit, e.g. the Overview page's
+    whole-loop breadcrumb)."""
+    assert (
+        loop_breadcrumb_text(["Diagnose"])
+        == ":orange-badge[Diagnose] → :gray-badge[Mine] → "
+        ":gray-badge[Train] → :gray-badge[Evaluate]"
+    )
+    assert (
+        loop_breadcrumb_text(["Mine", "Train"])
+        == ":gray-badge[Diagnose] → :orange-badge[Mine] → "
+        ":orange-badge[Train] → :gray-badge[Evaluate]"
+    )
+    assert (
+        loop_breadcrumb_text(None)
+        == ":gray-badge[Diagnose] → :gray-badge[Mine] → "
+        ":gray-badge[Train] → :gray-badge[Evaluate]"
+    )
+    # every LOOP_STAGES entry appears exactly once regardless of what is lit
+    for stage in LOOP_STAGES:
+        assert stage in loop_breadcrumb_text(None)
+
+
+def test_loop_breadcrumb_text_rejects_unknown_stage() -> None:
+    with pytest.raises(ValueError, match="Bogus"):
+        loop_breadcrumb_text(["Bogus"])
+
+
+def test_provenance_text_kinds_and_detail() -> None:
+    """All three PROVENANCE kinds surface their fixed sentence behind their icon;
+    a non-empty ``detail`` is appended with " · "."""
+    for kind, (icon, sentence) in PROVENANCE.items():
+        text = provenance_text(kind)
+        assert text == f"{icon} {sentence}"
+        assert sentence in text
+
+    with_detail = provenance_text("recorded", "run 2026-08-11")
+    assert with_detail == f"{PROVENANCE['recorded'][0]} {PROVENANCE['recorded'][1]} · run 2026-08-11"
+
+    # empty detail (the default) appends nothing
+    assert " · " not in provenance_text("recomputed")
+
+
+def test_provenance_text_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError, match="bogus"):
+        provenance_text("bogus")
+
+
+def test_chip_row_text_joins_badges_and_is_empty_for_no_chips() -> None:
+    assert chip_row_text(["night", "pedestrian"]) == ":blue-badge[night] :blue-badge[pedestrian]"
+    assert chip_row_text(["night"], color="orange") == ":orange-badge[night]"
+    assert chip_row_text([]) == ""
+
+
+def test_metric_cards_accepts_two_and_three_tuples_and_passes_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """metric_cards's items may mix plain (label, value) cards with (label, value,
+    delta) ones in the same call (Phase 9a final review: a card whose value would
+    otherwise pack an arrow into a truncating st.metric column shows the
+    after-figure alone, with the change moved to the delta) -- only the 3-tuple
+    form passes ``delta=`` through to ``st.metric``."""
+    calls: list[tuple[str, str, str | None]] = []
+
+    class _FakeColumn:
+        def metric(self, label: str, value: str, delta: str | None = None) -> None:
+            calls.append((label, value, delta))
+
+    monkeypatch.setattr("render.st.columns", lambda n: [_FakeColumn() for _ in range(n)])
+    metric_cards([("A", "1"), ("B", "2", "+1 vs baseline")])
+
+    assert calls == [("A", "1", None), ("B", "2", "+1 vs baseline")]

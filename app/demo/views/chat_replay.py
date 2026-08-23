@@ -32,7 +32,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from filters import frame_caption, replay_tool_counts, step_detail, verdict_line
-from render import bar_chart, metric_cards, recorded_banner
+from render import bar_chart, loop_breadcrumb, metric_cards, provenance, recorded_banner
 
 from data import (
     chat_replay_available,
@@ -187,6 +187,7 @@ def _render_header(replays: list[dict[str, Any]], summary: dict[str, Any]) -> No
         f"Recorded answers from the dataset chat agent ({model}, recorded "
         f"{recorded_at[:10]}) — the live agent runs in the local stack"
     )
+    provenance("recorded", f"chat_replay_summary.json · recorded {recorded_at[:10]}")
 
     # Counted from the replays on screen rather than read off the summary's
     # n_eval/n_passed: `demo build` already refuses a summary that disagrees with
@@ -291,6 +292,7 @@ def _render_graded(replays: list[dict[str, Any]]) -> None:
 
 def render() -> None:
     st.title("Ask the Dataset (recorded)")
+    loop_breadcrumb(["Diagnose"])
 
     if not chat_replay_available():
         st.info(_ABSENT_NOTE)

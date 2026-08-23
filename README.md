@@ -21,23 +21,25 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 A self-contained Streamlit app ([app/demo/](app/demo/)) that presents this project's
 real results from a committed 25 MB artifact package — no backend, no GPU, no
-databases, no API keys. Six pages: **Overview** (dataset scale + headline results),
-**Failure Explorer** (where the baseline detector breaks, with GT/prediction
-overlays), **Scenario Search** (preset driving-scenario queries with their SQL/Cypher
-parity and an interactive knowledge-graph panel), **Active Learning** (how the
-`graph_rate_night` acquisition function picks frames, and what retraining on them
-bought), **Weak Supervision** (what VLM-verified pseudo labels kept — and lost —
-against ground truth), and **Ask the Dataset (recorded)** (a recorded session with
-the tool-calling chat agent). Every number is derived from committed artifacts at
-package-build time — nothing is hardcoded — and recorded outputs (semantic search,
-the chat session) are labelled on screen as recorded: the public app never runs a
-model or calls an LLM.
+databases, no API keys. A guided tour ("Explore a model failure →") walks the whole
+model-improvement loop in 2-3 minutes, plus six pages to dig into on your own:
+**Overview** (dataset scale + headline results), **Failure Explorer** (where the
+baseline detector breaks, with GT/prediction overlays), **Scenario Search** (preset
+driving-scenario queries with their SQL/Cypher parity and an interactive
+knowledge-graph panel), **Active Learning** (how the `graph_rate_night` acquisition
+function picks frames, and what retraining on them bought), **Weak Supervision**
+(what VLM-verified pseudo labels kept — and lost — against ground truth), and **Ask
+the Dataset (recorded)** (a recorded session with the tool-calling chat agent). Every
+number is derived from committed artifacts at package-build time — nothing is
+hardcoded — and recorded outputs (semantic search, the chat session) are labelled on
+screen as recorded: the public app never runs a model or calls an LLM.
 
 | | |
 |---|---|
-| ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame | ![Failure Explorer](docs/img/demo-failures.png)<br>**Failure Explorer** — filter the validation frames, overlay GT vs predictions |
-| ![Scenario Search](docs/img/demo-scenarios.png)<br>**Scenario Search** — preset queries, synchronized event viewer, SQL/Cypher parity | ![Active Learning](docs/img/demo-active-learning.png)<br>**Active Learning** — all 13 arms, why each frame was selected, before/after |
-| ![Weak Supervision](docs/img/demo-weak-supervision.png)<br>**Weak Supervision** — retention, the loss split, and the verifier's crowding bias | ![Ask the Dataset](docs/img/demo-chat-replay.png)<br>**Ask the Dataset (recorded)** — recorded agent answers with their tool calls |
+| ![Guided tour](docs/img/demo-tour.png)<br>**Guided tour** — the 2-3 minute default path through the loop, ending in a result screen | ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame |
+| ![Failure Explorer](docs/img/demo-failures.png)<br>**Failure Explorer** — filter the validation frames, overlay GT vs predictions | ![Scenario Search](docs/img/demo-scenarios.png)<br>**Scenario Search** — preset queries, synchronized event viewer, SQL/Cypher parity |
+| ![Active Learning](docs/img/demo-active-learning.png)<br>**Active Learning** — all 13 arms, why each frame was selected, before/after | ![Weak Supervision](docs/img/demo-weak-supervision.png)<br>**Weak Supervision** — retention, the loss split, and the verifier's crowding bias |
+| ![Ask the Dataset](docs/img/demo-chat-replay.png)<br>**Ask the Dataset (recorded)** — recorded agent answers with their tool calls | |
 
 Runbook, package layout, the deployment steps and the success-criteria walk:
 [docs/DEMO.md](docs/DEMO.md). The demo's full design: [docs/DEMO_PLAN.md](docs/DEMO_PLAN.md).
@@ -51,9 +53,9 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
 FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
-two-job CI (quality + CPU smoke-train). **Demo phases 1–8 shipped:** the six-page
-public demo above runs entirely off the committed `demo_data/` package and is
-deployable to Streamlit Community Cloud.
+two-job CI (quality + CPU smoke-train). **Demo phases 1–9a shipped:** the guided
+tour plus six-page public demo above runs entirely off the committed `demo_data/`
+package and is deployable to Streamlit Community Cloud.
 
 ## Architecture
 
@@ -343,7 +345,7 @@ picker after the first PR run).
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine: `graph_rate_night` **+0.0101 night mAP50-95** |
 | 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
-| Demo 1-8 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: six story pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
+| Demo 1-9a ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a guided tour plus six story pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
 
 | B ✅ | Geo-spatial + CAN bus | Ego pose, all 1.17M 3D boxes, and keyframe-aligned CAN dynamics → Parquet, DuckDB, and Neo4j `EgoPose`/`ObjectObservation` nodes. *"Hard braking with a pedestrian within 10 m"* answers **30, identically in SQL and Cypher**; CAN speed cross-checks against GT pose at r = 0.999 — see [DATA.md](docs/DATA.md), [GRAPH.md](docs/GRAPH.md) |
 

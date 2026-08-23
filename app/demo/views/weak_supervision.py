@@ -33,7 +33,15 @@ import pandas as pd
 import streamlit as st
 from filters import crowding_long, gt_for_render, loss_long, visible_gt, weak_frame_summary
 from PIL import Image
-from render import bar_chart, draw_overlay, metric_cards, story_arrows
+from render import (
+    bar_chart,
+    draw_overlay,
+    learned,
+    loop_breadcrumb,
+    metric_cards,
+    provenance,
+    story_arrows,
+)
 
 from data import (
     STALE_PACKAGE_NOTE as _STALE_PACKAGE_NOTE,
@@ -131,8 +139,17 @@ def _night_pedestrian_pair(loss: pd.DataFrame, arms: pd.DataFrame) -> tuple[str,
 
 def _night_rank_caption(arms: pd.DataFrame, weak_arm: str) -> str:
     """Whether the weak arm really is the worst night arm in THIS package's table --
-    computed, never asserted, so a package with different arms says the true rank."""
-    ordered = arms.sort_values("delta_night", kind="stable").reset_index(drop=True)
+    computed, never asserted, so a package with different arms says the true rank.
+
+    Ranked over the arms with a known ``delta_night`` only (Phase 9a final review
+    item 7): ``sort_values`` keeps NA rows (sorted last) rather than dropping
+    them, so counting ``len(ordered)`` without first dropping them would count an
+    arm this package never evaluated for night delta as one of "the N arms"."""
+    ordered = (
+        arms.dropna(subset=["delta_night"])
+        .sort_values("delta_night", kind="stable")
+        .reset_index(drop=True)
+    )
     position = int(ordered.index[ordered["arm"] == weak_arm][0])
     delta = float(ordered.iloc[position]["delta_night"])
     total = len(ordered)
@@ -188,6 +205,9 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
             "the weak arm with the worst night result in this package."
         )
     metric_cards(cards)
+    provenance(
+        "recorded", "weak_loss_decomposition.parquet + weak_supervision_results.parquet"
+    )
     st.caption(
         "(headline) marks the pair docs/ACTIVE_LEARNING.md publishes as the "
         "weak-supervision result — the lower of the two shares, not the better one."
@@ -204,7 +224,50 @@ def _render_cards(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
         st.caption(_night_rank_caption(arms, pair[1]))
 
 
-def _render_decomposition(loss: pd.DataFrame) -> None:
+def _render_loss_learned_callout(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
+    """Phase 9a (Task 6): the loss-split "what we learned" sentence, from the
+    documented headline pair (``headline == True``) -- skipped when this package
+    carries no headline row. A second sentence, about the OTHER pair, is added
+    only when this package carries a second pair AND its weak arm is genuinely
+    (computed here, never assumed) the worst night arm in the whole table."""
+    headline_rows = loss.loc[loss["headline"]]
+    if headline_rows.empty:
+        return
+    headline_row = headline_rows.iloc[0]
+    base_arm = str(headline_row["base_arm"])
+    retention = float(headline_row["retention"])
+    dropped_frame_share = float(headline_row["dropped_frame_share"])
+    label_share = float(headline_row["label_share"])
+    text = (
+        f"Free labels kept {retention:.1%} of the ground-truth gain for the "
+        f"`{base_arm}` pair: {dropped_frame_share:.1%} was lost with the frames "
+        f"the verifier dropped and {label_share:.1%} to label noise on the ones "
+        "it kept."
+    )
+
+    other_rows = loss.loc[loss["base_arm"] != base_arm]
+    # Ranked over arms with a known delta_night only (Phase 9a final review item
+    # 7): an arm this package never evaluated for night delta (NaN) is not one of
+    # "the N arms" the superlative names.
+    night_ranked = arms.dropna(subset=["delta_night"])
+    if not other_rows.empty and not night_ranked.empty:
+        other_row = other_rows.iloc[0]
+        other = str(other_row["base_arm"])
+        other_retention = float(other_row["retention"])
+        other_weak_arm = f"weak_{other}"
+        worst_row = night_ranked.loc[night_ranked["delta_night"].idxmin()]
+        if str(worst_row["arm"]) == other_weak_arm:
+            worst_delta = float(worst_row["delta_night"])
+            text += (
+                f" The `{other}` pair retained {other_retention:.1%}, but its "
+                f"weak arm posted the worst night result of the {len(night_ranked)} "
+                f"arms ({worst_delta:+.4f})."
+            )
+
+    learned(text)
+
+
+def _render_decomposition(loss: pd.DataFrame, arms: pd.DataFrame) -> None:
     """(b) Every pair's gain split into retained / dropped-frame cost / label cost."""
     st.subheader("Where the rest of the gain went")
     if loss.empty:
@@ -233,6 +296,7 @@ def _render_decomposition(loss: pd.DataFrame) -> None:
             f"verifier dropped (they were never trained on at all) and "
             f"{components['label cost']:.1%} to label noise on the frames it kept."
         )
+    _render_loss_learned_callout(loss, arms)
 
 
 def _render_crowding(weaksup: pd.DataFrame, by_class: pd.DataFrame) -> None:
@@ -255,6 +319,9 @@ def _render_crowding(weaksup: pd.DataFrame, by_class: pd.DataFrame) -> None:
             "ones it rejected",
         ),
         width="stretch",
+    )
+    provenance(
+        "recorded", "weak_supervision_results.parquet + weak_verifier_by_class.parquet"
     )
     for row in weaksup.itertuples(index=False):
         st.caption(
@@ -309,6 +376,9 @@ def _render_frame(
             )
         )
         st.caption(_LEGEND)
+        provenance(
+            "recomputed", "GT from gt_boxes.parquet; pseudo boxes from weak_labels.parquet"
+        )
 
     st.markdown(f"**{summary['verdict_label']}**")
     if summary["mutual_zero"]:
@@ -481,6 +551,7 @@ def _render_story(loss: pd.DataFrame, weaksup: pd.DataFrame, arms: pd.DataFrame)
 
 def render() -> None:
     st.title("Weak Supervision")
+    loop_breadcrumb(["Train", "Evaluate"])
     st.caption(
         "What VLM-verified pseudo labels kept — and lost — against ground truth. "
         "Every number here is read from the package."
@@ -496,7 +567,7 @@ def render() -> None:
     _render_cards(loss, weaksup, arms)
 
     st.divider()
-    _render_decomposition(loss)
+    _render_decomposition(loss, arms)
 
     st.divider()
     _render_crowding(weaksup, load_weak_by_class())
