@@ -9,6 +9,7 @@ thing faked is the model turn itself.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -537,14 +538,29 @@ def test_summary_fields_and_staging_files(con: Any, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_chat_record_help_carries_the_cost_note() -> None:
+@pytest.mark.parametrize("force_terminal", [None, True], ids=["plain", "colour"])
+def test_chat_record_help_carries_the_cost_note(
+    monkeypatch: pytest.MonkeyPatch, force_terminal: bool | None
+) -> None:
+    """The help text names the cost and the dry-run flag -- with colour on as well.
+
+    GitHub Actions sets GITHUB_ACTIONS, which makes Typer 0.27 force a colour
+    terminal for its Rich help (typer.rich_utils.FORCE_TERMINAL, read when the
+    console is built); the option highlighter then emits ``--limit`` as two
+    styled segments (``-`` and ``-limit``) with escape codes between them, so
+    the plain substring never appears. The ``colour`` case reproduces CI's
+    condition here without the env var.
+    """
+    import typer.rich_utils
     from typer.testing import CliRunner
 
     from nuscenes_data_engine.cli import app
 
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", force_terminal)
     result = CliRunner().invoke(app, ["demo", "chat-record", "--help"])
     assert result.exit_code == 0
-    text = " ".join(result.stdout.split())
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)  # drop SGR colour codes
+    text = " ".join(plain.split())
     assert "PAID" in text
     assert "$4" in text and "--limit" in text
 
