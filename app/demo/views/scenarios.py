@@ -697,7 +697,7 @@ def _model_result(row: pd.Series) -> str:
 
 # Which VRU the distance card names, per preset (item M2, Phase 9b consolidated
 # review: the row showed the PEDESTRIAN distance under every preset, including the
-# one whose whole subject is a cyclist). The card SWITCHES -- the row stays six
+# one whose whole subject is a cyclist). The card SWITCHES -- the panel stays six
 # cards -- because a second distance card would be an empty figure on five of the
 # six presets. rain_vru keeps the pedestrian card: its own ranking quantity is the
 # nearer of the two VRUs, and that figure is already the card-grid caption.
@@ -707,18 +707,23 @@ _VRU_DISTANCE_CARDS: dict[str, tuple[str, str]] = {
 _DEFAULT_VRU_DISTANCE_CARD = ("Min ped dist", "min_dist_pedestrian_m")
 
 # The "Model result" card's VALUE when the frame has no model figure, short enough
-# to survive as one of six st.metric values (item M3: the full _NOT_CURATED_CAPTION
-# sentence is 33 characters and truncates in a sixth-width card -- and this is the
-# flagship preset's own default state). The sentence itself is the caption under the
-# row, so the page still says it in full.
+# to survive as an st.metric value (item M3: the full _NOT_CURATED_CAPTION sentence
+# is 33 characters and truncates in a card this narrow -- and this is the flagship
+# preset's own default state). The full sentence is _render_viewer's own caption
+# beside the frame, so the page still says it once, in full.
 _NOT_CURATED_VALUE = "not curated"
 
 
 def _render_metric_row(
     row: pd.Series, preset: _Preset, preset_name: str, curve: FilmstripCurve
 ) -> None:
-    """One row of six cards -- the ego-dynamics, scene-context and model panels'
-    figures merged so the viewer fits on one screen (spec sec2).
+    """Six cards, three to a row -- the ego-dynamics, scene-context and model
+    panels' figures merged so the viewer fits on one screen (spec sec2).
+
+    THREE per row, not six: at the demo's 1400 px width a sixth-width card is
+    ~157 px and st.metric truncated three of the six values ("12.6 k...",
+    "-4.46 ...", "not cur..."). Two rows of three cost one line of height and
+    show every figure whole -- the same cards, in the same order.
 
     The speed card is the EVENT FRAME's own step of the curve above it, so the two
     always agree (and it says "Ego speed" on a pre-0.8 package, where that reading
@@ -730,8 +735,10 @@ def _render_metric_row(
     Phase-5 consolidated review; the sign-neutral name now covers both).
 
     The VRU distance card follows ``preset_name`` (``_VRU_DISTANCE_CARDS``), and the
-    model card's value is short with the full sentence as a caption under the row
-    (``_NOT_CURATED_VALUE``) -- items M2 and M3 of the Phase 9b consolidated review.
+    model card's value is the short ``_NOT_CURATED_VALUE`` -- the full sentence is
+    ``_render_viewer``'s caption beside the frame, said ONCE on the page rather than
+    twice (items M2 and M3 of the Phase 9b consolidated review, plus the visual
+    walk's duplicate-caption fix).
     """
     current = next((step for step in curve.steps if step.is_current), None)
     speed = current.can_speed_kmh if current is not None else None
@@ -763,10 +770,8 @@ def _render_metric_row(
             ("Lighting / rain", lighting),
             ("Model result", _NOT_CURATED_VALUE if not_curated else result),
         ],
-        per_row=6,
+        per_row=3,
     )
-    if not_curated:
-        st.caption(_NOT_CURATED_CAPTION)
     if preset["family"] == "model" and preset["verdict"]:
         st.caption(preset["verdict"])
 

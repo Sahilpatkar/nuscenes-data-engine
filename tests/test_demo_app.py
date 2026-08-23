@@ -1535,6 +1535,46 @@ def test_failure_explorer_auto_selects_the_first_frame(
     assert not any("auto-selected" in str(c.value) for c in at.caption)
 
 
+def test_failure_explorer_n_preds_cards_name_the_two_weak_arms_apart(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Visual walk: the per-model n_preds cards sit in the detail's 2/5 column, and
+    the two weak checkpoints' raw names differ only by a trailing ``_gt`` -- both
+    labels truncated to the identical "n_preds (weak_graph_rate..." and the reader
+    could not tell the pseudo-labelled arm from its GT twin.
+
+    The cards now carry short display names (``failures._N_PREDS_SHORT``); the model
+    RADIO is untouched and keeps ``filters.model_label``'s full names, which it has
+    the width for.
+    """
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+
+    labels = [str(m.label) for m in at.metric]
+    n_preds = [label for label in labels if label.startswith("n_preds")]
+    assert n_preds == [
+        "n_preds (baseline)",
+        "n_preds (graph_rate_night)",
+        "n_preds (weak)",
+        "n_preds (weak GT twin)",
+    ]
+    assert len(set(n_preds)) == len(n_preds)          # ... and no two read alike
+    # Short LABELS, unchanged VALUES: v0's two weak arms found 1 and 2 boxes.
+    values = {str(m.label): str(m.value) for m in at.metric}
+    assert values["n_preds (weak)"] == "1"
+    assert values["n_preds (weak GT twin)"] == "2"
+
+    # The radio is untouched: its options are still `filters.model_label`'s full,
+    # self-describing names (AppTest's `options` are the FORMATTED labels), so the
+    # short names are a card-width fix, not a rename.
+    options = at.radio(key="failure_model").options
+    assert "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)" in options
+    assert "weak GT twin" not in " ".join(options)
+
+
 def test_failure_explorer_empty_filter_shows_no_detail(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1776,9 +1816,11 @@ def test_scenario_event_viewer_curated_vs_not_curated(
     at.session_state["scenario_token"] = "s1"
     at.run(timeout=30)
     assert not at.exception
-    assert any(
+    # Once, not twice: the viewer's caption beside the frame is the only place the
+    # page spells the sentence out (the metric row shows the short card value).
+    assert sum(
         "not in the curated prediction set" in str(c.value) for c in at.caption
-    )
+    ) == 1
 
 
 def test_scenario_filmstrip_slider_changes_readout(
@@ -2333,7 +2375,10 @@ def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
 
 _CAN_SPEED_TITLE = "CAN speed (km/h)"
 _EGO_SPEED_TITLE = "ego speed (km/h)"
-_CAN_ACCEL_TITLE = "CAN longitudinal accel (m/s²)"
+# Short: the long "CAN longitudinal accel (m/s²)" clipped to "CAN longitudinal
+# accel (n" at the viewer's chart width. The full words stay in the caption under
+# the pair (asserted below), so only the axis got shorter.
+_CAN_ACCEL_TITLE = "CAN accel (m/s²)"
 
 
 def _chart_specs(at: Any) -> list[dict[str, Any]]:
@@ -2440,7 +2485,9 @@ def test_scenario_viewer_is_one_screen_with_can_curve(
         for c in captions
     )
 
-    # (b) one metric row, six cards -- the ego/context/model panels' figures merged
+    # (b) six cards -- the ego/context/model panels' figures merged -- laid out
+    # THREE to a row (visual walk: at six per row st.metric truncated the speed,
+    # accel and model values). Same cards, same order, two rows.
     assert len(at.metric) == 6
     labels = [str(m.label) for m in at.metric]
     assert labels == [
@@ -2453,12 +2500,13 @@ def test_scenario_viewer_is_one_screen_with_can_curve(
     assert values["Min ped dist"] == "5.0 m"
     assert values["Peds within 10m"] == "1"
     assert values["Lighting / rain"] == "day"
-    # "s1" is not in the curated prediction set. The CARD says so in three words
+    # "s1" is not in the curated prediction set. The CARD says so in two words
     # (item M3, Phase 9b consolidated review: the 33-character sentence truncates as
-    # one of six st.metric values, and this is the flagship preset's default state)
-    # and the page's own pinned wording is the caption under the row.
+    # an st.metric value, and this is the flagship preset's default state) and the
+    # page's own pinned wording is _render_viewer's caption beside the frame --
+    # EXACTLY ONCE (visual walk: the metric row said it a second time).
     assert values["Model result"] == "not curated"
-    assert any("not in the curated prediction set" in c for c in captions)
+    assert sum("not in the curated prediction set" in c for c in captions) == 1
 
     # (c) the three stacked panels' headings are gone
     markdowns = [str(m.value) for m in at.markdown]

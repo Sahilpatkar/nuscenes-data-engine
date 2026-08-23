@@ -662,14 +662,18 @@ def _filmstrip_curve(*, speed_is_can: bool = True):
 def test_curve_charts_pairs_the_can_speed_and_accel_series() -> None:
     """One builder, two charts, so the Scenario viewer and tour step 2 draw the
     identical pair: CAN speed over the steps, CAN longitudinal acceleration with
-    the y = 0 rule, both with the vertical rule at the selected step."""
+    the y = 0 rule, both with the vertical rule at the selected step.
+
+    The accel axis title is the SHORT "CAN accel (m/s²)": the long form clipped at
+    the viewer's chart width. The full words live in ``curve_caption`` below the
+    pair (pinned in the next test), so the page still says which acceleration."""
     from render import curve_charts
 
     speed, accel = curve_charts(_filmstrip_curve(), selected="t+1")
 
     speed_spec, accel_spec = speed.to_dict(), accel.to_dict()
     assert speed_spec["layer"][0]["encoding"]["y"]["title"] == "CAN speed (km/h)"
-    assert accel_spec["layer"][0]["encoding"]["y"]["title"] == "CAN longitudinal accel (m/s²)"
+    assert accel_spec["layer"][0]["encoding"]["y"]["title"] == "CAN accel (m/s²)"
     for spec in (speed_spec, accel_spec):
         assert spec["layer"][0]["encoding"]["x"]["sort"] == ["t-1", "current", "t+1"]
         rule = spec["layer"][1]
@@ -693,9 +697,7 @@ def test_curve_charts_titles_ego_speed_when_the_speed_is_not_can() -> None:
     speed, accel = curve_charts(_filmstrip_curve(speed_is_can=False), selected="current")
 
     assert speed.to_dict()["layer"][0]["encoding"]["y"]["title"] == "ego speed (km/h)"
-    assert accel.to_dict()["layer"][0]["encoding"]["y"]["title"] == (
-        "CAN longitudinal accel (m/s²)"
-    )
+    assert accel.to_dict()["layer"][0]["encoding"]["y"]["title"] == "CAN accel (m/s²)"
     assert curve_caption(_filmstrip_curve(speed_is_can=False)) == (
         "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
         "acceleration from the CAN bus"

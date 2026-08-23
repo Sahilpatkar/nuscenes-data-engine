@@ -500,9 +500,14 @@ _CURVE_ACCEL_COLUMN = "accel_mps2"
 
 # Both titles carry the unit, because neither reading is the one the page's other
 # figures use (the filmstrip readout is m/s, the severity caption is g).
+#
+# The accel title is the SHORT form: at the viewer's chart width vega clipped
+# "CAN longitudinal accel (m/s²)" to "CAN longitudinal accel (n", losing the unit
+# it exists to carry. The caption under the pair (_CURVE_CAPTION_*) still spells
+# out "longitudinal acceleration", so the axis simply stops saying it twice.
 CAN_SPEED_TITLE = "CAN speed (km/h)"
 EGO_SPEED_TITLE = "ego speed (km/h)"
-CAN_ACCEL_TITLE = "CAN longitudinal accel (m/s²)"
+CAN_ACCEL_TITLE = "CAN accel (m/s²)"
 
 # The x axis is the nominal step label, so the caption is where the viewer learns
 # what a step is worth in seconds (~0.5 s between nuScenes keyframes) and where the

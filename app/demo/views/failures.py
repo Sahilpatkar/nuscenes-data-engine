@@ -43,6 +43,23 @@ _SORT_LABELS = {
     "Scene name": "scene_name",
 }
 
+# Short display names for the per-model n_preds CARDS only -- the model radio keeps
+# `filters.model_label`'s full, self-describing names, which it has the width for.
+# A card in the detail's 2/5 column does not: the two weak checkpoints, whose raw
+# names differ only by a trailing `_gt`, both truncated to the identical
+# "n_preds (weak_graph_rate..." and the reader could not tell the pseudo-labelled
+# run from its GT twin -- the very distinction the pair exists to show. A model that
+# is not listed keeps its raw name (short enough already: baseline, champion, ...).
+_N_PREDS_SHORT = {
+    "weak_graph_rate_night": "weak",
+    "weak_graph_rate_night_gt": "weak GT twin",
+}
+
+
+def _n_preds_label(model: str) -> str:
+    """The n_preds card's label for one model (see ``_N_PREDS_SHORT``)."""
+    return f"n_preds ({_N_PREDS_SHORT.get(model, model)})"
+
 
 def _models_from_gt(gt: pd.DataFrame) -> list[str]:
     return sorted(col.removeprefix("matched_") for col in gt.columns if col.startswith("matched_"))
@@ -182,7 +199,7 @@ def _render_detail(
         if manifest_models:
             _metric_rows(
                 [
-                    (f"n_preds ({other_model})", str(frame_row.get(f"n_preds_{other_model}")))
+                    (_n_preds_label(other_model), str(frame_row.get(f"n_preds_{other_model}")))
                     for other_model in manifest_models
                 ]
             )
