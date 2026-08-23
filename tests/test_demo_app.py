@@ -1211,6 +1211,140 @@ def test_failure_explorer_renders_grid_and_detail(
     assert not at.exception
 
 
+# --- Phase 9b (Task 3): the Failure Explorer as a visual hook ------------------------
+#
+# Spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec1: the page stops
+# reading as a filter dashboard with a grid. The model radio moves out of the sidebar
+# to sit beside the overlay it changes, the two "tuning" controls fold away into an
+# "Advanced filters" expander, and the detail comes FIRST -- auto-selected from the
+# sorted filtered set so the page never opens on a wall of thumbnails. Every string and
+# key the earlier phases pinned (asserted in the test above) survives verbatim.
+
+
+def test_failure_explorer_model_radio_sits_beside_the_image(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model choice is no longer a sidebar filter: it is instantiated in the detail
+    header, next to the overlay it changes, while ``render()`` reads the value out of
+    session state before filtering so the grid follows it on the rerun."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # The only radio left in the sidebar is the failure-type filter.
+    assert [r.key for r in at.sidebar.radio] == ["failure_type_select"]
+    model_radio = at.radio(key="failure_model")   # ... but the widget still exists
+    # AppTest reports the option list as the widget sends it (format_func applied).
+    # filters.model_label leaves any name it has no entry for untouched, so the
+    # fixture's two models read the same either way -- this pins the raw values the
+    # page filters on, not the champion/weak_* display labels.
+    assert model_radio.options == ["baseline", "graph_rate_night"]
+    assert model_radio.value == "baseline"
+
+    # The radio really drives the detail beside it: v0's per-box table is its 2 GT
+    # rows plus the selected model's claims -- baseline claims a1 only (3 rows),
+    # graph_rate_night claims a1 and a2 (4 rows).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 3
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 4
+
+
+def test_failure_explorer_advanced_filters_fold(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Curation bucket and Sort by fold into ``st.sidebar.expander("Advanced
+    filters")``; the primary condition filters keep the spec's order above it."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    folds = [e for e in at.sidebar.expander if e.label == "Advanced filters"]
+    assert len(folds) == 1
+    fold = folds[0]
+    assert fold.multiselect(key="failure_bucket_select").label == "Curation bucket"
+    assert fold.selectbox(key="failure_sort_select").label == "Sort by"
+
+    # AppTest walks into the expander and flattens it into the same document order,
+    # so this single list pins both the primary order and the fact that the two
+    # advanced controls come last (inside the fold) -- and that the model radio is
+    # not among them.
+    sidebar_widgets = [
+        node.label
+        for node in at.sidebar
+        if node.type in {"selectbox", "slider", "radio", "multiselect"}
+    ]
+    assert sidebar_widgets == [
+        "Lighting",
+        "Rain",
+        "Category",
+        "Size",
+        "Distance to ego (m)",
+        "Failure type",
+        "Curation bucket",
+        "Sort by",
+    ]
+
+
+def test_failure_explorer_auto_selects_the_first_frame(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The detail renders on the very first load -- no click needed -- for the first
+    frame of the sorted filtered set, saying so; an explicit View click (which writes
+    ``failure_token``) wins and drops the auto-selected note."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "Detail" in [str(s.value) for s in at.subheader]
+    assert len(at.image) > 0
+    assert any("auto-selected" in str(c.value) for c in at.caption)
+    # Not merely "some frame": the default sort is failure count, worst first, and
+    # under baseline v1 (2 FPs) outranks v0 (1 FN) -- so the auto-selected frame is
+    # v1. A page that just fell back to the manifest's first row would show v0.
+    assert {m.label: m.value for m in at.metric}["Scene"] == "scene-v1"
+
+    view_radio = at.radio(key="failure_view_mode")
+    assert view_radio.options == ["Overlay", "GT only", "Predictions only"]
+
+    per_box = [e for e in at.get("expander") if e.label == "Per-box detail"]
+    assert len(per_box) == 1
+    assert len(per_box[0].dataframe) == 1
+
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert {m.label: m.value for m in at.metric}["Scene"] == "scene-v0"
+    assert not any("auto-selected" in str(c.value) for c in at.caption)
+
+
+def test_failure_explorer_empty_filter_shows_no_detail(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detail-first must not mean "detail always": a filter combination that empties
+    the set still shows only the nudge -- no auto-selected frame, no per-box table."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    # Same combination the grid/detail test uses for the empty state:
+    # graph_rate_night has zero FN across both fixture frames.
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+
+    caption = next(str(c.value) for c in at.caption if "val frames" in str(c.value))
+    assert caption.startswith("0 / 2")
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
+    assert "Detail" not in [str(s.value) for s in at.subheader]
+    assert not any("auto-selected" in str(c.value) for c in at.caption)
+    assert len(at.dataframe) == 0
+    assert len(at.image) == 0
+
+
 def test_overview_hero_renders_overlay(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from filters import failure_counts, filter_frames, sort_frames, visible_gt_boxes
+from filters import (
+    failure_counts,
+    filter_frames,
+    model_label,
+    sort_frames,
+    visible_gt_boxes,
+)
 from PIL import Image
 from render import draw_overlay, loop_breadcrumb, provenance
 
@@ -58,6 +64,204 @@ def _frame_image_path(token: str) -> Path | None:
     return crop if crop.is_file() else None
 
 
+def _metric_rows(cards: list[tuple[str, str]], *, per_row: int = 2) -> None:
+    """Metric cards laid out ``per_row`` at a time.
+
+    The detail's right-hand column is 2/5 of the page (``st.columns([3, 2])``), so
+    one row of four cards -- or one card per model, five of them in the real package
+    -- squeezes every value into an unreadable sliver. Chunking keeps the same cards
+    in the same order at a width their values actually fit in.
+    """
+    for start in range(0, len(cards), per_row):
+        chunk = cards[start : start + per_row]
+        columns = st.columns(per_row)
+        # strict=False: the last chunk is short whenever len(cards) is not a multiple
+        # of per_row, and the leftover columns are simply left empty.
+        for column, (label, value) in zip(columns, chunk, strict=False):
+            column.metric(label, value)
+
+
+def _render_detail(
+    *,
+    token: str,
+    model: str,
+    gt_models: list[str],
+    manifest: pd.DataFrame,
+    val_manifest: pd.DataFrame,
+    gt: pd.DataFrame,
+    preds: pd.DataFrame,
+    auto_selected: bool,
+) -> None:
+    """The image-first detail block (Phase 9b spec sec1): the overlay and its
+    view-mode radio on the left, the model radio and everything the model changes on
+    the right, the per-box table folded away underneath.
+    """
+    st.subheader("Detail")
+    frame_row = val_manifest.loc[val_manifest["sample_data_token"] == token].iloc[0]
+    if auto_selected:
+        # Said out loud rather than left implicit: the page opens on a frame nobody
+        # picked, so it has to name which one and how to change it.
+        st.caption(
+            f"Showing {frame_row.get('scene_name', 'n/a')}, the first frame in the "
+            "current sort order — auto-selected — click View on another frame below "
+            "to change it."
+        )
+
+    gt_token = gt.loc[gt["sample_data_token"] == token]
+    preds_token = preds.loc[(preds["sample_data_token"] == token) & (preds["model"] == model)]
+
+    image_col, facts_col = st.columns([3, 2])
+    with image_col:
+        crop = crop_path(token)
+        if crop.is_file():
+            # The view-mode radio sits directly UNDER the image (spec sec1), but its
+            # value is what decides what the image shows -- so the image's slot is
+            # reserved first and filled once the radio has run. Reading the mode out
+            # of session state instead would put a second source of truth beside the
+            # widget for no layout gain.
+            image_slot = st.container()
+            mode_label = st.radio(
+                "View", list(_MODE_LABELS), horizontal=True, key="failure_view_mode"
+            )
+            gt_for_render = gt_token.rename(columns={f"matched_{model}": "matched"})
+            image = draw_overlay(
+                Image.open(crop),
+                gt_for_render,
+                preds_token,
+                mode=_MODE_LABELS[mode_label],
+                scale=0.6,
+            )
+            image_slot.image(image)
+            provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
+
+    with facts_col:
+        # The model radio lives here, beside the overlay it changes, instead of in
+        # the sidebar; render() has already read its value out of session state (see
+        # the comment there) so the grid and this panel agree on the same model.
+        st.radio(
+            "Model",
+            gt_models,
+            index=gt_models.index(model),
+            horizontal=True,
+            key="failure_model",
+            format_func=model_label,
+        )
+
+        # curation_buckets round-trips through parquet as a numpy array (pyarrow's
+        # list dtype), not a plain Python list -- `array or []` would raise
+        # ("truth value of an array with more than one element is ambiguous") for any
+        # frame in more than one bucket, so check emptiness by length, not truthiness.
+        frame_buckets = frame_row.get("curation_buckets")
+        frame_buckets_list = list(frame_buckets) if frame_buckets is not None else []
+        _metric_rows(
+            [
+                ("Scene", str(frame_row.get("scene_name", "n/a"))),
+                ("Night", "Yes" if frame_row.get("is_night") else "No"),
+                ("Rain", "Yes" if frame_row.get("is_rain") else "No"),
+                ("Buckets", ", ".join(frame_buckets_list) if frame_buckets_list else "none"),
+            ]
+        )
+
+        manifest_models = _models_from_manifest(manifest)
+        if manifest_models:
+            _metric_rows(
+                [
+                    (f"n_preds ({other_model})", str(frame_row.get(f"n_preds_{other_model}")))
+                    for other_model in manifest_models
+                ]
+            )
+
+        # fixes_fn_vs_<A>_<B> means "A missed this GT box, B caught it" (infer.py's
+        # fixes-loop: fn_a = ~gt_matched_by_model[A]; fixed = any(fn_a &
+        # gt_matched_by_model[B])). The selected model is credited as the FIXER (B),
+        # so the column to look up per candidate "other" model is
+        # fixes_fn_vs_{other}_{model} -- NOT fixes_fn_vs_{model}_{other}, which would
+        # instead ask "did the selected model miss something `other` caught" and
+        # credit the model that MISSED. The model list is taken from gt_models (the
+        # matched_<model> columns already discovered above), never parsed back out
+        # of a fixes_fn_vs_ column name: model names themselves contain underscores
+        # (e.g. "graph_rate_night"), so a fixes_fn_vs_baseline_graph_rate_night
+        # column name cannot be split unambiguously into its two model names.
+        fixers_of = []
+        for other in gt_models:
+            if other == model:
+                continue
+            fixed = frame_row.get(f"fixes_fn_vs_{other}_{model}")
+            if pd.notna(fixed) and bool(fixed):
+                fixers_of.append(other)
+        for other in fixers_of:
+            st.success(f"Exemplar: `{model}` catches a box `{other}` misses on this frame")
+
+        # Frequency context, shown regardless of whether THIS frame+model combo has
+        # a badge: fixes_fn_vs_ pairs are common across the curated set (97/125
+        # frames under some model selection in the real package) -- without this,
+        # the badge reads as a rare, special-case callout rather than the normal
+        # state of a multi-model comparison. "Any True per row" across every
+        # fixes_fn_vs_ column, not just the pair(s) involving the selected model:
+        # this is describing the exemplar-badge PANEL in general, not this frame's
+        # specific badge state.
+        fixes_cols = [c for c in manifest.columns if c.startswith("fixes_fn_vs_")]
+        if fixes_cols:
+            n_fix_pairs = int(val_manifest[fixes_cols].fillna(False).any(axis=1).sum())
+            st.caption(
+                f"Fix-pairs are common across the curated set ({n_fix_pairs} of "
+                f"{len(val_manifest)} val frames have at least one) — this panel "
+                "shows which models disagree on this frame."
+            )
+
+    with st.expander("Per-box detail"):
+        # NA-safe status label, mirroring render.py's draw_overlay: NA in
+        # matched_<model> means "not evaluated" and must read as neither a match nor
+        # a miss.
+        matched_series = gt_token[f"matched_{model}"]
+        gt_status = matched_series.map({True: "matched", False: "fn"}).fillna("not_evaluated")
+        # Explicit dtypes on the NA-filled columns (not a bare `pd.NA`/object-dtype
+        # broadcast): pandas emits a FutureWarning ("concatenation with empty or
+        # all-NA entries is deprecated") when concat has to guess the dtype of a
+        # column that's entirely NA in one frame — giving it the same dtype the
+        # OTHER frame's real values already have (float64 for conf/distance, object
+        # for size_bucket) sidesteps the guess entirely.
+        gt_table = gt_token.assign(
+            kind="gt",
+            conf=pd.Series([float("nan")] * len(gt_token), dtype="float64", index=gt_token.index),
+            status=gt_status,
+        )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
+        pred_table = preds_token.assign(
+            kind="pred",
+            distance_to_ego_m=pd.Series(
+                [float("nan")] * len(preds_token), dtype="float64", index=preds_token.index
+            ),
+            size_bucket=pd.Series(
+                [None] * len(preds_token), dtype="object", index=preds_token.index
+            ),
+        )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
+        st.dataframe(pd.concat([gt_table, pred_table], ignore_index=True))
+
+
+def _render_grid(frames: pd.DataFrame, counts: pd.DataFrame) -> None:
+    """The thumbnail grid under the detail: one View button per filtered frame,
+    writing the clicked token to ``st.session_state["failure_token"]``."""
+    # No pagination: the curated set tops out at 125 val frames today, which
+    # renders comfortably in one scroll. If that grows substantially, page
+    # `frames` here (e.g. st.session_state-backed offset + a fixed page size)
+    # before this loop rather than rendering the whole filtered set.
+    columns = st.columns(4)
+    for position, row in enumerate(frames.itertuples()):
+        token = row.sample_data_token
+        image_path = _frame_image_path(token)
+        n_fn, n_fp, n_low_conf = (
+            int(counts.loc[token, "n_fn"]),
+            int(counts.loc[token, "n_fp"]),
+            int(counts.loc[token, "n_low_conf"]),
+        )
+        with columns[position % 4]:
+            if image_path is not None:
+                st.image(str(image_path))
+            st.caption(f"{row.scene_name} · {n_fn}fn/{n_fp}fp/{n_low_conf}lowconf")
+            if st.button("View", key=f"failure_select_{token}"):
+                st.session_state["failure_token"] = token
+
+
 def render() -> None:
     st.title("Failure Explorer")
     loop_breadcrumb(["Diagnose"])
@@ -90,13 +294,26 @@ def render() -> None:
         st.warning("No per-model matched columns in gt_boxes — nothing to explore yet.")
         return
 
+    # Phase 9b (spec sec1): the model radio itself is instantiated down in the detail
+    # header, beside the overlay it changes -- but the filtering, the sort and the
+    # grid below all need the choice BEFORE that widget runs, so the value is READ
+    # out of session state here. Read, never written: assigning
+    # st.session_state["failure_model"] ourselves would make streamlit warn that a
+    # keyed widget's value was set through the Session State API while the widget
+    # also receives a default (`index=` below).
+    #
+    # The trade-off this accepts: a filter combination that matches nothing renders
+    # no detail, so the radio is not instantiated on that run and streamlit drops its
+    # widget state one rerun later -- the model falls back to the default until the
+    # filters are widened again. A shadow session key would avoid that at the cost of
+    # a second source of truth for the same choice, which is worse.
+    default_model = "baseline" if "baseline" in gt_models else gt_models[0]
+    model = str(st.session_state.get("failure_model", default_model))
+    if model not in gt_models:
+        # A choice left over from a package built with different models.
+        model = default_model
+
     st.sidebar.header("Filters")
-    default_index = gt_models.index("baseline") if "baseline" in gt_models else 0
-    # Explicit key: tests drive the model choice directly via
-    # at.radio(key="failure_model").set_value(...) rather than relying on
-    # streamlit's identity-derived default key, which isn't guaranteed stable
-    # across reruns for a plain positional call like this.
-    model = st.sidebar.radio("Model", gt_models, index=default_index, key="failure_model")
 
     lighting_label = st.sidebar.selectbox(
         "Lighting", _bool_options(val_manifest["is_night"], true_label="Night", false_label="Day")
@@ -148,15 +365,24 @@ def render() -> None:
     # legitimately excludes zero-GT frames (nothing there to match).
     distance_arg = None if distance_range == (min_dist, max_dist) else distance_range
 
-    # Explicit key (same rationale as the model radio above): tests need to
-    # drive this directly to exercise the empty-state path deterministically.
+    # Explicit key: tests need to drive this directly to exercise the empty-state
+    # path deterministically, rather than relying on streamlit's identity-derived
+    # default key (not guaranteed stable across reruns for a plain positional call).
     failure_label = st.sidebar.radio(
         "Failure type", list(_FAILURE_LABELS), key="failure_type_select"
     )
     failure_type = _FAILURE_LABELS[failure_label]
 
-    all_buckets = sorted({b for buckets in val_manifest["curation_buckets"] for b in buckets})
-    bucket_choice = st.sidebar.multiselect("Curation bucket", all_buckets)
+    # Phase 9b: the two controls that tune an already-narrowed set (rather than
+    # describing a driving condition) fold away, so the sidebar opens on the six
+    # condition filters alone. Sort by moves here out of the main column, where it
+    # used to sit between the match caption and the grid.
+    with st.sidebar.expander("Advanced filters"):
+        all_buckets = sorted({b for buckets in val_manifest["curation_buckets"] for b in buckets})
+        bucket_choice = st.multiselect(
+            "Curation bucket", all_buckets, key="failure_bucket_select"
+        )
+        sort_label = st.selectbox("Sort by", list(_SORT_LABELS), key="failure_sort_select")
 
     frames = filter_frames(
         manifest=manifest,
@@ -181,8 +407,8 @@ def render() -> None:
             "No frames match these filters — try relaxing one (the distance "
             "and failure-type filters narrow fastest)."
         )
+        return
 
-    sort_label = st.sidebar.selectbox("Sort by", list(_SORT_LABELS))
     frames = sort_frames(frames, gt=gt, preds=preds, model=model, key=_SORT_LABELS[sort_label])
 
     # One failure_counts call over every filtered token, not per-row inside the
@@ -193,128 +419,28 @@ def render() -> None:
         "sample_data_token"
     )
 
-    # No pagination: the curated set tops out at 125 val frames today, which
-    # renders comfortably in one scroll. If that grows substantially, page
-    # `frames` here (e.g. st.session_state-backed offset + a fixed page size)
-    # before this loop rather than rendering the whole filtered set.
-    columns = st.columns(4)
-    for position, row in enumerate(frames.itertuples()):
-        token = row.sample_data_token
-        image_path = _frame_image_path(token)
-        n_fn, n_fp, n_low_conf = (
-            int(counts.loc[token, "n_fn"]),
-            int(counts.loc[token, "n_fp"]),
-            int(counts.loc[token, "n_low_conf"]),
-        )
-        with columns[position % 4]:
-            if image_path is not None:
-                st.image(str(image_path))
-            st.caption(f"{row.scene_name} · {n_fn}fn/{n_fp}fp/{n_low_conf}lowconf")
-            if st.button("View", key=f"failure_select_{token}"):
-                st.session_state["failure_token"] = token
+    # Auto-select (spec sec1): the page is a hook, not a filter dashboard, so it
+    # opens on a frame instead of a wall of thumbnails. An explicit View click wins
+    # -- the stored token is only overridden once it falls out of the filtered set
+    # (a filter change that excludes it), never merely because the sort moved it.
+    sorted_tokens = list(frames["sample_data_token"])
+    stored_token = st.session_state.get("failure_token")
+    auto_selected = stored_token is None or stored_token not in set(sorted_tokens)
+    selected_token = sorted_tokens[0] if auto_selected else str(stored_token)
 
-    selected_token = st.session_state.get("failure_token")
-    if not selected_token or selected_token not in set(frames["sample_data_token"]):
-        return
+    _render_detail(
+        token=selected_token,
+        model=model,
+        gt_models=gt_models,
+        manifest=manifest,
+        val_manifest=val_manifest,
+        gt=gt,
+        preds=preds,
+        auto_selected=auto_selected,
+    )
 
     st.divider()
-    st.subheader("Detail")
-    frame_row = val_manifest.loc[val_manifest["sample_data_token"] == selected_token].iloc[0]
-    gt_token = gt.loc[gt["sample_data_token"] == selected_token]
-    preds_token = preds.loc[
-        (preds["sample_data_token"] == selected_token) & (preds["model"] == model)
-    ]
-
-    crop = crop_path(selected_token)
-    if crop.is_file():
-        mode_label = st.radio("View", list(_MODE_LABELS), horizontal=True)
-        gt_for_render = gt_token.rename(columns={f"matched_{model}": "matched"})
-        image = draw_overlay(
-            Image.open(crop), gt_for_render, preds_token, mode=_MODE_LABELS[mode_label], scale=0.6
-        )
-        st.image(image)
-        provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
-
-    meta_cols = st.columns(4)
-    meta_cols[0].metric("Scene", str(frame_row.get("scene_name", "n/a")))
-    meta_cols[1].metric("Night", "Yes" if frame_row.get("is_night") else "No")
-    meta_cols[2].metric("Rain", "Yes" if frame_row.get("is_rain") else "No")
-    # curation_buckets round-trips through parquet as a numpy array (pyarrow's
-    # list dtype), not a plain Python list -- `array or []` would raise
-    # ("truth value of an array with more than one element is ambiguous") for any
-    # frame in more than one bucket, so check emptiness by length, not truthiness.
-    frame_buckets = frame_row.get("curation_buckets")
-    frame_buckets_list = list(frame_buckets) if frame_buckets is not None else []
-    meta_cols[3].metric("Buckets", ", ".join(frame_buckets_list) if frame_buckets_list else "none")
-
-    manifest_models = _models_from_manifest(manifest)
-    if manifest_models:
-        pred_cols = st.columns(len(manifest_models))
-        for col, other_model in zip(pred_cols, manifest_models, strict=True):
-            col.metric(f"n_preds ({other_model})", str(frame_row.get(f"n_preds_{other_model}")))
-
-    # NA-safe status label, mirroring render.py's draw_overlay: NA in
-    # matched_<model> means "not evaluated" and must read as neither a match nor
-    # a miss.
-    matched_series = gt_token[f"matched_{model}"]
-    gt_status = matched_series.map({True: "matched", False: "fn"}).fillna("not_evaluated")
-    # Explicit dtypes on the NA-filled columns (not a bare `pd.NA`/object-dtype
-    # broadcast): pandas emits a FutureWarning ("concatenation with empty or
-    # all-NA entries is deprecated") when concat has to guess the dtype of a
-    # column that's entirely NA in one frame — giving it the same dtype the
-    # OTHER frame's real values already have (float64 for conf/distance, object
-    # for size_bucket) sidesteps the guess entirely.
-    gt_table = gt_token.assign(
-        kind="gt",
-        conf=pd.Series([float("nan")] * len(gt_token), dtype="float64", index=gt_token.index),
-        status=gt_status,
-    )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
-    pred_table = preds_token.assign(
-        kind="pred",
-        distance_to_ego_m=pd.Series(
-            [float("nan")] * len(preds_token), dtype="float64", index=preds_token.index
-        ),
-        size_bucket=pd.Series([None] * len(preds_token), dtype="object", index=preds_token.index),
-    )[["kind", "category_group", "conf", "status", "distance_to_ego_m", "size_bucket"]]
-    st.dataframe(pd.concat([gt_table, pred_table], ignore_index=True))
-
-    # fixes_fn_vs_<A>_<B> means "A missed this GT box, B caught it" (infer.py's
-    # fixes-loop: fn_a = ~gt_matched_by_model[A]; fixed = any(fn_a &
-    # gt_matched_by_model[B])). The selected model is credited as the FIXER (B),
-    # so the column to look up per candidate "other" model is
-    # fixes_fn_vs_{other}_{model} -- NOT fixes_fn_vs_{model}_{other}, which would
-    # instead ask "did the selected model miss something `other` caught" and
-    # credit the model that MISSED. The model list is taken from gt_models (the
-    # matched_<model> columns already discovered above), never parsed back out
-    # of a fixes_fn_vs_ column name: model names themselves contain underscores
-    # (e.g. "graph_rate_night"), so a fixes_fn_vs_baseline_graph_rate_night
-    # column name cannot be split unambiguously into its two model names.
-    fixers_of = []
-    for other in gt_models:
-        if other == model:
-            continue
-        fixed = frame_row.get(f"fixes_fn_vs_{other}_{model}")
-        if pd.notna(fixed) and bool(fixed):
-            fixers_of.append(other)
-    for other in fixers_of:
-        st.success(f"Exemplar: `{model}` catches a box `{other}` misses on this frame")
-
-    # Frequency context, shown regardless of whether THIS frame+model combo has
-    # a badge: fixes_fn_vs_ pairs are common across the curated set (97/125
-    # frames under some model selection in the real package) -- without this,
-    # the badge reads as a rare, special-case callout rather than the normal
-    # state of a multi-model comparison. "Any True per row" across every
-    # fixes_fn_vs_ column, not just the pair(s) involving the selected model:
-    # this is describing the exemplar-badge PANEL in general, not this frame's
-    # specific badge state.
-    fixes_cols = [c for c in manifest.columns if c.startswith("fixes_fn_vs_")]
-    if fixes_cols:
-        n_fix_pairs = int(val_manifest[fixes_cols].fillna(False).any(axis=1).sum())
-        st.caption(
-            f"Fix-pairs are common across the curated set ({n_fix_pairs} of "
-            f"{len(val_manifest)} val frames have at least one) — this panel "
-            "shows which models disagree on this frame."
-        )
+    _render_grid(frames, counts)
 
     st.caption(
         "FN = GT unmatched by the selected model; low-confidence claims count as "
