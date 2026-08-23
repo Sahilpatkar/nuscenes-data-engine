@@ -507,7 +507,17 @@ _FIXED_BOX_COLUMNS = [
 # MODEL-SIZE champion from the Phase-3 comparison, NOT an active-learning arm and
 # not the best AL result (that is `graph`, +0.0344 overall). Labelling it plainly
 # wherever it appears keeps the two kinds of "winner" apart on screen.
-_MODEL_LABELS = {"champion": "champion (yolov8m @960)"}
+#
+# Phase 9b adds the two weak-supervision checkpoints, whose raw names differ only by
+# a trailing `_gt` -- the very distinction that pairing exists to show. Each label
+# says what the checkpoint was trained on (VLM pseudo labels vs the human-labelled
+# control over the same frames) so neither can be mistaken for the other, or for the
+# larger `champion`.
+_MODEL_LABELS = {
+    "champion": "champion (yolov8m @960)",
+    "weak_graph_rate_night": "weak_graph_rate_night (pseudo labels, yolov8n)",
+    "weak_graph_rate_night_gt": "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+}
 
 
 def model_label(model: str) -> str:

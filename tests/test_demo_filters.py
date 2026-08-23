@@ -905,6 +905,21 @@ def test_model_label_names_the_champion_checkpoint_honestly() -> None:
     assert model_label("graph_rate_night") == "graph_rate_night"
 
 
+def test_model_label_distinguishes_the_two_weak_supervision_arms() -> None:
+    """Phase 9b puts both weak-supervision checkpoints on screen at once, and their
+    raw names differ by a bare ``_gt`` suffix -- which is precisely the distinction
+    the page exists to make. Each carries what it was trained on (pseudo labels vs
+    the human-labelled control) and the architecture, so the two are never confused
+    for one another, nor for the yolov8m ``champion``."""
+    assert model_label("weak_graph_rate_night") == (
+        "weak_graph_rate_night (pseudo labels, yolov8n)"
+    )
+    assert model_label("weak_graph_rate_night_gt") == (
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)"
+    )
+    assert model_label("some_unlabelled_model") == "some_unlabelled_model"
+
+
 # --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
 
 
