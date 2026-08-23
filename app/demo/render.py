@@ -421,7 +421,6 @@ def line_chart(
     selected: str | None = None,
     zero_line: bool = False,
     height: int = 160,
-    title: str = "",
 ) -> alt.LayerChart:
     """A small line chart of ``y`` over an ORDERED categorical ``x`` -- the event
     viewer's CAN speed/accel over the filmstrip's five keyframe steps.
@@ -444,6 +443,11 @@ def line_chart(
     Streamlit's own Vega theme would otherwise thin them. The return type is always
     a LayerChart -- ``st.altair_chart`` takes either kind, and a single, stable type
     keeps the caller from branching on how many rules it asked for.
+
+    There is deliberately no ``title``: what these two charts ARE is said by
+    ``y_title`` (which carries the unit) and by ``curve_caption`` under the pair --
+    a chart heading on top of those would be a third place to keep in sync (item
+    M11, Phase 9b consolidated review, where the parameter had no caller at all).
     """
     if selected is not None and selected not in order:
         raise ValueError(
@@ -479,10 +483,7 @@ def line_chart(
         )
     # alt.layer is typed as LayerChart | FacetChart (it facets only when given a
     # facet spec, which this never does) -- same cast bar_chart's zero rule uses.
-    properties: dict[str, Any] = {"height": height}
-    if title:
-        properties["title"] = title
-    return cast("alt.LayerChart", alt.layer(*layers)).properties(**properties)
+    return cast("alt.LayerChart", alt.layer(*layers)).properties(height=height)
 
 
 # --- Phase 9b (Task 4): the event's step curve, drawn the same way twice ----------

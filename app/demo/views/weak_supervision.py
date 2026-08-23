@@ -431,7 +431,12 @@ def _render_result_row(
         f"`{token}` ({row.get('scene_name')}) is a held-out val frame — neither "
         "detector saw it in training."
     )
+    # BOTH lines, the way row 1 states its own (item M1, Phase 9b consolidated
+    # review): the boxes are a recorded offline inference run, and the three
+    # overlays over them are drawn here, in this app, from the package's tables.
+    # Stating only the first left the drawing unattributed.
     provenance("recorded", "demo infer, CPU, checkpoint of the training run")
+    provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
 
     # The radio credits a detector, and the table under it lists what that detector
     # claims and the other one does not (fixed_boxes' upgrade rule). It opens on the
@@ -606,9 +611,18 @@ def _render_count_buckets(buckets: pd.DataFrame) -> None:
         f"{bucket} → {int(n):,}"
         for bucket, n in zip(ordered["bucket"], ordered["n"], strict=True)
     )
+    # "ten", not "five" (item I1, Phase 9b consolidated review): eval_count_buckets
+    # pools every one of autolabel.schema.COUNT_FIELDS -- cars, trucks, buses,
+    # trailers, construction vehicles, motorcycles, bicycles, pedestrians, traffic
+    # cones, barriers -- which is why the real package's n sums to 49,860 = 4,986
+    # parsed frames x 10. The five-class count-vote table further up the page is a
+    # DIFFERENT set (the detector's classes), and the caption said "five" in a way
+    # that invited the reader to equate the two.
     st.caption(
-        f"n = frame-class pairs: {pairs}. The five classes are pooled, so a bucket "
-        f"counts (frame, class) entries rather than frames. VLM: {model}."
+        f"n = frame-class pairs: {pairs}. All ten count fields the VLM was asked "
+        f"for are pooled here — more than the five detector classes in the "
+        f"count-vote table above — so a bucket counts (frame, class) entries "
+        f"rather than frames. VLM: {model}."
     )
     provenance(
         "recorded",

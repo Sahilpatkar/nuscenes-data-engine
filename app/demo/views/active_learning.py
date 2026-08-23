@@ -33,6 +33,7 @@ from filters import (
     frame_quota_before,
     gt_for_render,
     model_label,
+    quota_column_pair,
     reason_chips,
     selection_factors,
     strategy_coverage,
@@ -104,7 +105,7 @@ _STRATEGIES = {
 _STRATEGY_NOTES = {
     "random": "draws frames uniformly at random from the unlabelled pool.",
     "mined": (
-        "takes the unlabelled frames nearest the failing ones in embedding space."
+        "takes the unlabelled frames nearest the failure clusters in embedding space."
     ),
     "graph_rate_night": (
         "scores communities of visually similar pool frames by the failure mass "
@@ -292,11 +293,21 @@ def _best_night_arm(arms: pd.DataFrame) -> str | None:
 
 def _strategy_triple(row: pd.Series) -> str:
     """One strategy's (scenes, night share, night delta), each rendered as "n/a"
-    when this package doesn't carry it."""
-    scenes = "n/a" if pd.isna(row["n_scenes"]) else f"{int(row['n_scenes']):,}"
+    when this package doesn't carry it.
+
+    The noun agrees with the count (item M8, Phase 9b consolidated review): a
+    one-scene arm read "1 scenes". "n/a scenes" keeps the plural -- there is no
+    count to agree with.
+    """
+    n_scenes = None if pd.isna(row["n_scenes"]) else int(row["n_scenes"])
+    scenes = (
+        "n/a scenes"
+        if n_scenes is None
+        else f"{n_scenes:,} scene{'' if n_scenes == 1 else 's'}"
+    )
     night = "n/a" if pd.isna(row["night_share"]) else f"{float(row['night_share']):.0%}"
     delta = "n/a" if pd.isna(row["delta_night"]) else f"{float(row['delta_night']):+.4f}"
-    return f"{row['strategy']}: {scenes} scenes · {night} night · {delta}"
+    return f"{row['strategy']}: {scenes} · {night} night · {delta}"
 
 
 def _strategy_lesson(coverage: pd.DataFrame, arms: pd.DataFrame) -> str:
@@ -436,21 +447,18 @@ def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
 def _render_community_section(communities: pd.DataFrame, *, arm: str) -> None:
     """(c) Community mass -> quota, and what the night floor changed."""
     st.subheader(f"How `{arm}` chooses: community mass → quota")
-    if communities.empty:
+    # ONE derivation of the (after, before) quota pair, shared with
+    # filters.frame_quota_before -- which puts this same jump on a reason chip, and
+    # derived the pair itself until item M4 of the Phase 9b consolidated review. The
+    # helper's own docstring carries the rules (empty table / no column for this arm
+    # -> None, i.e. a stale package for this section; a `before` of None when the
+    # package exported only one arm's quota, in which case the paired comparison
+    # below simply isn't drawn rather than charting a column against itself).
+    pair = quota_column_pair(communities, arm=arm)
+    if pair is None:
         st.info(_STALE_PACKAGE_NOTE)
         return
-
-    after = f"quota_{arm}"
-    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
-    if after not in quota_columns:
-        st.info(_STALE_PACKAGE_NOTE)
-        return
-    # The other arm's quota over the SAME communities -- the run's own control for
-    # "what did the night floor change?", since the two allocations differ in
-    # nothing else. None when this package only exported one arm's quota, in which
-    # case the paired comparison below simply isn't drawn (there is nothing to
-    # compare) rather than charting one column against itself.
-    before = next((c for c in quota_columns if c != after), None)
+    after, before = pair
 
     # The -1 backfill sentinel is a bucket for frames drawn from outside every
     # community, not a community: charting it as one would put a mass-0 outlier on

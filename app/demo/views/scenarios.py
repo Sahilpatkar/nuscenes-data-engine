@@ -176,10 +176,16 @@ _GRAPH_LEGEND = (
 )
 # Phase 9b (Task 5): one more line under the (unchanged) legend, for the two states
 # only the reveal can produce.
+#
+# The second sentence states the CONSTANT NODE SET, which is this panel's own
+# doing, and stops there (item I4, Phase 9b consolidated review): it used to promise
+# "so the layout does not jump as you reveal it", a claim about how the browser's
+# force layout behaves that nothing here verifies -- agraph re-solves the physics on
+# every render.
 _GRAPH_REVEAL_LEGEND = (
     "Amber = revealed up to the slider's step; hollow = on the matched path but not "
-    "revealed yet. Every path node stays drawn at every step, so the layout does "
-    "not jump as you reveal it."
+    "revealed yet. Every path node stays drawn at every step — only its colour "
+    "changes."
 )
 # The detail column's own caption under the step facts: the export has no CAN node
 # of its own, so this says where the two CAN readings actually live rather than
@@ -689,7 +695,28 @@ def _model_result(row: pd.Series) -> str:
     return f"{count} pred{'' if count == 1 else 's'} ({_MODEL_FOR_RESULTS})"
 
 
-def _render_metric_row(row: pd.Series, preset: _Preset, curve: FilmstripCurve) -> None:
+# Which VRU the distance card names, per preset (item M2, Phase 9b consolidated
+# review: the row showed the PEDESTRIAN distance under every preset, including the
+# one whose whole subject is a cyclist). The card SWITCHES -- the row stays six
+# cards -- because a second distance card would be an empty figure on five of the
+# six presets. rain_vru keeps the pedestrian card: its own ranking quantity is the
+# nearer of the two VRUs, and that figure is already the card-grid caption.
+_VRU_DISTANCE_CARDS: dict[str, tuple[str, str]] = {
+    "fast_cyclists": ("Min cyclist dist", "min_dist_cyclist_m"),
+}
+_DEFAULT_VRU_DISTANCE_CARD = ("Min ped dist", "min_dist_pedestrian_m")
+
+# The "Model result" card's VALUE when the frame has no model figure, short enough
+# to survive as one of six st.metric values (item M3: the full _NOT_CURATED_CAPTION
+# sentence is 33 characters and truncates in a sixth-width card -- and this is the
+# flagship preset's own default state). The sentence itself is the caption under the
+# row, so the page still says it in full.
+_NOT_CURATED_VALUE = "not curated"
+
+
+def _render_metric_row(
+    row: pd.Series, preset: _Preset, preset_name: str, curve: FilmstripCurve
+) -> None:
     """One row of six cards -- the ego-dynamics, scene-context and model panels'
     figures merged so the viewer fits on one screen (spec sec2).
 
@@ -701,10 +728,20 @@ def _render_metric_row(row: pd.Series, preset: _Preset, curve: FilmstripCurve) -
     negative reading -- 27 of the 126 shipped events are accelerating at that
     sample, and calling that a deceleration figure misread the frame (item 1,
     Phase-5 consolidated review; the sign-neutral name now covers both).
+
+    The VRU distance card follows ``preset_name`` (``_VRU_DISTANCE_CARDS``), and the
+    model card's value is short with the full sentence as a caption under the row
+    (``_NOT_CURATED_VALUE``) -- items M2 and M3 of the Phase 9b consolidated review.
     """
     current = next((step for step in curve.steps if step.is_current), None)
     speed = current.can_speed_kmh if current is not None else None
     accel = row.accel_long_min_mps2
+    vru_label, vru_column = _VRU_DISTANCE_CARDS.get(
+        preset_name, _DEFAULT_VRU_DISTANCE_CARD
+    )
+    vru_distance = row.get(vru_column)
+    result = _model_result(row)
+    not_curated = result == _NOT_CURATED_CAPTION
     lighting = " · ".join([
         "night" if row.is_night else "day", *(["rain"] if row.is_rain else [])
     ])
@@ -716,29 +753,34 @@ def _render_metric_row(row: pd.Series, preset: _Preset, curve: FilmstripCurve) -
             ),
             ("Min long. accel", f"{accel:.2f} m/s²" if pd.notna(accel) else "n/a"),
             (
-                "Min ped dist",
-                f"{row.min_dist_pedestrian_m:.1f} m"
-                if pd.notna(row.min_dist_pedestrian_m)
-                else "n/a",
+                vru_label,
+                f"{vru_distance:.1f} m" if pd.notna(vru_distance) else "n/a",
             ),
             (
                 "Peds within 10m",
                 str(int(row.n_peds_within_10m)) if pd.notna(row.n_peds_within_10m) else "0",
             ),
             ("Lighting / rain", lighting),
-            ("Model result", _model_result(row)),
+            ("Model result", _NOT_CURATED_VALUE if not_curated else result),
         ],
         per_row=6,
     )
+    if not_curated:
+        st.caption(_NOT_CURATED_CAPTION)
     if preset["family"] == "model" and preset["verdict"]:
         st.caption(preset["verdict"])
 
 
 def _step_speed_mps(row: pd.Series, step: FilmstripStep) -> float:
-    """One step's GT ego-pose speed in m/s -- the filmstrip READOUT's own unit
-    since Phase 5, deliberately left as it is while the curve above plots CAN speed
-    in km/h: the readout answers "how fast at this step" in the unit the rest of
-    the page's speed captions use (``filters.speed_caption``)."""
+    """One step's GT EGO-POSE speed in m/s -- a different reading, in a different
+    unit, from the CAN speed the curve and the metric card above show.
+
+    Both are kept: the readout answers "how fast at this step" in the unit the rest
+    of the page's speed captions use (``filters.speed_caption``), while the card and
+    the curve are the CAN bus. They can differ by ~25 % on the same keyframe, so the
+    readout NAMES its source (item I3, Phase 9b consolidated review) -- unlabelled,
+    the two figures read as one page contradicting itself.
+    """
     column = _STEP_COLUMNS.get(step.label)
     value = row.speed_mps if column is None else getattr(row, f"speed_{column}")
     return float(value) if pd.notna(value) else float("nan")
@@ -777,10 +819,13 @@ def _render_filmstrip(row: pd.Series, curve: FilmstripCurve) -> None:
             st.caption(f"{step.label}{marker}")
 
     selected_step = next(step for step in steps if step.label == selected_label)
+    # "ego", so this m/s figure cannot be mistaken for the CAN km/h one on the card
+    # above it (see _step_speed_mps). speed_caption itself is unchanged -- it is the
+    # same "N.N m/s" every other ego-speed caption on the page uses.
     speed_text = speed_caption(_step_speed_mps(row, selected_step))
     accel = selected_step.accel_mps2
     accel_text = f"{accel:.2f} m/s²" if accel is not None else "n/a"
-    st.caption(f"{selected_label}: {speed_text}, accel {accel_text}")
+    st.caption(f"{selected_label}: ego {speed_text}, accel {accel_text}")
 
 
 def _render_semantic_gallery() -> None:
@@ -869,7 +914,7 @@ def render() -> None:
             _render_viewer(row)
         with curve_column:
             _render_curves(curve, selected_step)
-        _render_metric_row(row, preset, curve)
+        _render_metric_row(row, preset, preset_name, curve)
         _render_filmstrip(row, curve)
         # Phase-6 slot (item 11, consolidated review): implemented -- the
         # interactive subgraph panel (Task 3).

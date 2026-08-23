@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -510,6 +511,41 @@ def _lighting_fact(is_night: Any) -> str:
     return _NA_TEXT if _is_missing(is_night) else ("night" if bool(is_night) else "day")
 
 
+def _timestamp_fact(value: Any) -> str:
+    """A keyframe's ``timestamp`` meta as a readable UTC instant (item M10, Phase 9b
+    consolidated review). nuScenes writes it as MICROSECONDS since the epoch, so the
+    raw 1533151603547590 the export carries is not a fact anyone can read off the
+    panel. A value that is not a number falls back to its own text rather than being
+    forced through a conversion that would invent a date.
+    """
+    micros = _numeric(value)
+    if micros is None:
+        return _text_fact(value)
+    return datetime.fromtimestamp(micros / 1_000_000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+# nuScenes' four visibility levels (the fraction of a box visible across all six
+# cameras), from the dataset's own visibility.json. The export carries the TOKEN
+# ("1".."4"), which says nothing on its own -- the panel shows the band with it.
+_VISIBILITY_BANDS = {
+    "1": "0-40 % visible",
+    "2": "40-60 % visible",
+    "3": "60-80 % visible",
+    "4": "80-100 % visible",
+}
+
+
+def _visibility_fact(value: Any) -> str:
+    """One object's visibility token with the band it stands for ("4 (80-100 %
+    visible)"). A token outside nuScenes' four levels -- and a missing one, which
+    ``_text_fact`` already reads as "n/a" -- is shown exactly as it came, never
+    given a band it does not have.
+    """
+    token = _text_fact(value)
+    band = _VISIBILITY_BANDS.get(token)
+    return token if band is None else f"{token} ({band})"
+
+
 def _object_step_name(meta: Mapping[str, Any]) -> str:
     """An ObjectObservation's display name: its taxonomy GROUP ("pedestrian" ->
     "Pedestrian"), falling back to the category's own tail when the export carried
@@ -601,7 +637,7 @@ def path_steps(event: Mapping[str, Any]) -> list[PathStep]:
             "Keyframe",
             (sample_id,),
             (
-                ("Timestamp", _text_fact(meta.get("timestamp"))),
+                ("Timestamp", _timestamp_fact(meta.get("timestamp"))),
                 ("Lighting", _lighting_fact(meta.get("is_night"))),
                 ("Rain", _flag_fact(meta.get("is_rain"))),
             ),
@@ -622,7 +658,7 @@ def path_steps(event: Mapping[str, Any]) -> list[PathStep]:
             (
                 ("Category", _text_fact(meta.get("category"))),
                 ("Distance to ego", _NA_TEXT if distance is None else f"{distance:.1f} m"),
-                ("Visibility", _text_fact(meta.get("visibility"))),
+                ("Visibility", _visibility_fact(meta.get("visibility"))),
             ),
         ))
 
@@ -1042,6 +1078,33 @@ def strategy_coverage(
     })
 
 
+def quota_column_pair(
+    communities: pd.DataFrame, *, arm: str
+) -> tuple[str, str | None] | None:
+    """``al_communities``'s ``(after, before)`` quota columns for ``arm``: the arm's
+    own ``quota_<arm>`` and the OTHER arm's over the same communities -- the run's
+    control for "what did the night floor change?", since the two allocations differ
+    in nothing else.
+
+    ``None`` when the table is empty or carries no quota column for this arm at all
+    (a stale package for the pages that ask); ``(after, None)`` when it exported
+    only this arm's quota, in which case there is nothing to compare and the paired
+    chart/chip is simply not drawn rather than charting a column against itself.
+
+    ONE derivation, two callers (item M4, Phase 9b consolidated review): the Active
+    Learning page's community caption ("quota 83 → 323") and ``frame_quota_before``,
+    which puts the same jump on a reason chip. They each derived this pair before,
+    so a change to either could have drifted the two apart silently.
+    """
+    if communities.empty:
+        return None
+    after = f"quota_{arm}"
+    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
+    if after not in quota_columns:
+        return None
+    return after, next((c for c in quota_columns if c != after), None)
+
+
 def frame_quota_before(
     communities: pd.DataFrame, row: Mapping[str, Any], *, arm: str
 ) -> int | None:
@@ -1058,13 +1121,10 @@ def frame_quota_before(
     ``None`` also when the table is empty, when this package exported only one
     arm's quota (nothing to compare), or when no community is all-night.
     """
-    if communities.empty:
+    pair = quota_column_pair(communities, arm=arm)
+    if pair is None:
         return None
-    after = f"quota_{arm}"
-    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
-    if after not in quota_columns:
-        return None
-    before = next((c for c in quota_columns if c != after), None)
+    after, before = pair
     if before is None:
         return None
     jump = community_jump(communities, before=before, after=after)
@@ -1125,7 +1185,12 @@ def reason_chips(
     every chip of every branch).
     """
     chips: list[str] = []
-    if bool(row.get("is_night")):
+    # _is_missing, not a bare bool(): is_night is a nullable-boolean column and
+    # bool(pd.NA) RAISES (item M7, Phase 9b consolidated review). A frame whose
+    # lighting the package never recorded is not a night frame -- it gets no chip,
+    # the same reading _lighting_fact and visible_gt already take on an NA flag.
+    is_night = row.get("is_night")
+    if not _is_missing(is_night) and bool(is_night):
         chips.append("night")
     pedestrians = _pedestrian_gt_chip(gt_rows)
     if pedestrians is not None:

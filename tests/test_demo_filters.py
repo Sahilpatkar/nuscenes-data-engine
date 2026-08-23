@@ -35,6 +35,7 @@ from filters import (  # noqa: E402
     parity_caption,
     parity_short,
     path_steps,
+    quota_column_pair,
     rank_events,
     reason_chips,
     replay_tool_counts,
@@ -723,14 +724,14 @@ def test_path_steps_facts_are_read_from_the_nodes_own_meta() -> None:
         ("Rain", "no"),
     )
     assert keyframe.facts == (
-        ("Timestamp", "1533151603547590"),
+        ("Timestamp", "2018-08-01 19:26:43 UTC"),
         ("Lighting", "night"),
         ("Rain", "no"),
     )
     assert pedestrian.facts == (
         ("Category", "human.pedestrian.adult"),
         ("Distance to ego", "2.1 m"),
-        ("Visibility", "4"),
+        ("Visibility", "4 (80-100 % visible)"),
     )
     assert car.facts[1] == ("Distance to ego", "7.5 m")
     # The CAN reading and the braking flag are properties of the EgoPose node --
@@ -743,6 +744,28 @@ def test_path_steps_facts_are_read_from_the_nodes_own_meta() -> None:
         ("Min longitudinal accel", "-4.46 m/s²"),
         ("Hard braking", "yes"),
     )
+
+
+def test_path_steps_render_the_timestamp_and_the_visibility_level_readably() -> None:
+    """Item M10, Phase 9b consolidated review: the raw meta is a MICROSECOND epoch
+    and a bare nuScenes visibility token -- neither is a fact to a reader who does
+    not know the schema. The keyframe's timestamp reads as a UTC instant and the
+    visibility token carries the band it stands for (nuScenes' own levels: 1 =
+    0-40 %, 2 = 40-60 %, 3 = 60-80 %, 4 = 80-100 % visible).
+    """
+    _scene, keyframe, pedestrian, car, _ego = path_steps(_path_event())
+    assert keyframe.facts[0] == ("Timestamp", "2018-08-01 19:26:43 UTC")
+    assert pedestrian.facts[2] == ("Visibility", "4 (80-100 % visible)")
+    assert car.facts[2] == ("Visibility", "3 (60-80 % visible)")
+
+
+def test_path_steps_keep_a_visibility_token_they_have_no_band_for() -> None:
+    """A token outside nuScenes' four levels is shown exactly as the export wrote
+    it -- inventing a band for it would be a claim the package never made."""
+    event = _path_event()
+    pedestrian_node = next(node for node in event["nodes"] if node["id"] == "object:ped")
+    pedestrian_node["meta"]["visibility"] = "9"
+    assert path_steps(event)[2].facts[2] == ("Visibility", "9")
 
 
 def test_path_steps_without_a_path_is_empty_not_an_exception() -> None:
@@ -770,7 +793,7 @@ def test_path_steps_missing_distance_sorts_last_and_reads_n_a() -> None:
         assert steps[3].facts == (
             ("Category", "vehicle.car"),
             ("Distance to ego", "n/a"),
-            ("Visibility", "3"),
+            ("Visibility", "3 (60-80 % visible)"),
         )
 
 
@@ -819,7 +842,9 @@ def test_path_steps_without_the_backbone_chain_keeps_the_object_story() -> None:
     steps = path_steps(event)
     assert [step.label for step in steps] == ["1 · Keyframe", "2 · Pedestrian · 2.1 m"]
     assert steps[0].node_ids == ("sample:sa1",)
-    assert steps[0].facts == (("Timestamp", "1533151603547590"), ("Lighting", "n/a"), ("Rain", "n/a"))
+    assert steps[0].facts == (
+        ("Timestamp", "2018-08-01 19:26:43 UTC"), ("Lighting", "n/a"), ("Rain", "n/a")
+    )
 
 
 def test_path_steps_reads_n_a_for_meta_the_export_did_not_carry() -> None:
@@ -1409,6 +1434,45 @@ def test_no_reason_chip_ever_says_rate() -> None:
 
     assert all(chips for chips in cases)
     assert all("rate" not in chip for chips in cases for chip in chips)
+
+
+def test_reason_chips_survive_a_night_flag_the_package_left_na() -> None:
+    """Item M7, Phase 9b consolidated review: ``is_night`` is a nullable-boolean
+    column and ``bool(pd.NA)`` RAISES -- the chip row blew up on a frame whose
+    lighting the package never recorded. NA is not a night frame (the same reading
+    ``_lighting_fact`` and ``visible_gt`` already take), so it draws no chip and the
+    row's other facts still render.
+    """
+    for missing in (pd.NA, None, float("nan")):
+        chips = reason_chips(
+            {**_reason_row(), "is_night": missing},
+            _reason_gt("pedestrian"), n_communities=2, night_floor=1,
+        )
+        assert "night" not in chips
+        assert chips   # every other recorded fact is still a chip
+
+    assert "night" in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    )
+
+
+def test_quota_column_pair_is_the_one_derivation_the_chip_and_the_caption_share() -> None:
+    """Item M4: the Active Learning caption ("quota 83 -> 323") and the reason chip
+    that repeats the same jump each derived their (after, before) quota columns, so
+    a change to either could silently have drifted them apart. Both read this."""
+    communities = _communities()
+    assert quota_column_pair(communities, arm="graph_rate_night") == (
+        "quota_graph_rate_night",
+        "quota_graph_rate",
+    )
+    # One arm's quota exported -- the column exists, but there is nothing to
+    # compare it against, so the paired chart/chip simply isn't drawn.
+    assert quota_column_pair(
+        communities.drop(columns=["quota_graph_rate"]), arm="graph_rate_night"
+    ) == ("quota_graph_rate_night", None)
+    # No quota column for this arm at all: a stale package for this page.
+    assert quota_column_pair(communities, arm="an_arm_with_no_quota_column") is None
+    assert quota_column_pair(communities.iloc[:0], arm="graph_rate_night") is None
 
 
 def test_frame_quota_before_only_speaks_for_the_frames_own_community() -> None:

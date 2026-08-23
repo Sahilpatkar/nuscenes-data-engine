@@ -1559,6 +1559,43 @@ def test_failure_explorer_empty_filter_shows_no_detail(
     assert len(at.image) == 0
 
 
+def test_failure_explorer_keeps_the_model_choice_across_an_empty_filter(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M6, Phase 9b consolidated review: a filter combination that matches
+    nothing renders no detail, so the model radio is never instantiated on that run
+    and streamlit drops its widget state -- the page silently fell back to
+    `baseline` once the filters were widened again, discarding a choice the viewer
+    made and never told them.
+
+    The choice is now shadow-persisted in a key no widget owns, so the round trip
+    (choose -> empty -> widen) comes back to the model the viewer picked.
+    """
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert at.radio(key="failure_model").value == "graph_rate_night"
+
+    # graph_rate_night has zero FN across both fixture frames -- the same empty
+    # combination the two tests above use.
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
+
+    at.radio(key="failure_type_select").set_value("All").run(timeout=30)
+    assert not at.exception
+    assert at.radio(key="failure_model").value == "graph_rate_night"
+    # ... and the choice really is driving the detail again: v0's per-box table is
+    # its 2 GT rows plus graph_rate_night's two claims (baseline claims a1 alone).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 4
+
+
 def test_overview_hero_renders_overlay(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1578,7 +1615,7 @@ def test_overview_hero_renders_overlay(
     # substring unique to the corrected caption so a regression to the fallback
     # (or a wrong caption) fails loudly instead of silently matching either path.
     hero_captions = [caption for img in at.image for caption in img.captions]
-    assert any("defeats all three models" in caption for caption in hero_captions)
+    assert any("defeats all five models" in caption for caption in hero_captions)
 
 
 def test_overview_hero_overlay_keeps_a_gt_box_whose_visibility_flag_is_na(
@@ -1762,10 +1799,71 @@ def test_scenario_filmstrip_slider_changes_readout(
     assert set(slider.options) == {"current", "t+1"}
 
     before_captions = [str(c.value) for c in at.caption]
+    # Item I3, Phase 9b consolidated review: the readout is the GT EGO-POSE speed in
+    # m/s while the metric card above it is the CAN speed in km/h -- the same
+    # keyframe, ~25 % apart. Both are labelled now, so the two figures cannot read
+    # as one contradicting itself.
+    assert any(
+        caption.startswith("current: ego ") and ", accel " in caption
+        for caption in before_captions
+    ), before_captions
     slider.set_value("t+1").run(timeout=30)
     assert not at.exception
     after_captions = [str(c.value) for c in at.caption]
     assert before_captions != after_captions   # the speed/accel readout changed
+    assert any(caption.startswith("t+1: ego ") for caption in after_captions)
+
+
+@pytest.fixture()
+def built_demo_data_with_a_fast_cyclist(built_demo_data: Path) -> Path:
+    """The flagship event, additionally tagged as a ``fast_cyclists`` hit with a
+    cyclist distance of its own.
+
+    Four of the six presets have no event at all in this tiny package, so the
+    preset whose VRU card differs from every other one's is staged on the built
+    package -- the same edit-the-built-package idiom
+    ``built_demo_data_without_can_speed`` uses.
+    """
+    path = built_demo_data / "scenario_events.parquet"
+    events = pd.read_parquet(path)
+    hit = events["sample_data_token"] == "s1"
+    events.loc[hit, "preset_rank_fast_cyclists"] = 1
+    events.loc[hit, "min_dist_cyclist_m"] = 4.3
+    events.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_scenario_metric_row_names_the_vru_the_preset_is_about(
+    built_demo_data_with_a_fast_cyclist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M2, Phase 9b consolidated review: the merged metric row showed the
+    PEDESTRIAN distance under every preset, including the one whose whole subject is
+    a cyclist. The distance card switches with the preset (it does not duplicate --
+    the row stays six cards), so a fast_cyclists event reads its own VRU's distance.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data_with_a_fast_cyclist, monkeypatch)
+
+    at.session_state["scenario_preset"] = "fast_cyclists"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert len(at.metric) == 6
+    labels = [str(m.label) for m in at.metric]
+    assert labels == [
+        "CAN speed", "Min long. accel", "Min cyclist dist", "Peds within 10m",
+        "Lighting / rain", "Model result",
+    ]
+    assert {str(m.label): str(m.value) for m in at.metric}["Min cyclist dist"] == "4.3 m"
+
+    # Every other preset keeps the pedestrian distance -- the same six cards.
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.metric) == 6
+    assert "Min ped dist" in [str(m.label) for m in at.metric]
+    assert "Min cyclist dist" not in [str(m.label) for m in at.metric]
 
 
 def test_scenario_flagship_badge(
@@ -2355,9 +2453,12 @@ def test_scenario_viewer_is_one_screen_with_can_curve(
     assert values["Min ped dist"] == "5.0 m"
     assert values["Peds within 10m"] == "1"
     assert values["Lighting / rain"] == "day"
-    # "s1" is not in the curated prediction set -- the card says so in the page's
-    # own pinned wording rather than inventing a model figure for it.
-    assert values["Model result"] == "not in the curated prediction set"
+    # "s1" is not in the curated prediction set. The CARD says so in three words
+    # (item M3, Phase 9b consolidated review: the 33-character sentence truncates as
+    # one of six st.metric values, and this is the flagship preset's default state)
+    # and the page's own pinned wording is the caption under the row.
+    assert values["Model result"] == "not curated"
+    assert any("not in the curated prediction set" in c for c in captions)
 
     # (c) the three stacked panels' headings are gone
     markdowns = [str(m.value) for m in at.markdown]
@@ -2651,8 +2752,8 @@ def test_active_learning_page_compares_the_acquisition_strategies(
 
     learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
     assert any(
-        "Random sample: 1 scenes · 0% night · +0.0100" in text
-        and "Graph-aware mining: 1 scenes · 100% night · +0.0300" in text
+        "Random sample: 1 scene · 0% night · +0.0100" in text
+        and "Graph-aware mining: 1 scene · 100% night · +0.0300" in text
         for text in learned
     )
     assert not any("near-duplicates" in text for text in learned)
@@ -3214,6 +3315,13 @@ def test_weak_supervision_one_frame_three_views(
     assert any(
         "pseudo boxes from weak_labels.parquet" in caption for caption in page_captions
     )
+    # ... and the row-2 OVERLAYS are drawn here from the package tables (item M1,
+    # Phase 9b consolidated review): the row stated where the predictions came from
+    # and left the drawing itself unattributed, unlike row 1 just above it.
+    assert any(
+        "overlay drawn from gt_boxes.parquet and predictions.parquet" in caption
+        for caption in page_captions
+    )
     # row 1's count vote is a static table, so the galleries' own count dataframes
     # stay the only two of that shape on the page (pinned above).
     vote = [t.value for t in at.table if list(getattr(t.value, "columns", [])) == [
@@ -3278,12 +3386,57 @@ def test_weak_supervision_count_bucket_chart_and_callout(
         "n = frame-class pairs" in caption and "0 → 17" in caption and "10+ → 1" in caption
         for caption in captions
     )
+    # Item I1, Phase 9b consolidated review: the pooling is over the VLM's TEN count
+    # fields (49,860 = 4,986 x 10 in the real package), not the five detector classes
+    # the count-vote table above shows -- the caption said "five" and invited the
+    # reader to equate the two sets.
+    assert any(
+        "ten count fields" in caption and "five detector classes" in caption
+        for caption in captions
+    )
+    assert not any("The five classes are pooled" in caption for caption in captions)
     assert any("vlm_count_buckets.parquet" in caption for caption in captions)
 
     learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
     assert any(
         "Why crowded frames defeat the VLM" in text
         and "0.06" in text and "1.00" in text and "2.00" in text
+        for text in learned
+    )
+
+
+@pytest.fixture()
+def built_demo_data_with_non_monotone_buckets(built_demo_data: Path) -> Path:
+    """The same package with a bucket table whose MAEs FALL between two buckets --
+    the shape the callout's neutral branch exists for."""
+    path = built_demo_data / "vlm_count_buckets.parquet"
+    buckets = pd.read_parquet(path)
+    falls = {"0": 0.50, "1-3": 2.00, "4-9": 0.25, "10+": 1.00}
+    buckets["mae"] = [falls[str(bucket)] for bucket in buckets["bucket"]]
+    buckets.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_weak_supervision_count_bucket_callout_is_neutral_when_the_maes_fall(
+    built_demo_data_with_non_monotone_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M9, Phase 9b consolidated review: "rises with the crowd" is a claim about
+    THIS package's table, so it is only written when the table's own MAEs never fall.
+    Nothing covered the other branch -- on a table that falls between buckets the
+    callout must say the neutral thing and still quote every bucket's own figure.
+    """
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_with_non_monotone_buckets, monkeypatch)
+    assert not at.exception
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any("moves with the crowd" in text for text in learned)
+    assert not any("rises with the crowd" in text for text in learned)
+    assert any(
+        "0.50 on empty frame-class pairs" in text
+        and "2.00 at 1-3 objects" in text
+        and "0.25 at 4-9 objects" in text
+        and "1.00 at 10+ objects" in text
         for text in learned
     )
 
@@ -3606,7 +3759,7 @@ def test_tour_walks_steps_0_and_1(
 
     assert at.radio(key="tour_hero_model").options == ["baseline", "graph_rate_night"]
     assert len(at.image) == 1
-    assert any("defeats all three models" in text for text in captions)
+    assert any("defeats all five models" in text for text in captions)
 
     markdowns = [str(block.value) for block in at.markdown]
     # the derived fact line: baseline never claims v0's pedestrian (a2);
@@ -4051,10 +4204,16 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
     tour = importlib.import_module("views.tour")
     scenarios = importlib.import_module("views.scenarios")
     active_learning = importlib.import_module("views.active_learning")
+    weak_supervision = importlib.import_module("views.weak_supervision")
     filters = importlib.import_module("filters")
     try:
         # (a) the strings the pages DO name -- compared attribute to attribute
         assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
+        # The overlay legend is now written on THREE pages (the Weak Supervision
+        # page's held-out result row copies it too) -- item M5, Phase 9b
+        # consolidated review: two of the three were compared, so a reword of the
+        # weak page's copy could have drifted away unnoticed.
+        assert tour._OVERLAY_LEGEND == weak_supervision._OVERLAY_LEGEND
         assert tour._EXPLAIN_ABSENT_NOTE == active_learning._EXPLAIN_ABSENT_NOTE
         assert tour._EXPLAIN_FRAME_ABSENT_NOTE == active_learning._EXPLAIN_FRAME_ABSENT_NOTE
         assert tour._TRAIN_POOL_NOTE == active_learning._TRAIN_POOL_NOTE

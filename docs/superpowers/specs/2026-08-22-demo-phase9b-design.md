@@ -28,11 +28,16 @@ of these as a visual hook. Everything stays derived from the package.
   plots CAN speed (km/h) and CAN longitudinal acceleration (m/s²) over the five
   keyframe steps; the axis is the nominal step label (keyframes are ~0.5 s apart — the
   caption says so). `speed_mps`/`speed_t_*` stay in the table for the existing readouts.
-- **Bucket counts are frame × class pairs.** `eval_count_buckets` pools the five
-  classes, so `n` (38,042 / 8,868 / 2,494 / 456) counts pairs, not frames — the chart
-  caption says "frame–class pairs". The MAEs are **recomputed at build** from
-  `data/autolabel/labels.parquet` (`parse_status == "ok"`, 4,986 of 5,000 rows) and
-  `annotations.parquet`; the documented figures (0.08 / 0.87 / 2.81 / 6.67 in
+- **Bucket counts are frame × class pairs.** `eval_count_buckets` pools all ten
+  `autolabel.schema.COUNT_FIELDS` (cars, trucks, buses, trailers, construction
+  vehicles, motorcycles, bicycles, pedestrians, traffic cones, barriers), so `n`
+  (38,042 / 8,868 / 2,494 / 456 = 49,860 = 4,986 × 10) counts pairs, not frames — the
+  chart caption says "frame–class pairs" (spec amendment 2026-08-23, review: this note
+  and the chart caption both said "the five classes", which is the count-vote table's
+  set of *detector* classes, not the VLM's ten count fields; §5's own invariant
+  `n.sum() == n_ok × len(COUNT_FIELDS)` was right all along). The MAEs are
+  **recomputed at build** from `data/autolabel/labels.parquet` (`parse_status ==
+  "ok"`, 4,986 of 5,000 rows) and `annotations.parquet`; the documented figures (0.08 / 0.87 / 2.81 / 6.67 in
   `docs/AUTOLABEL_EVAL.md`) are a cross-check, never a source — no 4-dp constant is
   written into code.
 - **Reason chips state facts that exist.** The only per-frame selection facts are the

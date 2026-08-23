@@ -25,6 +25,11 @@ from render import draw_overlay, loop_breadcrumb, provenance
 from data import crop_path, load_frame_manifest, load_gt_boxes, load_predictions, thumb_path
 
 _MODE_LABELS = {"Overlay": "overlay", "GT only": "gt", "Predictions only": "pred"}
+# Where the model choice is REMEMBERED across a rerun that never instantiates the
+# radio (item M6 -- see the long comment in `render`). Written only by the radio's
+# own on_change, so it can never disagree with a choice the widget made.
+_MODEL_SHADOW_KEY = "failure_model_last"
+
 _FAILURE_LABELS = {
     "All": None,
     "Has FN": "has_fn",
@@ -47,6 +52,16 @@ def _models_from_manifest(manifest: pd.DataFrame) -> list[str]:
     return sorted(
         col.removeprefix("n_preds_") for col in manifest.columns if col.startswith("n_preds_")
     )
+
+
+def _remember_model() -> None:
+    """Copy the radio's new value into the shadow key (item M6).
+
+    Runs as the radio's ``on_change``, where streamlit has already written the new
+    value into ``st.session_state["failure_model"]`` -- so this records a choice
+    the widget made rather than making one of its own.
+    """
+    st.session_state[_MODEL_SHADOW_KEY] = st.session_state["failure_model"]
 
 
 def _bool_options(series: pd.Series, *, true_label: str, false_label: str) -> list[str]:
@@ -145,6 +160,7 @@ def _render_detail(
             horizontal=True,
             key="failure_model",
             format_func=model_label,
+            on_change=_remember_model,
         )
 
         # curation_buckets round-trips through parquet as a numpy array (pyarrow's
@@ -193,8 +209,9 @@ def _render_detail(
             st.success(f"Exemplar: `{model}` catches a box `{other}` misses on this frame")
 
         # Frequency context, shown regardless of whether THIS frame+model combo has
-        # a badge: fixes_fn_vs_ pairs are common across the curated set (97/125
-        # frames under some model selection in the real package) -- without this,
+        # a badge: fixes_fn_vs_ pairs are common across the curated set (the
+        # five-model package gives 100 of 125 val frames at least one; the three-
+        # model one this comment used to quote gave 97) -- without this,
         # the badge reads as a rare, special-case callout rather than the normal
         # state of a multi-model comparison. "Any True per row" across every
         # fixes_fn_vs_ column, not just the pair(s) involving the selected model:
@@ -297,18 +314,24 @@ def render() -> None:
     # Phase 9b (spec sec1): the model radio itself is instantiated down in the detail
     # header, beside the overlay it changes -- but the filtering, the sort and the
     # grid below all need the choice BEFORE that widget runs, so the value is READ
-    # out of session state here. Read, never written: assigning
+    # out of session state here. The WIDGET key is read, never written: assigning
     # st.session_state["failure_model"] ourselves would make streamlit warn that a
     # keyed widget's value was set through the Session State API while the widget
     # also receives a default (`index=` below).
     #
-    # The trade-off this accepts: a filter combination that matches nothing renders
-    # no detail, so the radio is not instantiated on that run and streamlit drops its
-    # widget state one rerun later -- the model falls back to the default until the
-    # filters are widened again. A shadow session key would avoid that at the cost of
-    # a second source of truth for the same choice, which is worse.
+    # _MODEL_SHADOW_KEY is the fallback, and it is a key no widget owns (item M6,
+    # Phase 9b consolidated review). A filter combination that matches nothing
+    # renders no detail, so the radio is not instantiated on that run and streamlit
+    # drops its widget state -- which silently discarded the viewer's model once the
+    # filters were widened again. The radio's own on_change writes the shadow, so it
+    # is only ever a RECORD of a choice the widget already made, never a competing
+    # source of truth for it.
     default_model = "baseline" if "baseline" in gt_models else gt_models[0]
-    model = str(st.session_state.get("failure_model", default_model))
+    model = str(
+        st.session_state.get(
+            "failure_model", st.session_state.get(_MODEL_SHADOW_KEY, default_model)
+        )
+    )
     if model not in gt_models:
         # A choice left over from a package built with different models.
         model = default_model

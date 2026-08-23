@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -580,11 +581,16 @@ def test_line_chart_layers_and_keeps_the_step_order() -> None:
 
     both = line_chart(
         _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
-        y_title="CAN accel (m/s²)", selected="t-1", zero_line=True, title="Ego accel",
+        y_title="CAN accel (m/s²)", selected="t-1", zero_line=True,
     )
     both_spec = both.to_dict()
     assert len(both_spec["layer"]) == 3                  # + the y = 0 rule
-    assert both_spec["title"] == "Ego accel"
+    # Item M11, Phase 9b consolidated review: this helper has no `title` parameter.
+    # Nothing in the app ever passed one (`curve_charts` titles its two series
+    # through `y_title`, and the spec's signature has no title either), so the
+    # chart is never given a heading it would have to keep in sync with a caption.
+    assert "title" not in both_spec
+    assert "title" not in inspect.signature(line_chart).parameters
 
 
 def test_line_chart_rule_marks_the_selected_step() -> None:
