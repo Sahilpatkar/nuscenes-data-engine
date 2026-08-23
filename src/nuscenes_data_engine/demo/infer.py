@@ -39,8 +39,10 @@ against it without first confirming ghost rows occur in the data it is fed.
 The model call is an injected adapter (``predict_fn(image_path) -> {"boxes",
 "conf", "classes"}``), so everything here is torch-free and unit-tested.
 ``make_ultralytics_predictor`` is the one real (lazy-imported, untested) adapter —
-ultralytics/torch are not in the local venv; it is exercised only by the real
-``demo infer`` CLI run once ``uv sync --extra train --extra engine`` is done.
+ultralytics/torch are needed ONLY by ``demo infer`` (they come from the ``train``
+extra) and are never imported by the public app, which reads the built package; it is
+exercised only by the real ``demo infer`` CLI run after
+``uv sync --extra train --extra engine``.
 """
 
 from __future__ import annotations
@@ -301,15 +303,16 @@ def make_ultralytics_predictor(
 ) -> Callable[[Path], dict[str, Any]]:
     """Wrap an ultralytics YOLO checkpoint as a ``predict_fn`` for ``run_infer``.
 
-    NOT unit-tested — ultralytics/torch are not in the local venv (see the
-    ``uv sync --extra train --extra engine`` prerequisite in ``docs/DEMO.md``); this
-    thin adapter is exercised only by the real ``demo infer`` CLI run. Mirrors
+    NOT unit-tested — ultralytics/torch are a builder-side dependency only, pulled in
+    by the ``train`` extra for ``demo infer`` (see the ``uv sync --extra train --extra
+    engine`` prerequisite in ``docs/DEMO.md``) and never imported by the public app;
+    this thin adapter is exercised only by the real ``demo infer`` CLI run. Mirrors
     ``active_learning/sweep.py``'s ``configure_ultralytics()`` call (before importing
     ultralytics).
 
     ``imgsz``/``conf`` are the caller's responsibility, not this adapter's: each
     checkpoint must be predicted at (or near) the ``imgsz`` it was trained at — the
-    demo's three checkpoints do NOT all share one (see ``configs/demo.yaml``
+    demo's five checkpoints do NOT all share one (see ``configs/demo.yaml``
     ``models.<name>.imgsz``, sourced from each run's own ``args.yaml``) — and the
     demo CLI reads ``conf`` from ``configs/active_learning.yaml``'s
     ``sweep.conf_low`` rather than relying on this function's own default. The

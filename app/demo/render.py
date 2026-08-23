@@ -9,6 +9,7 @@ from typing import Any, cast
 import altair as alt
 import pandas as pd
 import streamlit as st
+from filters import FilmstripCurve
 from PIL import Image, ImageDraw
 
 
@@ -408,6 +409,171 @@ def bar_chart(
     if title:
         chart = chart.properties(title=title)
     return chart
+
+
+def line_chart(
+    frame: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    order: Sequence[str],
+    y_title: str,
+    selected: str | None = None,
+    zero_line: bool = False,
+    height: int = 160,
+) -> alt.LayerChart:
+    """A small line chart of ``y`` over an ORDERED categorical ``x`` -- the event
+    viewer's CAN speed/accel over the filmstrip's five keyframe steps.
+
+    Not ``bar_chart(mark="line")``: that helper's x order is optional and its rules
+    are about zero, while this one is a sequence chart whose whole meaning is the
+    order (``sort=order`` is required, since alphabetically the filmstrip's steps
+    would read "current, t+1, t+2, t-1, t-2") and whose defining layer is a vertical
+    rule at the step the viewer has selected.
+
+    ``selected`` must name one of ``order``: vega silently drops a rule on an
+    unknown band, so a typo'd/stale step would just not draw and the chart would
+    quietly stop pointing at anything. ``zero_line`` layers the y = 0 rule (the
+    acceleration curve runs mostly negative, and without the rule a deceleration
+    reads as just a lower point); ``height`` keeps a pair of these short enough
+    that the viewer stays on one screen.
+
+    Axis conventions are ``bar_chart``'s (``labelLimit: 0``, ``labelOverlap:
+    False``): five step labels only work as a sequence if all five are drawn, and
+    Streamlit's own Vega theme would otherwise thin them. The return type is always
+    a LayerChart -- ``st.altair_chart`` takes either kind, and a single, stable type
+    keeps the caller from branching on how many rules it asked for.
+
+    There is deliberately no ``title``: what these two charts ARE is said by
+    ``y_title`` (which carries the unit) and by ``curve_caption`` under the pair --
+    a chart heading on top of those would be a third place to keep in sync (item
+    M11, Phase 9b consolidated review, where the parameter had no caller at all).
+    """
+    if selected is not None and selected not in order:
+        raise ValueError(
+            f"line_chart: unknown selected step {selected!r} — expected one of {list(order)}"
+        )
+    sort = list(order)
+    line = (
+        alt.Chart(frame)
+        # point=True: five steps through a bare polyline hide where the readings are.
+        .mark_line(point=True)
+        .encode(
+            x=alt.X(
+                f"{x}:N",
+                sort=sort,
+                axis=alt.Axis(labelAngle=0, labelOverlap=False, labelLimit=0, title=None),
+            ),
+            y=alt.Y(f"{y}:Q", title=y_title),
+            tooltip=[c for c in (x, y) if c in frame.columns],
+        )
+    )
+    layers: list[alt.Chart] = [line]
+    if selected is not None:
+        layers.append(
+            alt.Chart(pd.DataFrame({x: [selected]}))
+            .mark_rule(color=_ACCENT, size=2)
+            .encode(x=alt.X(f"{x}:N", sort=sort, title=None, axis=None))
+        )
+    if zero_line:
+        layers.append(
+            alt.Chart(pd.DataFrame({"zero": [0.0]}))
+            .mark_rule(color=_ZERO_RULE)
+            .encode(y="zero:Q")
+        )
+    # alt.layer is typed as LayerChart | FacetChart (it facets only when given a
+    # facet spec, which this never does) -- same cast bar_chart's zero rule uses.
+    return cast("alt.LayerChart", alt.layer(*layers)).properties(height=height)
+
+
+# --- Phase 9b (Task 4): the event's step curve, drawn the same way twice ----------
+#
+# The Scenario viewer (with its filmstrip slider as the cursor) and guided-tour step
+# 2 (no slider, cursor pinned to the event's own frame) show the SAME two curves, so
+# they build them here rather than each assembling its own pair -- the titles and the
+# caption below are the whole point: they say what the two series ARE, and a page
+# that wrote its own could label an ego-pose reading as CAN.
+
+_CURVE_STEP_COLUMN = "step"
+_CURVE_SPEED_COLUMN = "speed_kmh"
+_CURVE_ACCEL_COLUMN = "accel_mps2"
+
+# Both titles carry the unit, because neither reading is the one the page's other
+# figures use (the filmstrip readout is m/s, the severity caption is g).
+#
+# The accel title is the SHORT form: at the viewer's chart width vega clipped
+# "CAN longitudinal accel (m/s²)" to "CAN longitudinal accel (n", losing the unit
+# it exists to carry. The caption under the pair (_CURVE_CAPTION_*) still spells
+# out "longitudinal acceleration", so the axis simply stops saying it twice.
+CAN_SPEED_TITLE = "CAN speed (km/h)"
+EGO_SPEED_TITLE = "ego speed (km/h)"
+CAN_ACCEL_TITLE = "CAN accel (m/s²)"
+
+# The x axis is the nominal step label, so the caption is where the viewer learns
+# what a step is worth in seconds (~0.5 s between nuScenes keyframes) and where the
+# two series came from. The second wording is the pre-0.8 package's: the speed is
+# then the GT ego pose converted to km/h, never a CAN reading (spec's honesty rule
+# "a CAN curve must be CAN"), and the acceleration is CAN on every package.
+_CURVE_CAPTION_CAN = (
+    "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the CAN bus"
+)
+_CURVE_CAPTION_EGO = (
+    "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+    "acceleration from the CAN bus"
+)
+
+
+def curve_frame(curve: FilmstripCurve) -> pd.DataFrame:
+    """One row per filmstrip step: its label and the two readings plotted against
+    it. NA readings stay NA -- altair simply breaks the line there, which is the
+    honest picture of a step whose CAN row is missing."""
+    return pd.DataFrame({
+        _CURVE_STEP_COLUMN: [step.label for step in curve.steps],
+        _CURVE_SPEED_COLUMN: [step.can_speed_kmh for step in curve.steps],
+        _CURVE_ACCEL_COLUMN: [step.accel_mps2 for step in curve.steps],
+    })
+
+
+def curve_caption(curve: FilmstripCurve) -> str:
+    """What the pair of curves is, in one line -- CAN wording only when the speed
+    really is the CAN reading (``FilmstripCurve.speed_is_can``)."""
+    return _CURVE_CAPTION_CAN if curve.speed_is_can else _CURVE_CAPTION_EGO
+
+
+def curve_charts(
+    curve: FilmstripCurve, *, selected: str | None = None, height: int = 150
+) -> tuple[alt.LayerChart, alt.LayerChart]:
+    """``(speed, acceleration)`` over the filmstrip's steps, both with the vertical
+    rule at ``selected`` (the Scenario page passes its slider's step; the tour
+    passes the event's own frame).
+
+    The acceleration chart gets the y = 0 rule: the series runs mostly negative and
+    without the rule a hard deceleration reads as just a lower point. ``selected``
+    must name one of the curve's steps -- ``line_chart`` raises otherwise, rather
+    than letting vega drop a rule that points at nothing.
+    """
+    frame = curve_frame(curve)
+    order = [step.label for step in curve.steps]
+    speed = line_chart(
+        frame,
+        x=_CURVE_STEP_COLUMN,
+        y=_CURVE_SPEED_COLUMN,
+        order=order,
+        y_title=CAN_SPEED_TITLE if curve.speed_is_can else EGO_SPEED_TITLE,
+        selected=selected,
+        height=height,
+    )
+    accel = line_chart(
+        frame,
+        x=_CURVE_STEP_COLUMN,
+        y=_CURVE_ACCEL_COLUMN,
+        order=order,
+        y_title=CAN_ACCEL_TITLE,
+        selected=selected,
+        zero_line=True,
+        height=height,
+    )
+    return speed, accel
 
 
 # --- Phase 9a (Task 1): trust chrome ----------------------------------------------

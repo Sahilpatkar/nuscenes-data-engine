@@ -36,7 +36,7 @@ by the `tour_back` / `tour_next` buttons (mutated *before* the step renders, nev
 | 6 | Same kind of frame, after | Evaluate | a hand-approved before/after exemplar, a model toggle (`tour_exemplar_model`), the upgraded-boxes table, and the night mAP result | Active Learning |
 | 7 | What we found, added, gained — and what failed | Evaluate (all four stages lit) | four bordered answers restating steps 1-6's numbers, and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
 
-Honesty notes (verified against package v0.7, restated from the design spec):
+Honesty notes (verified against package v0.8, restated from the design spec):
 
 - The hero frame (`5994f34b836043b3b5be191bceba2e3e`) is the only night val frame
   where a pedestrian goes miss → hit, and the hit is a **low-confidence claim (conf
@@ -139,7 +139,7 @@ output, row counts). It **fails loudly** — no manifest is written — if:
   not sum to `n_mine`,
 - a staged `al_explain/` group is partial, belongs to another arm, or did not record
   `selected_match` and `communities_match` as true, or
-- the package exceeds the size budget (100 MB; currently 25.43 MB).
+- the package exceeds the size budget (100 MB; currently 25.55 MB).
 
 `demo build` only runs where the local pipeline artifacts already exist —
 `data/processed/`, `data/active_learning/`, and `mlruns/` are all gitignored, so a
@@ -153,7 +153,16 @@ scale = live parquet row counts; CAN-speed validation r = live correlation of th
 wheel-speed signal (`can_speed_kmh/3.6`) against GT ego-pose speed; weak-supervision
 retention is computed per weak/GT arm pair and published with explicit arm
 attribution (headline = the documented 18% `random` pair; the 39.4%
-`graph_rate_night` pair is carried separately). The flagship *Cypher* twin is
+`graph_rate_night` pair is carried separately); the VLM's count error per
+crowding bucket is **recomputed at build** by `export_vlm_count_buckets`, which runs
+the autolabel eval's own `gt_counts`/`eval_count_buckets` over the Phase-6b label
+table (`data/autolabel/labels.parquet`, the `parse_status == "ok"` rows) and
+`annotations.parquet` — [AUTOLABEL_EVAL.md](AUTOLABEL_EVAL.md)'s published MAEs are a
+cross-check, never a source, and no rounded constant is written into the code. That
+export is optional: without the Phase-6b table the build records
+`validation.vlm_count_buckets: "absent"` with a warning and writes no file.
+
+The flagship *Cypher* twin is
 computed against the live Neo4j graph by `demo subgraphs` (the query text is
 asserted verbatim against [GRAPH.md](GRAPH.md)); `overview_metrics.json` records
 `cypher_source: "computed (neo4j, demo subgraphs)"` when the subgraph group is
@@ -166,7 +175,7 @@ Rebuilds are deterministic: identical inputs produce byte-identical outputs —
 commit: a package can't contain the sha of the commit that adds it, so the committed
 manifest always names the commit it was built from, not the one that carries it.
 
-## Package layout (Phases 1-8)
+## Package layout (Phases 1-9)
 
 | file | contents |
 |---|---|
@@ -181,13 +190,14 @@ manifest always names the commit it was built from, not the one that carries it.
 | `weak_verifier_by_class.parquet` | per arm × class: rejected disagreements, accepted mutual-zero count/share |
 | `weak_labels.parquet` | verified pseudo boxes (baseline-detector proposals) for curated tokens, native 1600×900 |
 | `vlm_counts.parquet` | per curated frame with a weak verdict: the VLM's per-class count vote, parse status, label confidence, scene call; GT counts alongside |
-| `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car AND a pedestrian — graph_rate_night recovers only the pedestrian, a low-confidence hit; the car defeats all three models) — rendered live with overlays on Overview |
-| `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (`n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (`fixes_fn_vs_<a>_<b>` — b fixes a's misses: True where model a has an FN that model b matched), `weak_verdict` (accepted / rejected for frames in the weak arm's candidate pool, else NA) and `al_selected_by` (the AL arm that selected the frame, else NA) |
-| `gt_boxes.parquet` | GT boxes (1600×900 coords) + per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
-| `predictions.parquet` | 3,758 predictions × 3 models (baseline/graph_rate_night @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
+| `vlm_count_buckets.parquet` | optional (needs the Phase-6b VLM label table on the build machine): `model, bucket, n, mae` — the VLM's mean count error against how crowded the frame actually is, recomputed at build from `data/autolabel/labels.parquet` (`parse_status == "ok"`) and `annotations.parquet`. Shipped run: one model (`Qwen/Qwen2.5-VL-7B-Instruct`), buckets `0 / 1-3 / 4-9 / 10+` → MAE 0.0767 / 0.8652 / 2.8107 / 6.6711 over n = 38,042 / 8,868 / 2,494 / 456. `n` counts **frame-class pairs**, not frames: all ten of the VLM's count fields are pooled, so n sums to 49,860 = 4,986 parsed frames × 10 |
+| `sample_frames/hero.jpg` | hand-picked night exemplar crop (`hero_token` in overview_metrics; baseline misses a shadowed car AND a pedestrian — graph_rate_night recovers only the pedestrian, a low-confidence hit; the car defeats all five models) — rendered live with overlays on Overview |
+| `frame_manifest.parquet` | 250 curated frames: buckets, val/train_pool split, failure stats, per-model prediction counts (5 × `n_preds_<model>`, 0 = ran-and-found-nothing), exemplar flags (20 × `fixes_fn_vs_<a>_<b>` — every ordered pair of the five models: b fixes a's misses, True where model a has an FN that model b matched), `weak_verdict` (accepted / rejected for frames in the weak arm's candidate pool, else NA) and `al_selected_by` (the AL arm that selected the frame, else NA) |
+| `gt_boxes.parquet` | GT boxes (1600×900 coords) + 5 per-model `matched_<model>` flags (NA = not evaluated) + `distance_to_ego_m` + `size_bucket` (COCO 32²/96²) + `below_visibility_min` (all-False today; parity-defensive) |
+| `predictions.parquet` | 6,206 predictions × 5 models (baseline, graph_rate_night and the weak pair `weak_graph_rate_night` / `weak_graph_rate_night_gt` @640, champion @960 — per-row `imgsz`), status ∈ tp/fp/low_conf matched with the AL sweep's exact semantics |
 | `sample_frames/crops/` | 250 × 960×540 crops (0.6 scale of native) |
 | `sample_frames/thumbs/` | 659 × 256×144 LanceDB thumbnails (250 curated + 367 for events, filmstrip neighbors, semsearch + 42 frames retrieved in the recorded chat session) |
-| `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set` |
+| `scenario_events.parquet` | 126 preset-tagged keyframes (6 presets, capped 30 each): ego dynamics, per-class min distances, `preset_tags`, `preset_rank_<name>`, t−2…t+2 filmstrip neighbor tokens + readouts, `in_curated_set`, and (v0.8) the CAN bus's own per-step speed — `can_speed_kmh` for the event frame plus `can_speed_t_minus2 … can_speed_t_plus2` for the neighbours, NA at a scene edge (the existing `speed_mps`/`speed_t_*` stay: those are GT ego-pose speed in m/s, a different reading) |
 | `semantic_search_results.parquet` | recorded SigLIP results: 4 canned queries × up to 8 front-camera hits (query, rank, sample_data_token, score, k — k drives the gallery's "n of k" caption) |
 | `graph_subgraphs/<preset>.json` | 6 presets × per-event subgraphs from the live graph: nodes (`on_path` flag + properties), edges, the matched path (nearest matching object first), off-path observations capped at the nearest 12; plus the preset's count Cypher and `sql_count` / `cypher_count` / `parity` on the full keyframe population (model presets: `cypher_count` null — their verdict comes from predictions, not the graph) |
 | `chat_replays.json` | recorded chat session (`demo chat-record`): per replay `{id, kind (eval/showcase), question, answer, model, provider, steps [{tool, input, output}], frames (7 projected columns, no thumbnail bytes), charts, checks (graded cases only), latency_s, error}` |
@@ -280,7 +290,7 @@ uv sync --extra train --extra engine     # torch/ultralytics for inference + Sig
 uv run nuscenes-data-engine demo curate  # 250 tokens -> data/demo_curation/ (+ rsync_filelist.txt)
 rsync -a --files-from=data/demo_curation/rsync_filelist.txt \
   TRINITY:/data/ggare/datasets/nuscenes/ data/raw/demo_frames/   # ~44 MB, read-only source
-uv run nuscenes-data-engine demo infer   # 3 checkpoints over the val frames (CPU, ~15 min)
+uv run nuscenes-data-engine demo infer   # 5 checkpoints over the val frames (CPU; measured 40 s, 2026-08-23)
 uv run nuscenes-data-engine demo build   # package v0.2 with the curation group
 ```
 
@@ -288,12 +298,21 @@ Facts about the shipped run: 250 frames (125 val / 125 train_pool), all eight bu
 at quota; matching reuses the AL sweep's exact parameters (IoU 0.5, conf_hit 0.4,
 conf floor 0.05, visibility ≥ 2) via the property-tested box-level matcher, so
 tp/fp/FN here mean what `failures.parquet` means. A val frame with `n_preds_<model>=0`
-means the model ran and detected nothing (2 (token, model) pairs on one frame — a
-night frame both yolov8n models totally missed). Without TRINITY access, `demo build`
-skips the curation group and still produces the Phase-1 package
-(`validation.curation: "absent"`).
+means the model ran and detected nothing (3 (token, model) pairs on one frame — a
+night frame, `scene-1063`, that three of the four yolov8n checkpoints missed
+entirely). Without TRINITY access, `demo build` skips the curation group and still
+produces the Phase-1 package (`validation.curation: "absent"`).
 
-## Failure Explorer (Phase 3)
+`configs/demo.yaml`'s `models:` block is the list `demo infer` runs, and Phase 9b
+added the two weak-arm checkpoints to it — `weak_graph_rate_night` (trained on the
+verified pseudo labels) and `weak_graph_rate_night_gt` (its GT-labelled twin), both
+yolov8n @640 — so all five checkpoints now score the same 125 val frames and the
+package carries five models everywhere (`predictions.parquet`, `matched_<model>`,
+`n_preds_<model>`, and the 20 ordered `fixes_fn_vs_<a>_<b>` pairs). The weak pair's
+boxes are labelled on screen as offline inference (`demo infer`, CPU, the training
+run's own checkpoint), never as a live model.
+
+## Failure Explorer (Phase 3, 9b)
 
 `app/demo/views/failures.py` — filters (lighting, rain, model, class, size bucket,
 distance-to-ego, failure type, curation bucket — multi-select, any-overlap: a
@@ -310,7 +329,21 @@ distance filter (narrowing it excludes zero-GT frames — stated in the widget's
 help). Exemplar badges credit the model that *catches* a box another model
 missed.
 
-## Scenario Search (Phase 5)
+**Phase 9b made the page image-first.** The order is now title → breadcrumb →
+caption → **Detail** → the grid, so the overlay is the first thing on screen. The
+**Model** radio moved out of the sidebar and sits beside the image it changes, in
+the detail's right-hand column (the page reads it back before filtering, so the grid
+and the detail always agree on one model); the view-mode radio (GT / Predictions /
+Overlay) sits directly under the image, and the per-box table folds away under
+**Per-box detail**. The sidebar keeps the six condition filters (lighting, rain,
+category, size, distance to ego, failure type) and folds Curation bucket and Sort by
+into an **Advanced filters** expander. With nothing selected the detail
+**auto-selects** the first frame of the current sort order and says so out loud
+("… auto-selected — click View on another frame below to change it"); an explicit
+View click always wins. An empty filter set still shows "No frames match these
+filters" and no detail.
+
+## Scenario Search (Phase 5, 9b)
 
 `app/demo/views/scenarios.py` — six preset scenario queries in two honestly-separated
 families: **dynamics presets** over all 34,149 keyframes from GT alone (hard braking
@@ -326,12 +359,36 @@ preset caps at 30 ranked by its own severity (cards show that quantity; braking
 is only called braking when the acceleration is negative).
 The **event viewer** renders curated events through the Phase-3 overlay renderer and
 non-curated ones as GT-only thumbnails with an explicit "not in the curated
-prediction set" caption; ego/context/model panels; and a t−2…t+2 filmstrip (strip +
-slider + per-step speed/accel readout). The **semantic gallery** is recorded
+prediction set" caption, plus a t−2…t+2 filmstrip (strip + slider + per-step
+speed/accel readout). The **semantic gallery** is recorded
 (`demo semsearch`, SigLIP offline, `semsearch.oversample: 16` to survive the 5/6
 non-front-camera store) and labelled as such; per-query hit counts are shown.
 
-## Interactive graph (Phase 6)
+**Phase 9b put the viewer on one screen** and gave a still frame its missing motion
+cue. The layout is: header line (scene · severity · the compact SQL/Cypher parity
+line · provenance) → the frame beside **two step curves** → **six cards, three to a row**
+→ the filmstrip → the graph panel. The curves are the real CAN bus: speed from
+v0.8's `can_speed_kmh` / `can_speed_t_*` (km/h) and longitudinal acceleration from
+`accel_long_min_mps2` / `accel_t_*` (m/s²), plotted over the five keyframe steps with
+a vertical rule that follows the filmstrip slider, captioned "Keyframes are ~0.5 s
+apart; speed and longitudinal acceleration from the CAN bus". On a pre-0.8 package
+the speed series falls back to the GT ego pose and both the chart's axis title and
+the caption say "ego speed" instead — an old package can never mislabel the series.
+The six cards are the old ego/context/model panels merged: CAN speed (the event
+frame's own step of the curve above, so the two always agree), min longitudinal
+accel, a **preset-aware VRU distance** card (min cyclist distance under
+`fast_cyclists`, min pedestrian distance everywhere else — `rain_vru` keeps the
+pedestrian card because the nearer of its two VRUs is already the grid caption),
+pedestrians within 10 m, lighting/rain, and the model result (or the short
+"not curated" value — the full "not in the curated prediction set" sentence stays
+the viewer's caption beside the frame, rendered exactly once). The filmstrip's per-step readout stays the **GT ego-pose
+speed in m/s** and now names that source out loud (it reads "ego N.N m/s"). The two
+readings really do differ on the same keyframe — across the 126 shipped events the
+CAN reading is a median 3 % off the ego-pose one and 5 % of events are more than
+30 % apart — so neither figure is left unlabelled for the page to look like it is
+contradicting itself.
+
+## Interactive graph (Phase 6, 9b)
 
 One-time per events change, with the Neo4j graph built per [GRAPH.md](GRAPH.md):
 
@@ -362,7 +419,24 @@ graph). Without a staged `graph_subgraphs/`, `demo build` records
 `validation.subgraphs: "absent"`, the page shows an honest "not included in this
 package" note, and Overview keeps the sourced Cypher value.
 
-## Active Learning + Weak Supervision (Phase 7)
+**Phase 9b reveals that path one step at a time** instead of drawing the whole
+subgraph at once. A **Reveal the matched path** `select_slider` walks the export's
+own `path`: Scene → Keyframe → one step per matching object, **nearest first**
+(labelled like "3 · Pedestrian · 2.1 m") → Ego pose, each label prefixed with its
+1-based index so the options stay unique; it opens on the last step, i.e. the whole
+path. Nodes up to
+the selected step are **amber**; later path nodes stay drawn but **hollow** (white
+fill, grey border, grey label), so the node set never changes as you slide — only the
+colours do. Context nodes and their edges are hidden behind a **Show context nodes**
+toggle (off by default). The detail column shows the selected step's own facts as a
+two-column table (scene name / location / night / rain; timestamp; category,
+distance, visibility; CAN speed, min longitudinal accel, hard braking yes/no),
+captioned with where those CAN readings actually live: "CAN speed and minimum
+longitudinal acceleration are properties of the EgoPose node — the graph export has
+no separate CAN node." Clicking a node still takes precedence and shows its `meta`
+table, and the one-line path narrative is unchanged.
+
+## Active Learning + Weak Supervision (Phase 7, 9b)
 
 Both pages read only the package. One optional step re-derives the per-frame
 selection facts the AL run never persisted, with the Neo4j graph built per
@@ -402,6 +476,27 @@ each must have a visible GT box where `graph_rate_night` reaches a confident det
 from `predictions.parquet`. Without the `al_explain` group the gallery still renders
 and says per-frame community and routed mass are not in the package.
 
+**Phase 9b added the strategy comparison and the reason chips.** Above "Every arm,
+one chart" sits **"Three ways to pick 1,500 frames"** — the same mining budget spent
+three ways (`random` "Random sample", `mined` "Similarity mining",
+`graph_rate_night` "Graph-aware mining"), as two bar charts side by side (scenes the
+mined frames came from; night share of the mined set, graph-aware highlighted), one
+fixed prose note per strategy saying how it *works*, and a **what we learned**
+sentence computed from the table itself: the "similarity mining found
+near-duplicates … graph-aware mining spread the same budget wider and took the best
+night gain" reading is emitted **only** when the graph arm really does cover more
+scenes AND a higher night share than the mined arm AND holds the table's best
+`delta_night`; otherwise the page falls back to a neutral sentence that just states
+the three (scenes, night share, Δnight) triples. The heading counts the strategies
+this package actually carries, and the whole section is skipped when fewer than two
+are present. On the per-frame panel (and on the tour's selection step) a **chip row**
+now sits above the factor lines: night · *k* pedestrian GT box(es) · community #*c* ·
+*size* frames · mass rank · quota *before* → *after* · which pass took the frame ·
+degree rank · routed failures. Every chip is a fact the package carries
+(`al_selection_explain` columns plus the frame's visible GT) and each is omitted when
+its own value is missing — and because **no per-frame failure rate exists**, no chip
+ever contains the word "rate" (a test asserts it over every branch).
+
 **Weak Supervision page** (`app/demo/views/weak_supervision.py`): the documented 18%
 headline (`random` pair) next to the 39.4% `graph_rate_night` pair, verifier retention,
 the night-pedestrian collapse (0.117 → 0.020; "worst night result of the 13 arms" is
@@ -421,6 +516,30 @@ itself compared those counts to the detector's, which the package does not carry
 (`data/autolabel/labels.parquet` + `data/active_learning/autolabel_weak/labels.parquet`)
 and covers every curated frame with a verdict.
 
+**Phase 9b added the two pictures behind those numbers.** **"One frame, three
+views"** opens the page's evidence: row 1 takes one accepted train-pool frame and
+shows GT boxes | the pseudo labels the verifier kept | both layers together, with the
+verdict and the VLM's count-vote table beside that third panel; row 2 takes a
+**held-out val frame** and shows GT | the weak-trained
+detector | its GT-trained twin, with a **Detector** radio over the pair and a table
+of the GT boxes the selected arm detects that the other does not. Both frames are
+chosen from the package, not hardcoded (`filters.weak_showcase_token` /
+`weak_result_token`); the val frame's boxes come from the two weak checkpoints run
+offline by `demo infer` and are labelled "recorded — demo infer, CPU, checkpoint of
+the training run", with the overlays themselves labelled as recomputed here. What
+one frame is worth is stated as exactly that ("counted on this frame only"); the
+*effect* sentences still come from the arm and loss tables. Further down, **"Where
+the VLM's counting breaks down"** charts `vlm_count_buckets.parquet`'s MAE per
+crowding bucket (shipped run: 0.08 at 0 objects → 0.87 at 1-3 → 2.81 at 4-9 → 6.67
+at 10+) with a **what we learned** sentence that only says the error "rises" when
+this package's own MAEs never fall. Its caption states that `n` counts **frame-class
+pairs**, not frames — all ten count fields the VLM was asked for are pooled, more
+than the five detector classes in the count-vote table above — and names the VLM the
+errors belong to. On a package below v0.8 the section shows
+"count-bucket chart needs demo_data >= 0.8 — rerun demo build" instead. The existing
+model gallery folds the weak pair behind a **Weak-arm detections on this frame**
+expander.
+
 ## Ask the Dataset (recorded) (Phase 8)
 
 The public app never calls an LLM. `app/demo/views/chat_replay.py` replays **one
@@ -434,7 +553,7 @@ docker compose up -d neo4j                    # so the agent is offered run_cyph
 # the five showcase questions (the ones whose `expect` is asserted):
 uv run nuscenes-data-engine demo chat-record --provider anthropic --limit 5
 uv run nuscenes-data-engine demo chat-record --provider anthropic   # full run
-uv run nuscenes-data-engine demo build                              # package v0.7
+uv run nuscenes-data-engine demo build                              # package v0.8
 ```
 
 The full run is ≈25 Claude answers — the graded eval cases plus the five showcase
@@ -552,11 +671,14 @@ uv pip uninstall playwright
 ```
 
 It drives the machine's installed Google Chrome (`channel="chrome"`, so no browser
-download), shoots a 1200×900 viewport per page, opens the first frame-detail panel
-where a page has one — the Guided tour, Active learning, and Weak supervision pages
-have none, so those three are captured at the top of the page (scroll position 0,
-title visible) instead — and **exits non-zero if any page rendered a Streamlit
-exception** — a broken page cannot quietly become a README screenshot. Re-run it
+download), shoots a 1200×900 viewport per page, and frames each one deliberately: the
+Guided tour, Failure Explorer and Weak Supervision are captured at the top of the
+page (their first screen leads with the content the gallery caption names — the
+Failure Explorer's detail is its auto-selected first block since Phase 9b);
+Scenario Search and Active Learning are steered to their Phase-9b sections first
+(the flagship event's one-screen viewer with the CAN curves; the
+acquisition-strategy comparison); any other page has its first frame-detail panel
+opened. It **exits non-zero if any page rendered a Streamlit exception** — a broken page cannot quietly become a README screenshot. Re-run it
 whenever a page changes visibly; any capture over 300 KB is quantized to a
 256-colour palette PNG by the script itself, no manual compression step needed.
 
@@ -573,14 +695,14 @@ deployed URL.
 | # | Question (DEMO_PLAN.md) | Page | Section / element that answers it | Status |
 |---|---|---|---|---|
 | 1 | What problem does the project solve? | Overview + Guided tour | the loop strip ("Detect weakness → Find useful data → Retrain → Measure impact") and tour step 1, **The weakness: night** | local: 2026-08-22 · live: pending |
-| 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** GT / Predictions / Overlay toggle | local: 2026-08-22 · live: pending |
+| 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** — now the first block on the page, auto-selected, with the **Model** radio and the GT / Predictions / Overlay toggle beside the image | local: 2026-08-23 · live: pending |
 | 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Find more like it** (the flagship event), and the six **preset** buttons + ranked card grid | local: 2026-08-22 · live: pending |
-| 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel with the matched path | local: 2026-08-22 · live: pending |
-| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's ego panel and t−2…t+2 **filmstrip** with per-step speed/accel readouts; Overview's **CAN speed vs ego-motion** card (r), now inside the **Dataset scale & data checks** expander | local: 2026-08-22 · live: pending |
-| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Why was this frame selected?** per-frame factor panel | local: 2026-08-22 · live: pending |
+| 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel, whose **Reveal the matched path** slider walks Scene → Keyframe → nearest matching objects → Ego pose one step at a time (amber = revealed, hollow = still to come) | local: 2026-08-23 · live: pending |
+| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's two **CAN curves** beside the frame (speed km/h + longitudinal accel m/s² over t−2…t+2, the rule following the filmstrip slider), the **CAN speed** card in the metric grid, and the filmstrip's own ego-pose readout; Overview's **CAN speed vs ego-motion** card (r), inside the **Dataset scale & data checks** expander | local: 2026-08-23 · live: pending |
+| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
 | 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **Retrain on what was found** / **Same kind of frame, after**, plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-22 · live: pending |
-| 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention) and **What the VLM saw** accepted/rejected galleries | local: 2026-08-21 · live: pending |
-| 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-21 · live: pending |
+| 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention), **One frame, three views** (what the VLM's counts kept on a train-pool frame, and what the weak-trained checkpoint vs its GT-labelled twin then did on a held-out val frame), and **What the VLM saw** accepted/rejected galleries | local: 2026-08-23 · live: pending |
+| 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost), **Where the VLM's counting breaks down** (count MAE per crowding bucket) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-23 · live: pending |
 | 10 | How does the project form a closed model-improvement loop? | Guided tour + Active Learning + Weak Supervision | tour step 7, **What we found, added, gained — and what failed**, closed by the persistent loop breadcrumb on every page | local: 2026-08-22 · live: pending |
 
 ## Dataset attribution & license
@@ -608,4 +730,4 @@ is **not** redistributed by this repository.
 | 7 | active-learning + weak-supervision pages | **shipped** |
 | 8 | recorded chat replay, deployment scaffolding, README + screenshots | **shipped** |
 | 9a | guided tour, outcome-first Overview, loop breadcrumb + provenance + lessons | **shipped** |
-| 9b | Failure Explorer hook, one-screen Scenario Search (CAN curve, progressive graph path), acquisition-strategy chart + reason chips, Weak Supervision three views + crowding trend, package 0.8 | pending |
+| 9b | Failure Explorer hook, one-screen Scenario Search (CAN curve, progressive graph path), acquisition-strategy chart + reason chips, Weak Supervision three views + crowding trend, package 0.8 | **shipped** |

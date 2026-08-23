@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from nuscenes_data_engine.data_engine.autolabel.schema import COUNT_FIELDS
 from nuscenes_data_engine.demo.exporters import export_overview
 
 
@@ -49,11 +50,27 @@ def tiny_inputs(tmp_path: Path) -> dict[str, Path]:
     # None (a non-detector class, e.g. a traffic cone) -- ignored by the recipe, so
     # s1's detector count is 3, matching _write_demo_config's random_pseudo_
     # summary.json mean_gt_boxes_per_accepted_frame=3.0 below (accepted=["s1"]).
+    # Phase 9b (Task 7): category_name/visibility_token are the OTHER two columns
+    # of this same table -- autolabel's gt_counts (which export_vlm_count_buckets
+    # reuses verbatim) reads exactly sample_data_token/category_name/
+    # visibility_token. The fine-grained names map through GT_COUNT_GROUPS to the
+    # same coarse classes category_group already carries above, and the 4th row's
+    # "movable_object.debris" is outside the count taxonomy exactly as its
+    # category_group is None -- so s1's GT counts here are pedestrians=2, cars=1,
+    # every other count field 0. Columns only: the row count stays 4, so
+    # export_overview's scale.boxes_2d == 4 is untouched.
     pd.DataFrame(
         {
             "sample_token": ["s1"] * 4,
             "sample_data_token": ["s1"] * 4,
             "category_group": ["pedestrian", "car", "pedestrian", None],
+            "category_name": [
+                "human.pedestrian.adult",
+                "vehicle.car",
+                "human.pedestrian.adult",
+                "movable_object.debris",
+            ],
+            "visibility_token": ["4", "4", "4", "4"],
         }
     ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
@@ -1078,6 +1095,140 @@ def test_vlm_counts_absent_label_table_is_a_logged_no_op(
         )
 
 
+# --- Phase 9b (Task 7): the recomputed crowding buckets --------------------------
+
+
+def _write_bucket_inputs(tmp_path: Path) -> tuple[Path, Path]:
+    """A processed/ + labels.parquet pair whose GT counts land in ALL FOUR of
+    ``eval_count_buckets``' bins, so the exported bucket order and per-bucket MAE
+    are both hand-checkable.
+
+    GT (annotations.parquet, fine-grained ``category_name`` -> GT_COUNT_GROUPS):
+      t1 -> cars 2 ("1-3"), pedestrians 5 ("4-9"), traffic_cones 11 ("10+"),
+            the other seven count fields 0 ("0")
+      t2 -> no rows at all, i.e. all ten count fields 0 ("0")
+
+    Labels: model "m1" gets t1 (cars 3, pedestrians 4, traffic_cones 8) and t2
+    (cars 1) as ``ok`` rows plus a truncated t3 row that must be dropped; model
+    "m2" gets a single, exactly-right t1 row.
+    """
+    processed = tmp_path / "bucket_processed"
+    processed.mkdir()
+    rows = (
+        [{"sample_data_token": "t1", "category_name": "vehicle.car"}] * 2
+        + [{"sample_data_token": "t1", "category_name": "human.pedestrian.adult"}] * 5
+        + [{"sample_data_token": "t1", "category_name": "movable_object.trafficcone"}] * 11
+    )
+    pd.DataFrame(rows).assign(visibility_token="4").to_parquet(
+        processed / "annotations.parquet"
+    )
+
+    def _label(token: str, model: str, parse_status: str, **counts: float) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "sample_data_token": token, "model": model, "parse_status": parse_status,
+            "time_of_day": "day", "weather": "clear", "label_confidence": "high",
+        }
+        for field in COUNT_FIELDS:
+            row[field] = float(counts.get(field, 0))
+        return row
+
+    labels_path = tmp_path / "autolabel_9b" / "labels.parquet"
+    labels_path.parent.mkdir(parents=True)
+    pd.DataFrame([
+        _label("t1", "m1", "ok", cars=3, pedestrians=4, traffic_cones=8),
+        _label("t2", "m1", "ok", cars=1),
+        # dropped: a truncated row would otherwise add ten all-zero-GT pairs to
+        # m1's "0" bucket and pull its MAE around.
+        _label("t3", "m1", "truncated", cars=99),
+        _label("t1", "m2", "ok", cars=2, pedestrians=5, traffic_cones=11),
+    ]).to_parquet(labels_path)
+    return processed, labels_path
+
+
+def test_export_vlm_count_buckets_pools_classes_per_model(tmp_path: Path) -> None:
+    """One row per (model, GT-count bucket), buckets in count order, ``n`` counting
+    frame x class PAIRS (the honesty rule: ten pairs per ok row, not one).
+
+    Every number below is hand-derived from ``_write_bucket_inputs``' fixture:
+      m1 "0"    -> t1's seven zero-GT classes (all exact) + t2's ten (cars off by
+                   one, the rest exact) = n 17, MAE 1/17
+      m1 "1-3"  -> t1 cars pred 3 vs GT 2            = n 1, MAE 1.0
+      m1 "4-9"  -> t1 pedestrians pred 4 vs GT 5     = n 1, MAE 1.0
+      m1 "10+"  -> t1 traffic_cones pred 8 vs GT 11  = n 1, MAE 3.0
+      m2        -> a perfect row: n 7/1/1/1, MAE 0 everywhere
+    """
+    from nuscenes_data_engine.demo.exporters import export_vlm_count_buckets
+
+    processed, labels_path = _write_bucket_inputs(tmp_path)
+    out = tmp_path / "demo_data"
+
+    df = export_vlm_count_buckets(
+        labels_path=labels_path, processed_dir=processed, out_dir=out
+    )
+
+    assert list(df.columns) == ["model", "bucket", "n", "mae"]
+    assert list(df["model"]) == ["m1"] * 4 + ["m2"] * 4
+    assert list(df["bucket"]) == ["0", "1-3", "4-9", "10+"] * 2
+    # a plain string column, not a pandas Categorical -- the app reads it straight
+    # into a chart's nominal axis
+    assert df["bucket"].dtype == object
+
+    m1 = df[df["model"] == "m1"].set_index("bucket")
+    assert list(m1["n"]) == [17, 1, 1, 1]
+    assert m1.loc["10+", "mae"] == pytest.approx(3.0)
+    assert m1.loc["0", "mae"] == pytest.approx(1 / 17)
+    assert m1.loc["1-3", "mae"] == pytest.approx(1.0)
+    assert m1.loc["4-9", "mae"] == pytest.approx(1.0)
+
+    m2 = df[df["model"] == "m2"].set_index("bucket")
+    assert list(m2["n"]) == [7, 1, 1, 1]
+    assert list(m2["mae"]) == [0.0, 0.0, 0.0, 0.0]
+
+    # the pairs invariant, per model: ok rows x every count field
+    assert int(m1["n"].sum()) == 2 * len(COUNT_FIELDS)
+    assert int(m2["n"].sum()) == 1 * len(COUNT_FIELDS)
+
+    on_disk = pd.read_parquet(out / "vlm_count_buckets.parquet")
+    pd.testing.assert_frame_equal(on_disk, df)
+
+
+def test_export_vlm_count_buckets_refuses_a_broken_pair_count(tmp_path: Path) -> None:
+    """A model whose bucket ``n`` no longer equals ok-rows x count-fields means the
+    pooled pairs are not what the caption claims -- e.g. a token appearing twice for
+    one model, which silently squares that token's pairs. The published number is a
+    claim about pairs, so a mismatch has to fail the build, not ship."""
+    from nuscenes_data_engine.demo.exporters import export_vlm_count_buckets
+
+    processed, labels_path = _write_bucket_inputs(tmp_path)
+    labels = pd.read_parquet(labels_path)
+    duplicated = pd.concat(
+        [labels, labels[(labels["model"] == "m1") & (labels["sample_data_token"] == "t1")]],
+        ignore_index=True,
+    )
+    duplicated.to_parquet(labels_path)
+
+    with pytest.raises(ValueError, match="frame x class pairs"):
+        export_vlm_count_buckets(
+            labels_path=labels_path, processed_dir=processed, out_dir=tmp_path / "demo_data"
+        )
+
+
+def test_export_vlm_count_buckets_refuses_a_table_with_no_parsed_rows(tmp_path: Path) -> None:
+    """No ``ok`` row anywhere means there is nothing to recompute the MAEs from --
+    an empty bucket table would render as four missing bars, so refuse instead."""
+    from nuscenes_data_engine.demo.exporters import export_vlm_count_buckets
+
+    processed, labels_path = _write_bucket_inputs(tmp_path)
+    labels = pd.read_parquet(labels_path)
+    labels["parse_status"] = "truncated"
+    labels.to_parquet(labels_path)
+
+    with pytest.raises(ValueError, match="no parsed"):
+        export_vlm_count_buckets(
+            labels_path=labels_path, processed_dir=processed, out_dir=tmp_path / "demo_data"
+        )
+
+
 def test_resolve_n_mine_prefers_the_graph_mining_override(tmp_path: Path) -> None:
     """The graph arms read ``graph_mining.n_mine`` first (graph_mining.py), so the
     demo's two readers -- build.py's quota-sum check and al_explain's
@@ -1414,7 +1565,7 @@ def test_build_writes_validated_manifest(build_config: Path, tmp_path: Path) -> 
     assert manifest["outputs"]["active_learning_results.parquet"]["rows"] == 5
     assert manifest["validation"]["flagship_sql_count"] == 1
     assert manifest["validation"]["package_mb"] < 1
-    assert manifest["package_version"] == "0.7"
+    assert manifest["package_version"] == "0.8"
 
 
 def test_build_is_deterministic(build_config: Path) -> None:
@@ -1659,6 +1810,76 @@ def test_build_vlm_counts_cover_every_weak_verdict_frame_from_both_label_tables(
     # both tables hashed as inputs, the weak one and the Phase-6b one
     assert str(autolabel_dir / "labels.parquet") in manifest["inputs"]
     assert any(key.endswith("autolabel_weak/labels.parquet") for key in manifest["inputs"])
+
+
+def test_build_writes_vlm_count_buckets_from_the_phase6b_table_only(
+    build_config: Path, tmp_path: Path
+) -> None:
+    """The crowding buckets are recomputed at build time from the Phase-6b VLM
+    label table (``paths.autolabel_dir``'s ``labels.parquet`` -- the FIRST of the
+    two tables ``_vlm_label_paths`` resolves), never from the weak run's own table:
+    that one is a pseudo-labelling input, not a count-accuracy eval.
+
+    ``tiny_inputs``' annotations give "s1" pedestrians=2, cars=1 and every other
+    count field 0; "s2" has no annotation rows at all, so all ten of its fields are
+    0. Both label rows parse ok, so the pairs invariant is 2 x len(COUNT_FIELDS).
+    """
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = _stage_and_pick_hero(build_config)
+    autolabel_dir = Path(config["paths"]["autolabel_dir"])
+    autolabel_dir.mkdir(parents=True, exist_ok=True)
+
+    def _row(token: str, **counts: float) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "sample_data_token": token, "model": "qwen2.5-vl", "parse_status": "ok",
+            "time_of_day": "day", "weather": "clear", "label_confidence": "high",
+        }
+        for field in COUNT_FIELDS:
+            row[field] = float(counts.get(field, 0))
+        return row
+
+    pd.DataFrame([_row("s1", cars=1, pedestrians=3), _row("s2")]).to_parquet(
+        autolabel_dir / "labels.parquet"
+    )
+    # the weak run's own table carries a DIFFERENT token ("v0", staged by
+    # tiny_inputs) -- if the buckets ever read it too, the pair count below breaks.
+    manifest = run_build(build_config)
+
+    out = Path(config["paths"]["out_dir"])
+    assert (out / "vlm_count_buckets.parquet").is_file()
+    assert "vlm_count_buckets.parquet" in manifest["outputs"]
+    assert manifest["validation"]["vlm_count_buckets"] == "included"
+    assert str(autolabel_dir / "labels.parquet") in manifest["inputs"]
+    # annotations.parquet -- gt_counts' own input -- is already covered by the
+    # unconditional PROCESSED_INPUTS sweep, not re-hashed under another name.
+    assert any(key.endswith("annotations.parquet") for key in manifest["inputs"])
+
+    buckets = pd.read_parquet(out / "vlm_count_buckets.parquet")
+    assert list(buckets.columns) == ["model", "bucket", "n", "mae"]
+    assert set(buckets["model"]) == {"qwen2.5-vl"}
+    assert list(buckets["bucket"]) == ["0", "1-3"]
+    assert int(buckets["n"].sum()) == 2 * len(COUNT_FIELDS)
+
+
+def test_build_records_vlm_count_buckets_absent_without_a_phase6b_table(
+    build_config: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A fresh clone has no ``data/autolabel/`` at all (``build_config`` points
+    ``paths.autolabel_dir`` inside tmp_path, absent by default). That is an ordinary
+    state, not a build failure: the group is recorded ``"absent"`` with a warning and
+    no table is written, exactly like every other optional group."""
+    from nuscenes_data_engine.demo.build import run_build
+
+    config = yaml.safe_load(build_config.read_text())
+    with caplog.at_level(logging.WARNING, logger="nuscenes_data_engine"):
+        manifest = run_build(build_config)
+
+    assert manifest["validation"]["vlm_count_buckets"] == "absent"
+    assert "vlm_count_buckets" in caplog.text
+    out = Path(config["paths"]["out_dir"])
+    assert not (out / "vlm_count_buckets.parquet").exists()
+    assert "vlm_count_buckets.parquet" not in manifest["outputs"]
 
 
 def test_vlm_label_paths_rejects_a_configured_but_missing_weak_config(

@@ -62,6 +62,7 @@ _NEIGHBORS = (("t_minus2", 2), ("t_minus1", 1), ("t_plus1", -1), ("t_plus2", -2)
 
 _NULLABLE_FLOAT_COLUMNS = (
     "speed_mps",
+    "can_speed_kmh",
     "accel_long_min_mps2",
     "min_dist_pedestrian_m",
     "min_dist_vehicle_m",
@@ -69,6 +70,7 @@ _NULLABLE_FLOAT_COLUMNS = (
     "fn_ped_min_dist_m",
     "low_conf_min_conf",
     *(f"speed_{label}" for label, _ in _NEIGHBORS),
+    *(f"can_speed_{label}" for label, _ in _NEIGHBORS),
     *(f"accel_{label}" for label, _ in _NEIGHBORS),
 )
 
@@ -78,6 +80,11 @@ _COLUMN_ORDER = (
     "scene_name",
     "timestamp",
     "speed_mps",
+    # The CAN wheel-speed reading for this keyframe (canbus.can_speed_kmh), kept
+    # alongside -- not instead of -- the GT ego-pose speed_mps: the event viewer's
+    # curve plots the CAN signal and must be able to say so (Phase 9b honesty rule
+    # "a CAN curve must be CAN"), while the existing readouts stay on speed_mps.
+    "can_speed_kmh",
     "accel_long_min_mps2",
     "is_hard_braking",
     "min_dist_pedestrian_m",
@@ -96,6 +103,7 @@ _COLUMN_ORDER = (
     "low_conf_min_conf",
     *(label for label, _ in _NEIGHBORS),
     *(f"speed_{label}" for label, _ in _NEIGHBORS),
+    *(f"can_speed_{label}" for label, _ in _NEIGHBORS),
     *(f"accel_{label}" for label, _ in _NEIGHBORS),
     *(f"preset_rank_{name}" for name in _ALL_PRESETS),
 )
@@ -154,7 +162,7 @@ def _load_base(processed_dir: Path) -> pd.DataFrame:
 
     canbus = pd.read_parquet(
         _require(processed_dir / "canbus.parquet"),
-        columns=["sample_token", "is_hard_braking", "accel_long_min_mps2"],
+        columns=["sample_token", "is_hard_braking", "accel_long_min_mps2", "can_speed_kmh"],
     )
     canbus = canbus.assign(is_hard_braking=_null_safe_bool(canbus["is_hard_braking"]))
 
@@ -222,7 +230,13 @@ def _context_features(processed_dir: Path, near_dist_m: float) -> pd.DataFrame:
 
 
 def _add_neighbors(df: pd.DataFrame) -> pd.DataFrame:
-    """Per-scene, timestamp-ordered t-2..t+2 neighbor tokens + speed/accel readouts."""
+    """Per-scene, timestamp-ordered t-2..t+2 neighbor tokens + speed/accel readouts.
+
+    Both speed columns are shifted: ``speed_{label}`` (GT ego pose, m/s) for the
+    existing readouts and ``can_speed_{label}`` (CAN wheel speed, km/h) for the
+    event viewer's curve. One loop, so a neighbor can never come from a different
+    row for one signal than for another.
+    """
     df = df.sort_values(
         ["scene_token", "timestamp", "sample_data_token"], kind="stable"
     ).reset_index(drop=True)
@@ -230,6 +244,7 @@ def _add_neighbors(df: pd.DataFrame) -> pd.DataFrame:
     for label, shift_amount in _NEIGHBORS:
         df[label] = grouped["sample_data_token"].shift(shift_amount)
         df[f"speed_{label}"] = grouped["speed_mps"].shift(shift_amount)
+        df[f"can_speed_{label}"] = grouped["can_speed_kmh"].shift(shift_amount)
         df[f"accel_{label}"] = grouped["accel_long_min_mps2"].shift(shift_amount)
     return df
 

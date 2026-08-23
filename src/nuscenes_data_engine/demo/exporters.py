@@ -17,6 +17,8 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from nuscenes_data_engine.data_engine.autolabel.evaluate import eval_count_buckets, gt_counts
+from nuscenes_data_engine.data_engine.autolabel.schema import COUNT_FIELDS
 from nuscenes_data_engine.demo.curate import front_camera_hits
 
 logger = logging.getLogger("nuscenes_data_engine")
@@ -840,6 +842,76 @@ def export_vlm_counts(
     result = result.reset_index()[list(_VLM_COUNTS_COLUMNS)]
     result.to_parquet(out_dir / "vlm_counts.parquet", index=False)
     return result
+
+
+_VLM_COUNT_BUCKETS_COLUMNS = ("model", "bucket", "n", "mae")
+
+# eval_count_buckets' own pd.cut labels, in GT-count order -- the published row
+# order. Mirrored (not re-derived) so a bucket that never occurs simply doesn't
+# appear rather than silently reordering the ones that do.
+_COUNT_BUCKET_ORDER = ("0", "1-3", "4-9", "10+")
+
+
+def export_vlm_count_buckets(
+    *, labels_path: Path, processed_dir: Path, out_dir: Path
+) -> pd.DataFrame:
+    """MAE by GT-count bucket, per VLM model — the "crowds are hard" view, recomputed
+    at build time rather than transcribed from ``docs/AUTOLABEL_EVAL.md``.
+
+    The binning is autolabel's own: ``gt_counts`` + ``eval_count_buckets`` are reused
+    verbatim (the same two functions ``autolabel eval`` renders its summary from), so
+    the published numbers can never drift from the documented ones by a second
+    implementation of the bins.
+
+    ``labels_path`` is the PHASE-6B label table only (``data/autolabel/
+    labels.parquet``): a count-accuracy eval over frames the VLM was asked to count.
+    The weak run's own label table is a pseudo-labelling input and is deliberately
+    NOT pooled in here. Rows are filtered to ``parse_status == "ok"`` exactly as
+    ``evaluate.run_eval`` does, then grouped by ``model`` (sorted) so a two-model
+    table stays comparable row for row.
+
+    Honesty invariant: ``n`` counts frame x CLASS pairs, not frames --
+    ``eval_count_buckets`` pools all ten count fields — so per model ``n.sum()`` must
+    equal ok-rows x ``len(COUNT_FIELDS)``. A mismatch (e.g. a token appearing twice
+    for one model, which squares that token's pairs) means the number is not the
+    claim the caption makes, so it raises rather than shipping.
+    """
+    labels = pd.read_parquet(_require(labels_path))
+    ok = labels[labels["parse_status"] == "ok"]
+    if ok.empty:
+        raise ValueError(
+            f"export_vlm_count_buckets: no parsed (parse_status == 'ok') rows in {labels_path}"
+        )
+
+    annotations_path = _require(processed_dir / "annotations.parquet")
+    frames: list[pd.DataFrame] = []
+    for model in sorted(ok["model"].unique()):
+        rows = ok[ok["model"] == model]
+        tokens = [str(token) for token in rows["sample_data_token"]]
+        buckets = eval_count_buckets(rows, gt_counts(annotations_path, tokens))
+        # pd.cut leaves `bucket` a Categorical; the app charts it on a nominal
+        # axis, so publish plain strings -- ordered here, once.
+        buckets["bucket"] = pd.Categorical(
+            buckets["bucket"].astype(str), categories=_COUNT_BUCKET_ORDER, ordered=True
+        )
+        buckets = buckets.sort_values("bucket")
+        buckets["bucket"] = buckets["bucket"].astype(str)
+        expected_pairs = len(rows) * len(COUNT_FIELDS)
+        actual_pairs = int(buckets["n"].sum())
+        if actual_pairs != expected_pairs:
+            raise ValueError(
+                f"export_vlm_count_buckets: model {model!r} pooled {actual_pairs} "
+                f"frame x class pairs, expected {expected_pairs} "
+                f"({len(rows)} parsed rows x {len(COUNT_FIELDS)} count fields) — "
+                "duplicate tokens for one model would do this"
+            )
+        buckets.insert(0, "model", str(model))
+        frames.append(buckets)
+
+    df = pd.concat(frames, ignore_index=True)[list(_VLM_COUNT_BUCKETS_COLUMNS)]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / "vlm_count_buckets.parquet", index=False)
+    return df
 
 
 def export_semsearch(

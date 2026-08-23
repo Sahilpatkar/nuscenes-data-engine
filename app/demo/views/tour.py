@@ -22,12 +22,16 @@ import nav
 import pandas as pd
 import streamlit as st
 from filters import (
+    FILMSTRIP_STEPS,
     failure_flags,
+    filmstrip_steps,
     fixed_boxes,
+    frame_quota_before,
     gt_for_render,
     model_label,
     parity_short,
     rank_events,
+    reason_chips,
     selection_factors,
     severity_caption,
     tour_frame_candidates,
@@ -40,6 +44,8 @@ from render import (
     LOOP_STAGES,
     bar_chart,
     chip_row,
+    curve_caption,
+    curve_charts,
     draw_overlay,
     loop_breadcrumb,
     metric_cards,
@@ -121,16 +127,12 @@ _HERO_HONESTY_LINE = (
 )
 
 # scenario_events' t-2..t+2 neighbour columns in strip order, with the event itself
-# (column None) in the middle. Plain ASCII hyphens in the labels, matching
-# views/scenarios.py's own _BEFORE_STEPS/_AFTER_STEPS -- ruff RUF001 flags the design
-# doc's typographic U+2212 minus as an ambiguous character.
-_FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = (
-    ("t_minus2", "t-2"),
-    ("t_minus1", "t-1"),
-    (None, "current"),
-    ("t_plus1", "t+1"),
-    ("t_plus2", "t+2"),
-)
+# (column None) in the middle. Phase 9b: filters.FILMSTRIP_STEPS is the single
+# definition (this step order is shared with views/scenarios.py and with
+# filters.filmstrip_steps, which this page's strip reads below); the name stays
+# because the copy-contract test pins the tour's strip order to the Scenario
+# page's, and that is what it names here.
+_FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = FILMSTRIP_STEPS
 
 
 @dataclass
@@ -456,20 +458,42 @@ def _render_event_filmstrip(row: pd.Series) -> None:
     """The event's t-2..t+2 thumbs with their step labels -- the Scenario page's
     filmstrip without its step slider (a tour screen is one visual, not a control
     panel). A scene-edge neighbour is NA and is left out of the strip entirely,
-    exactly as that page leaves it out."""
-    steps = []
-    for column, label in _FILMSTRIP_STEPS:
-        token = row["sample_data_token"] if column is None else row.get(column)
-        if pd.notna(token):
-            steps.append((label, str(token)))
+    exactly as that page leaves it out -- filters.filmstrip_steps is where that
+    rule (and the strip order) now lives, for both pages."""
+    steps = filmstrip_steps(row).steps
     if not steps:
         return
-    for strip_column, (label, token) in zip(st.columns(len(steps)), steps, strict=True):
+    for strip_column, step in zip(st.columns(len(steps)), steps, strict=True):
         with strip_column:
-            thumb = thumb_path(token)
+            thumb = thumb_path(step.token)
             if thumb.is_file():
                 st.image(str(thumb))
-            st.caption(label)
+            st.caption(step.label)
+
+
+def _render_event_curves(row: pd.Series) -> None:
+    """The event's CAN speed and CAN longitudinal acceleration over the same steps
+    the strip above shows -- the motion cue a single still frame cannot give.
+
+    Built by ``render.curve_charts`` from ``filters.filmstrip_steps``, exactly as
+    the Scenario page builds its pair, so this step and the deep page behind it
+    draw the identical curves (the page adds only its slider; here the rule is
+    pinned to the event's own frame, since a tour screen is one visual rather than
+    a control panel). The caption is the builder's own: it says what the two series
+    ARE, and on a package older than v0.8 it says "ego speed" instead of CAN --
+    never the other way round.
+    """
+    curve = filmstrip_steps(row)
+    if not curve.steps:
+        return
+    current = next((step.label for step in curve.steps if step.is_current), None)
+    speed, accel = curve_charts(curve, selected=current)
+    speed_column, accel_column = st.columns(2)
+    with speed_column:
+        st.altair_chart(speed, width="stretch")
+    with accel_column:
+        st.altair_chart(accel, width="stretch")
+    st.caption(curve_caption(curve))
 
 
 def _render_mine(data: _TourData) -> None:
@@ -501,6 +525,7 @@ def _render_mine(data: _TourData) -> None:
             *(["rain"] if bool(row["is_rain"]) else []),
         ])
     _render_event_filmstrip(row)
+    _render_event_curves(row)
 
     # The parity line is a trust indicator, not a claim about this event: a package
     # with no subgraphs staged simply omits it (the Scenario page's own no-op).
@@ -586,8 +611,21 @@ def _render_why_selected(data: _TourData) -> None:
     night_floor_value = (data.validation.get("config") or {}).get("night_floor")
     night_floor = int(night_floor_value) if night_floor_value is not None else None
     n_communities = int(data.validation.get("n_communities", len(data.communities)))
+    explain_row = explain_rows.iloc[0].to_dict()
+    # Phase 9b (Task 6): the Active Learning page's own chip row, from the same
+    # helper over the same explain row -- this step condenses that panel, so it
+    # must not summarise it into a different set of facts.
+    chip_row(
+        reason_chips(
+            explain_row,
+            gt_rows,
+            n_communities=n_communities,
+            night_floor=night_floor,
+            quota_before=frame_quota_before(data.communities, explain_row, arm=arm),
+        )
+    )
     for label, value, flag in selection_factors(
-        explain_rows.iloc[0].to_dict(), n_communities=n_communities, night_floor=night_floor
+        explain_row, n_communities=n_communities, night_floor=night_floor
     ):
         mark = "" if flag is None else (" ✓" if flag else " ✗")
         st.markdown(f"**{label}:** {value}{mark}")
@@ -840,9 +878,13 @@ def _result_weakness(data: _TourData) -> None:
 
 
 def _mined_comparator_clause(data: _TourData, *, name: str, label: str) -> str | None:
-    """"{label} covered {n} scenes at {p:.0%} night" for the comparator arm
+    """"{label} covered {n} scene(s) at {p:.0%} night" for the comparator arm
     ``name``, or ``None`` when this package carries no row for it (an older
-    package, or one that never ran that arm) -- omitted rather than guessed."""
+    package, or one that never ran that arm) -- omitted rather than guessed.
+
+    The noun agrees with the count, the way ``active_learning._strategy_triple``
+    does: a one-scene comparator used to read "1 scenes".
+    """
     rows = data.arms.loc[data.arms["arm"] == name]
     if rows.empty:
         return None
@@ -850,7 +892,11 @@ def _mined_comparator_clause(data: _TourData, *, name: str, label: str) -> str |
     n_scenes, night_share = row.get("n_scenes"), row.get("night_share")
     if not (bool(pd.notna(n_scenes)) and bool(pd.notna(night_share))):
         return None
-    return f"{label} covered {int(n_scenes)} scenes at {float(night_share):.0%} night"
+    scenes = int(n_scenes)
+    return (
+        f"{label} covered {scenes} scene{'' if scenes == 1 else 's'} at "
+        f"{float(night_share):.0%} night"
+    )
 
 
 def _result_data_added(data: _TourData) -> None:
@@ -876,8 +922,12 @@ def _result_data_added(data: _TourData) -> None:
         return
 
     n_mined = int(arm_n) - int(base_n)
+    scenes = int(n_scenes)
+    # Both nouns agree with their counts (the _strategy_triple rule): a one-frame,
+    # one-scene arm used to read "1 frames across 1 scenes".
     sentence = (
-        f"`{arm}` mined {n_mined:,} frames across {int(n_scenes)} scenes, "
+        f"`{arm}` mined {n_mined:,} frame{'' if n_mined == 1 else 's'} across "
+        f"{scenes} scene{'' if scenes == 1 else 's'}, "
         f"{float(night_share):.0%} at night"
     )
     clauses = [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -537,3 +538,183 @@ def test_metric_cards_accepts_two_and_three_tuples_and_passes_delta(
     metric_cards([("A", "1"), ("B", "2", "+1 vs baseline")])
 
     assert calls == [("A", "1", None), ("B", "2", "+1 vs baseline")]
+
+
+# --- Phase 9b (Task 2): the event viewer's step curve -----------------------------
+
+
+def _curve() -> pd.DataFrame:
+    """The filmstrip's five steps as ``line_chart`` takes them: one row per step,
+    the nominal step label plus the reading plotted against it."""
+    return pd.DataFrame({
+        "step": ["t-2", "t-1", "current", "t+1", "t+2"],
+        "can_speed_kmh": [44.0, 41.0, 36.0, 28.0, 20.0],
+    })
+
+
+_STEP_ORDER = ["t-2", "t-1", "current", "t+1", "t+2"]
+
+
+def test_line_chart_layers_and_keeps_the_step_order() -> None:
+    """A LayerChart in every configuration (the caller passes it straight to
+    ``st.altair_chart``), one layer per optional rule, and the x axis in FILMSTRIP
+    order -- alphabetically the steps would read "current, t+1, t+2, t-1, t-2"."""
+    import altair as alt
+    from render import line_chart
+
+    plain = line_chart(
+        _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER, y_title="CAN speed (km/h)"
+    )
+    assert isinstance(plain, alt.LayerChart)
+    spec = plain.to_dict()
+    assert len(spec["layer"]) == 1                       # the line alone
+    assert spec["layer"][0]["mark"]["type"] == "line"
+    assert spec["layer"][0]["mark"]["point"] is True
+    assert spec["layer"][0]["encoding"]["x"]["sort"] == _STEP_ORDER
+    assert spec["layer"][0]["encoding"]["y"]["title"] == "CAN speed (km/h)"
+
+    with_rule = line_chart(
+        _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
+        y_title="CAN speed (km/h)", selected="t-1",
+    )
+    assert len(with_rule.to_dict()["layer"]) == 2        # + the selected-step rule
+
+    both = line_chart(
+        _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
+        y_title="CAN accel (m/s²)", selected="t-1", zero_line=True,
+    )
+    both_spec = both.to_dict()
+    assert len(both_spec["layer"]) == 3                  # + the y = 0 rule
+    # Item M11, Phase 9b consolidated review: this helper has no `title` parameter.
+    # Nothing in the app ever passed one (`curve_charts` titles its two series
+    # through `y_title`, and the spec's signature has no title either), so the
+    # chart is never given a heading it would have to keep in sync with a caption.
+    assert "title" not in both_spec
+    assert "title" not in inspect.signature(line_chart).parameters
+
+
+def test_line_chart_rule_marks_the_selected_step() -> None:
+    """The rule is the filmstrip slider's step: it encodes that step's label on the
+    same nominal, identically sorted x, so it lands on the right band."""
+    from render import line_chart
+
+    spec = line_chart(
+        _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
+        y_title="CAN speed (km/h)", selected="t+1",
+    ).to_dict()
+
+    rule = spec["layer"][1]
+    assert rule["mark"]["type"] == "rule"
+    assert rule["encoding"]["x"]["sort"] == _STEP_ORDER
+    # altair hoists each layer's data into a named dataset
+    assert spec["datasets"][rule["data"]["name"]] == [{"step": "t+1"}]
+
+
+def test_line_chart_rejects_a_step_that_is_not_on_the_axis() -> None:
+    """A rule at a step the chart does not draw would silently vanish (vega drops an
+    unknown band), so an out-of-order/typo'd selection fails loudly instead."""
+    from render import line_chart
+
+    with pytest.raises(ValueError, match="unknown selected step"):
+        line_chart(
+            _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
+            y_title="CAN speed (km/h)", selected="t+3",
+        )
+
+
+def test_line_chart_axis_labels_are_flat_never_truncated_or_thinned() -> None:
+    """Same promise ``bar_chart`` makes (Phase 9a review 5b): Streamlit's Vega theme
+    would otherwise hide every other label on a crowded categorical axis, and five
+    step labels that read "t-2 ... t+2" only work if all five are drawn, upright."""
+    from render import line_chart
+
+    spec = line_chart(
+        _curve(), x="step", y="can_speed_kmh", order=_STEP_ORDER,
+        y_title="CAN speed (km/h)", height=120,
+    ).to_dict()
+
+    axis = spec["layer"][0]["encoding"]["x"]["axis"]
+    assert axis["labelAngle"] == 0
+    assert axis["labelOverlap"] is False
+    assert axis["labelLimit"] == 0
+    assert axis["title"] is None
+    assert spec["height"] == 120
+
+
+# --- Phase 9b (Task 4): the shared curve pair -------------------------------------
+
+
+def _filmstrip_curve(*, speed_is_can: bool = True):
+    """A three-step ``filters.FilmstripCurve`` -- the shape ``curve_charts`` takes
+    from ``filters.filmstrip_steps`` on a scene-edge event."""
+    from filters import FilmstripCurve, FilmstripStep
+
+    return FilmstripCurve(
+        steps=[
+            FilmstripStep("t-1", "a", 41.0, -1.2, False),
+            FilmstripStep("current", "b", 36.0, -7.5, True),
+            FilmstripStep("t+1", "c", 28.0, -0.5, False),
+        ],
+        speed_is_can=speed_is_can,
+    )
+
+
+def test_curve_charts_pairs_the_can_speed_and_accel_series() -> None:
+    """One builder, two charts, so the Scenario viewer and tour step 2 draw the
+    identical pair: CAN speed over the steps, CAN longitudinal acceleration with
+    the y = 0 rule, both with the vertical rule at the selected step.
+
+    The accel axis title is the SHORT "CAN accel (m/s²)": the long form clipped at
+    the viewer's chart width. The full words live in ``curve_caption`` below the
+    pair (pinned in the next test), so the page still says which acceleration."""
+    from render import curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(), selected="t+1")
+
+    speed_spec, accel_spec = speed.to_dict(), accel.to_dict()
+    assert speed_spec["layer"][0]["encoding"]["y"]["title"] == "CAN speed (km/h)"
+    assert accel_spec["layer"][0]["encoding"]["y"]["title"] == "CAN accel (m/s²)"
+    for spec in (speed_spec, accel_spec):
+        assert spec["layer"][0]["encoding"]["x"]["sort"] == ["t-1", "current", "t+1"]
+        rule = spec["layer"][1]
+        assert spec["datasets"][rule["data"]["name"]] == [{"step": "t+1"}]
+    # the acceleration curve runs mostly negative -- it gets the zero rule, the
+    # speed curve (never negative) does not.
+    assert len(speed_spec["layer"]) == 2
+    assert len(accel_spec["layer"]) == 3
+
+    values = speed_spec["datasets"][speed_spec["layer"][0]["data"]["name"]]
+    assert [row["step"] for row in values] == ["t-1", "current", "t+1"]
+    assert [row["speed_kmh"] for row in values] == [41.0, 36.0, 28.0]
+
+
+def test_curve_charts_titles_ego_speed_when_the_speed_is_not_can() -> None:
+    """The honesty rule: on a pre-0.8 package the speed series is the GT ego pose
+    converted to km/h, and every label that describes it says so. The
+    acceleration series is CAN on every package, so its title never changes."""
+    from render import curve_caption, curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(speed_is_can=False), selected="current")
+
+    assert speed.to_dict()["layer"][0]["encoding"]["y"]["title"] == "ego speed (km/h)"
+    assert accel.to_dict()["layer"][0]["encoding"]["y"]["title"] == "CAN accel (m/s²)"
+    assert curve_caption(_filmstrip_curve(speed_is_can=False)) == (
+        "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+        "acceleration from the CAN bus"
+    )
+    assert curve_caption(_filmstrip_curve()) == (
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the CAN bus"
+    )
+
+
+def test_curve_charts_draws_no_rule_without_a_selected_step() -> None:
+    """``selected=None`` is a curve with no cursor (the rule is the only thing the
+    slider drives), and an unknown step still raises through ``line_chart``."""
+    from render import curve_charts
+
+    speed, accel = curve_charts(_filmstrip_curve(), selected=None)
+    assert len(speed.to_dict()["layer"]) == 1
+    assert len(accel.to_dict()["layer"]) == 2      # the zero rule only
+
+    with pytest.raises(ValueError, match="unknown selected step"):
+        curve_charts(_filmstrip_curve(), selected="t+2")

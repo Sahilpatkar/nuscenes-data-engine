@@ -30,14 +30,19 @@ import streamlit as st
 from filters import (
     community_jump,
     fixed_boxes,
+    frame_quota_before,
     gt_for_render,
     model_label,
+    quota_column_pair,
+    reason_chips,
     selection_factors,
+    strategy_coverage,
     visible_gt,
 )
 from PIL import Image
 from render import (
     bar_chart,
+    chip_row,
     draw_overlay,
     learned,
     loop_breadcrumb,
@@ -83,6 +88,36 @@ _TOP_COMMUNITIES = 12
 # How many gallery thumbs render before the "show all" checkbox -- all 78 curated
 # selected frames in one grid is 78 images and 78 buttons (consolidated review M8).
 _GALLERY_PAGE = 24
+
+# Phase 9b (Task 6): the acquisition strategies the experiment ran over the SAME
+# mining budget -- the comparison that answers "why the graph arm rather than
+# similarity mining?" before the all-arms chart shows the results. Keys are arm
+# names in active_learning_results.parquet, values the on-screen labels, so a
+# viewer reads a strategy rather than an identifier off the chart axis.
+_STRATEGIES = {
+    "random": "Random sample",
+    "mined": "Similarity mining",
+    "graph_rate_night": "Graph-aware mining",
+}
+
+# How each strategy WORKS -- fixed prose, because the mechanism is the same in
+# every package; every NUMBER beside it is read from the arm table.
+_STRATEGY_NOTES = {
+    "random": "draws frames uniformly at random from the unlabelled pool.",
+    "mined": (
+        "takes the unlabelled frames nearest the failure clusters in embedding space."
+    ),
+    "graph_rate_night": (
+        "scores communities of visually similar pool frames by the failure mass "
+        "routed into them, turns that mass into a per-community quota, and applies "
+        "a night floor before the quotas are filled."
+    ),
+}
+
+# The section heading counts the strategies THIS package carries rather than
+# claiming three when a run skipped one -- the same "computed, never asserted"
+# rule the superlatives on this page follow.
+_STRATEGY_COUNT_WORDS = {2: "Two", 3: "Three"}
 
 _ARM_TABLE_COLUMNS = [
     "arm",
@@ -217,6 +252,159 @@ def _render_night_inversion_callout(arms: pd.DataFrame) -> None:
     )
 
 
+def _mined_count(
+    arm_row: pd.Series, base_row: pd.Series, validation: dict[str, Any]
+) -> int | None:
+    """How many frames the arm mined: the growth of the training set, or the
+    mining budget `demo al-explain` recorded, or ``None`` when this package states
+    neither (the section then says "the mined frames" instead of a count it cannot
+    derive)."""
+    arm_images, base_images = arm_row.get("n_train_images"), base_row.get("n_train_images")
+    if pd.notna(arm_images) and pd.notna(base_images):
+        return int(arm_images) - int(base_images)
+    n_mine = (validation.get("config") or {}).get("n_mine")
+    return int(n_mine) if n_mine is not None else None
+
+
+def _coverage_row(coverage: pd.DataFrame, arm: str) -> pd.Series | None:
+    """One strategy's coverage row, or ``None`` when this package has no row for
+    that arm -- or has one but is missing any of the three numbers a comparison
+    between strategies would have to state."""
+    rows = coverage.loc[coverage["arm"] == arm]
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    if any(pd.isna(row[column]) for column in ("n_scenes", "night_share", "delta_night")):
+        return None
+    return row
+
+
+def _best_night_arm(arms: pd.DataFrame) -> str | None:
+    """The arm holding this table's best night gain, or ``None`` when no arm has a
+    night delta at all -- the same ``idxmax`` over the non-NA deltas the night
+    inversion callout above ranks with."""
+    if "delta_night" not in arms.columns:
+        return None
+    ranked = arms.dropna(subset=["delta_night"])
+    if ranked.empty:
+        return None
+    return str(ranked.loc[ranked["delta_night"].idxmax()]["arm"])
+
+
+def _strategy_triple(row: pd.Series) -> str:
+    """One strategy's (scenes, night share, night delta), each rendered as "n/a"
+    when this package doesn't carry it.
+
+    The noun agrees with the count (item M8, Phase 9b consolidated review): a
+    one-scene arm read "1 scenes". "n/a scenes" keeps the plural -- there is no
+    count to agree with.
+    """
+    n_scenes = None if pd.isna(row["n_scenes"]) else int(row["n_scenes"])
+    scenes = (
+        "n/a scenes"
+        if n_scenes is None
+        else f"{n_scenes:,} scene{'' if n_scenes == 1 else 's'}"
+    )
+    night = "n/a" if pd.isna(row["night_share"]) else f"{float(row['night_share']):.0%}"
+    delta = "n/a" if pd.isna(row["delta_night"]) else f"{float(row['delta_night']):+.4f}"
+    return f"{row['strategy']}: {scenes} · {night} night · {delta}"
+
+
+def _strategy_lesson(coverage: pd.DataFrame, arms: pd.DataFrame) -> str:
+    """The strategy section's "what we learned" sentence, COMPUTED from this
+    package's own table (Phase 9a's rule, restated in the 9b spec: superlatives are
+    computed, never asserted).
+
+    The comparison -- similarity mining found near-duplicates while the graph arm
+    spread the same budget wider and took the best night gain -- is written only
+    when all three of its clauses are true HERE: the graph arm covers strictly more
+    scenes than the similarity arm, at a strictly higher night share, and holds the
+    best night delta of every arm in the table. Any other package (including one
+    that never ran ``mined``) gets the same numbers with no ranking claim at all:
+    each strategy's scenes/night share/night delta, side by side.
+    """
+    mined = _coverage_row(coverage, "mined")
+    graph = _coverage_row(coverage, "graph_rate_night")
+    if (
+        mined is not None
+        and graph is not None
+        and int(graph["n_scenes"]) > int(mined["n_scenes"])
+        and float(graph["night_share"]) > float(mined["night_share"])
+        and _best_night_arm(arms) == "graph_rate_night"
+    ):
+        # Same count/noun agreement as _strategy_triple (Phase 9b review M8): a
+        # one-scene arm must not read "1 scenes" here either.
+        mined_scenes = int(mined["n_scenes"])
+        graph_scenes = int(graph["n_scenes"])
+        return (
+            f"Similarity mining found near-duplicates: {mined_scenes:,} "
+            f"scene{'' if mined_scenes == 1 else 's'}, "
+            f"{float(mined['night_share']):.0%} night, {float(mined['delta_night']):+.4f} "
+            "night mAP50-95; graph-aware mining spread the same budget over "
+            f"{graph_scenes:,} scene{'' if graph_scenes == 1 else 's'} at "
+            f"{float(graph['night_share']):.0%} night "
+            f"and took the best night gain ({float(graph['delta_night']):+.4f})."
+        )
+    triples = "; ".join(_strategy_triple(row) for _, row in coverage.iterrows())
+    return (
+        "Same budget, spent differently — scenes covered, night share of the mined "
+        f"set, and night mAP50-95 against the baseline: {triples}."
+    )
+
+
+def _render_strategies(arms: pd.DataFrame, *, n_mined: int | None) -> bool:
+    """(b, ahead of the arm chart) The acquisitions side by side: what each
+    strategy's own mined set covers, and what it bought at night.
+
+    Returns whether anything was drawn -- a package carrying fewer than two of the
+    strategies has no comparison to make, and the section is skipped entirely
+    rather than charting one bar against itself.
+    """
+    coverage = strategy_coverage(arms, strategies=_STRATEGIES)
+    if len(coverage) < 2:
+        return False
+
+    count = _STRATEGY_COUNT_WORDS.get(len(coverage), str(len(coverage)))
+    st.subheader(
+        f"{count} ways to pick the mined frames"
+        if n_mined is None
+        else f"{count} ways to pick {n_mined:,} frames"
+    )
+    st.caption(
+        "Every arm below spent the same mining budget on the same unlabelled pool "
+        "— these are the sets they came back with."
+    )
+
+    order = [str(label) for label in coverage["strategy"]]
+    highlight = _STRATEGIES["graph_rate_night"]
+    scenes_column, night_column = st.columns(2)
+    with scenes_column:
+        st.altair_chart(
+            bar_chart(
+                coverage, x="strategy", y="n_scenes", highlight=highlight, sort=order,
+                zero_line=False, y_title="scenes covered",
+                title="Scenes the mined frames came from",
+            ),
+            width="stretch",
+        )
+    with night_column:
+        st.altair_chart(
+            bar_chart(
+                coverage, x="strategy", y="night_share", highlight=highlight, sort=order,
+                zero_line=False, y_title="night share",
+                title="Night share of the mined set",
+            ),
+            width="stretch",
+        )
+    provenance("recorded", "active_learning_results.parquet")
+    for record in coverage.itertuples(index=False):
+        note = _STRATEGY_NOTES.get(str(record.arm))
+        if note is not None:
+            st.caption(f"**{record.strategy}** (`{record.arm}`) — {note}")
+    learned(_strategy_lesson(coverage, arms))
+    return True
+
+
 def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
     """(b) All arms in the order the experiment ran them, night first."""
     st.subheader("Every arm, one chart")
@@ -265,21 +453,18 @@ def _render_arm_chart(arms: pd.DataFrame, *, arm: str) -> None:
 def _render_community_section(communities: pd.DataFrame, *, arm: str) -> None:
     """(c) Community mass -> quota, and what the night floor changed."""
     st.subheader(f"How `{arm}` chooses: community mass → quota")
-    if communities.empty:
+    # ONE derivation of the (after, before) quota pair, shared with
+    # filters.frame_quota_before -- which puts this same jump on a reason chip, and
+    # derived the pair itself until item M4 of the Phase 9b consolidated review. The
+    # helper's own docstring carries the rules (empty table / no column for this arm
+    # -> None, i.e. a stale package for this section; a `before` of None when the
+    # package exported only one arm's quota, in which case the paired comparison
+    # below simply isn't drawn rather than charting a column against itself).
+    pair = quota_column_pair(communities, arm=arm)
+    if pair is None:
         st.info(_STALE_PACKAGE_NOTE)
         return
-
-    after = f"quota_{arm}"
-    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
-    if after not in quota_columns:
-        st.info(_STALE_PACKAGE_NOTE)
-        return
-    # The other arm's quota over the SAME communities -- the run's own control for
-    # "what did the night floor change?", since the two allocations differ in
-    # nothing else. None when this package only exported one arm's quota, in which
-    # case the paired comparison below simply isn't drawn (there is nothing to
-    # compare) rather than charting one column against itself.
-    before = next((c for c in quota_columns if c != after), None)
+    after, before = pair
 
     # The -1 backfill sentinel is a bucket for frames drawn from outside every
     # community, not a community: charting it as one would put a mass-0 outlier on
@@ -353,6 +538,7 @@ def _render_community_section(communities: pd.DataFrame, *, arm: str) -> None:
 def _render_selected_frame(
     frame_row: pd.Series,
     gt: pd.DataFrame,
+    communities: pd.DataFrame,
     *,
     arm: str,
     explain: pd.DataFrame,
@@ -390,9 +576,22 @@ def _render_selected_frame(
     if rows.empty:
         st.caption(_EXPLAIN_FRAME_ABSENT_NOTE)
         return
+    explain_row = rows.iloc[0].to_dict()
     st.markdown("**Why this frame**")
+    # Phase 9b (Task 6): the same facts the lines below spell out, as a chip row
+    # that can be read at a glance -- built by filters.reason_chips from THIS row,
+    # so a chip can never claim something the panel under it doesn't.
+    chip_row(
+        reason_chips(
+            explain_row,
+            gt_rows,
+            n_communities=n_communities,
+            night_floor=night_floor,
+            quota_before=frame_quota_before(communities, explain_row, arm=arm),
+        )
+    )
     factors = selection_factors(
-        rows.iloc[0].to_dict(), n_communities=n_communities, night_floor=night_floor
+        explain_row, n_communities=n_communities, night_floor=night_floor
     )
     for label, value, flag in factors:
         mark = "" if flag is None else (" ✓" if flag else " ✗")
@@ -488,7 +687,7 @@ def _render_gallery(
         else int(validation.get("n_communities", 0))
     )
     _render_selected_frame(
-        frame_row, gt,
+        frame_row, gt, communities,
         arm=arm, explain=load_al_explain(), n_communities=n_communities,
         night_floor=_night_floor(validation), validation=validation,
     )
@@ -639,6 +838,10 @@ def render() -> None:
     _render_story(arm_row, base_row, arm=str(arm), validation=validation)
 
     st.divider()
+    # The strategy comparison draws its own divider only when it drew anything --
+    # a package with fewer than two acquisition arms skips the whole section.
+    if _render_strategies(arms, n_mined=_mined_count(arm_row, base_row, validation)):
+        st.divider()
     _render_arm_chart(arms, arm=str(arm))
 
     st.divider()

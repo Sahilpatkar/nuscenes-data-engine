@@ -38,15 +38,21 @@ from data import (
 # picked in the Task-5 operational run (final-review correction): baseline
 # misses a shadowed car AND a pedestrian; graph_rate_night recovers ONLY the
 # pedestrian (a low-confidence match, still a hit per the matching rules) -- the
-# far car defeats all three models. The original caption ("the orange dashed
-# box is a miss ... catches", singular) was wrong on both counts: it claimed a
-# single miss where two dashed boxes render, and implied the visually-dominant
-# one (the far car) is the one that gets caught, when it's the one nothing
-# catches.
+# far car defeats every model in the package. The original caption ("the orange
+# dashed box is a miss ... catches", singular) was wrong on both counts: it
+# claimed a single miss where two dashed boxes render, and implied the
+# visually-dominant one (the far car) is the one that gets caught, when it's the
+# one nothing catches.
+#
+# "five", not "three" (item I2, Phase 9b consolidated review): the package this
+# phase ships carries FIVE models, and the claim was re-verified against them --
+# all five miss the car, and graph_rate_night alone claims the pedestrian, at
+# conf 0.135 (a low-confidence hit). A sentence that counts models has to be
+# re-counted whenever `demo infer` changes how many there are.
 HERO_CAPTION = (
     "baseline misses a shadowed car and a pedestrian; the night-targeted "
     "retrain recovers the pedestrian (a low-confidence hit) — the far car "
-    "defeats all three models. Explore more in the Failure Explorer."
+    "defeats all five models. Explore more in the Failure Explorer."
 )
 
 
@@ -172,9 +178,13 @@ def _loop_beats(results: dict[str, Any], arms: pd.DataFrame) -> list[str | None]
         if bool(pd.notna(base_n)) and bool(pd.notna(arm_n)):
             if bool(pd.notna(n_scenes)):
                 n_mined = int(arm_n) - int(base_n)
+                scenes = int(n_scenes)
+                # Number/noun agreement, as in tour._result_data_added and
+                # active_learning._strategy_triple.
                 beats[1] = (
-                    f"**Find useful data** — {n_mined:,} frames across "
-                    f"{int(n_scenes)} scenes"
+                    f"**Find useful data** — {n_mined:,} "
+                    f"frame{'' if n_mined == 1 else 's'} across "
+                    f"{scenes} scene{'' if scenes == 1 else 's'}"
                 )
             beats[2] = f"**Retrain** — {int(base_n):,} → {int(arm_n):,} training images"
 

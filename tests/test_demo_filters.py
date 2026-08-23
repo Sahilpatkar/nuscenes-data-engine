@@ -12,6 +12,11 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from filters import (  # noqa: E402
+    _PICK_PASS_CHIPS,
+    _PICK_PASS_LABELS,
+    FILMSTRIP_STEPS,
+    FilmstripStep,
+    PathStep,
     braking_caption,
     community_jump,
     confidence_caption,
@@ -19,25 +24,33 @@ from filters import (  # noqa: E402
     distance_caption,
     failure_counts,
     failure_flags,
+    filmstrip_steps,
     filter_frames,
     fixed_boxes,
     frame_caption,
+    frame_quota_before,
     graph_node_label,
     loss_long,
     model_label,
     parity_caption,
     parity_short,
+    path_steps,
+    quota_column_pair,
     rank_events,
+    reason_chips,
     replay_tool_counts,
     selection_factors,
     severity_caption,
     sort_frames,
     speed_caption,
     step_detail,
+    strategy_coverage,
     subgraph_narrative,
     tour_frame_candidates,
     verdict_line,
     weak_frame_summary,
+    weak_result_token,
+    weak_showcase_token,
 )
 
 
@@ -575,6 +588,286 @@ def test_graph_node_label_unknown_type_falls_back_to_the_label() -> None:
     assert graph_node_label(_node("thing:abc123", "SomethingElse", False, {})) == "SomethingElse"
 
 
+# --- path_steps (Phase 9b Task 5: the graph panel's progressive path reveal) -------
+#
+# One event's exported subgraph (assemble_subgraph's {nodes, edges, path}) as the
+# ordered story the select_slider walks: Scene -> the keyframe -> each MATCHING
+# object, nearest first -> the ego pose the CAN readings hang off (spec
+# docs/superpowers/specs/2026-08-22-demo-phase9b-design.md §3). Node ids come from
+# `path`'s own chains, never from re-deriving which nodes matched; a meta field the
+# export doesn't carry reads "n/a" rather than being invented.
+
+
+def _path_event(
+    *,
+    car_distance: object = 7.5,
+    path: list[list[str]] | None = None,
+) -> dict[str, object]:
+    """A hand-built subgraph in ``assemble_subgraph``'s shape: the backbone chain
+    plus one ``[sample, object, category]`` chain per matching object, one off-path
+    context object no chain names, and the two Categories.
+
+    The object chains are deliberately FAR-FIRST (car before pedestrian) so the
+    nearest-first ordering has to come from ``path_steps`` reading
+    ``distance_to_ego_m``, not from the order the chains happen to be in.
+    """
+    return {
+        "nodes": [
+            {
+                "id": "scene:sc1", "label": "Scene", "group": "scene", "on_path": True,
+                "meta": {
+                    "name": "scene-1084", "location": "boston-seaport",
+                    "is_night": True, "is_rain": False,
+                },
+            },
+            {
+                "id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True,
+                "meta": {
+                    "timestamp": 1533151603547590, "scene": "scene-1084",
+                    "is_night": True, "is_rain": False,
+                },
+            },
+            {
+                "id": "egopose:sa1", "label": "EgoPose", "group": "egopose", "on_path": True,
+                "meta": {
+                    "speed_mps": 8.6, "accel_long_min_mps2": -4.46,
+                    "is_hard_braking": True, "can_speed_kmh": 31.0,
+                },
+            },
+            {
+                "id": "object:ped", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": True,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 2.1, "ego_rel_x": 1.9, "ego_rel_y": -0.8,
+                    "visibility": "4",
+                },
+            },
+            {
+                "id": "category:human.pedestrian.adult", "label": "Category",
+                "group": "pedestrian", "on_path": True,
+                "meta": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+            },
+            {
+                "id": "object:car", "label": "ObjectObservation", "group": "car",
+                "on_path": True,
+                "meta": {
+                    "category": "vehicle.car", "group": "car",
+                    "distance_to_ego_m": car_distance, "ego_rel_x": 7.0,
+                    "ego_rel_y": 2.6, "visibility": "3",
+                },
+            },
+            {
+                "id": "category:vehicle.car", "label": "Category", "group": "car",
+                "on_path": True, "meta": {"name": "vehicle.car", "group": "car"},
+            },
+            {
+                "id": "object:far", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": False,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 21.4, "visibility": "2",
+                },
+            },
+        ],
+        "edges": [
+            {"source": "sample:sa1", "target": "scene:sc1", "label": "IN_SCENE"},
+            {"source": "sample:sa1", "target": "egopose:sa1", "label": "AT_POSE"},
+            {"source": "sample:sa1", "target": "object:ped", "label": "HAS_OBJECT"},
+            {"source": "sample:sa1", "target": "object:car", "label": "HAS_OBJECT"},
+            {"source": "sample:sa1", "target": "object:far", "label": "HAS_OBJECT"},
+        ],
+        "path": [
+            ["scene:sc1", "sample:sa1", "egopose:sa1"],
+            ["sample:sa1", "object:car", "category:vehicle.car"],
+            ["sample:sa1", "object:ped", "category:human.pedestrian.adult"],
+        ] if path is None else path,
+    }
+
+
+def test_path_steps_orders_scene_keyframe_nearest_objects_then_ego_pose() -> None:
+    steps = path_steps(_path_event())
+    assert [step.label for step in steps] == [
+        "1 · Scene scene-1084",
+        "2 · Keyframe",
+        "3 · Pedestrian · 2.1 m",
+        "4 · Car · 7.5 m",
+        "5 · Ego pose",
+    ]
+    assert all(isinstance(step, PathStep) for step in steps)
+
+
+def test_path_steps_node_ids_come_from_the_exported_path_chains() -> None:
+    """Each step owns exactly the ids ``path`` names for it -- the sample belongs to
+    the Keyframe step, NOT to each object chain that also starts with it (drawing it
+    twice would reveal the hub before its own step)."""
+    steps = path_steps(_path_event())
+    assert [step.node_ids for step in steps] == [
+        ("scene:sc1",),
+        ("sample:sa1",),
+        ("object:ped", "category:human.pedestrian.adult"),
+        ("object:car", "category:vehicle.car"),
+        ("egopose:sa1",),
+    ]
+    # Every on-path node is revealed by exactly one step, and no context node is.
+    revealed = [node_id for step in steps for node_id in step.node_ids]
+    assert len(revealed) == len(set(revealed))
+    assert "object:far" not in revealed
+
+
+def test_path_steps_facts_are_read_from_the_nodes_own_meta() -> None:
+    scene, keyframe, pedestrian, car, ego = path_steps(_path_event())
+    assert scene.facts == (
+        ("Scene", "scene-1084"),
+        ("Location", "boston-seaport"),
+        ("Lighting", "night"),
+        ("Rain", "no"),
+    )
+    assert keyframe.facts == (
+        ("Timestamp", "2018-08-01 19:26:43 UTC"),
+        ("Lighting", "night"),
+        ("Rain", "no"),
+    )
+    assert pedestrian.facts == (
+        ("Category", "human.pedestrian.adult"),
+        ("Distance to ego", "2.1 m"),
+        ("Visibility", "4 (80-100 % visible)"),
+    )
+    assert car.facts[1] == ("Distance to ego", "7.5 m")
+    # The CAN reading and the braking flag are properties of the EgoPose node --
+    # the export has no separate CAN node (spec §3).
+    ego_text = " ".join(f"{label} {value}" for label, value in ego.facts).lower()
+    assert "31" in ego_text
+    assert "hard braking" in ego_text
+    assert ego.facts == (
+        ("CAN speed", "31.0 km/h"),
+        ("Min longitudinal accel", "-4.46 m/s²"),
+        ("Hard braking", "yes"),
+    )
+
+
+def test_path_steps_render_the_timestamp_and_the_visibility_level_readably() -> None:
+    """Item M10, Phase 9b consolidated review: the raw meta is a MICROSECOND epoch
+    and a bare nuScenes visibility token -- neither is a fact to a reader who does
+    not know the schema. The keyframe's timestamp reads as a UTC instant and the
+    visibility token carries the band it stands for (nuScenes' own levels: 1 =
+    0-40 %, 2 = 40-60 %, 3 = 60-80 %, 4 = 80-100 % visible).
+    """
+    _scene, keyframe, pedestrian, car, _ego = path_steps(_path_event())
+    assert keyframe.facts[0] == ("Timestamp", "2018-08-01 19:26:43 UTC")
+    assert pedestrian.facts[2] == ("Visibility", "4 (80-100 % visible)")
+    assert car.facts[2] == ("Visibility", "3 (60-80 % visible)")
+
+
+def test_path_steps_keep_a_visibility_token_they_have_no_band_for() -> None:
+    """A token outside nuScenes' four levels is shown exactly as the export wrote
+    it -- inventing a band for it would be a claim the package never made."""
+    event = _path_event()
+    pedestrian_node = next(node for node in event["nodes"] if node["id"] == "object:ped")
+    pedestrian_node["meta"]["visibility"] = "9"
+    assert path_steps(event)[2].facts[2] == ("Visibility", "9")
+
+
+def test_path_steps_without_a_path_is_empty_not_an_exception() -> None:
+    """An event the exporter staged with no chains at all (and the empty-subgraph
+    shape assemble_subgraph returns for a record-less event) has no story to
+    reveal -- the panel then draws every on-path node at once, as it always did."""
+    assert path_steps({}) == []
+    assert path_steps({"nodes": [], "edges": [], "path": []}) == []
+    assert path_steps(_path_event(path=[])) == []
+
+
+def test_path_steps_missing_distance_sorts_last_and_reads_n_a() -> None:
+    """A distance the export doesn't carry is never invented: the object still gets
+    its step (it IS on the path), sorts behind every object that has one, and shows
+    "n/a" instead of a fabricated figure or a "nan m" literal."""
+    for missing in (None, float("nan")):
+        steps = path_steps(_path_event(car_distance=missing))
+        assert [step.label for step in steps] == [
+            "1 · Scene scene-1084",
+            "2 · Keyframe",
+            "3 · Pedestrian · 2.1 m",
+            "4 · Car",
+            "5 · Ego pose",
+        ]
+        assert steps[3].facts == (
+            ("Category", "vehicle.car"),
+            ("Distance to ego", "n/a"),
+            ("Visibility", "3 (60-80 % visible)"),
+        )
+
+
+def test_path_steps_labels_are_unique_so_they_can_be_slider_options() -> None:
+    """Two matching objects of the same group at the same distance would collide
+    without the 1-based index prefix -- and st.select_slider needs its options
+    distinct."""
+    event = _path_event()
+    car = next(node for node in event["nodes"] if node["id"] == "object:car")
+    car["meta"]["distance_to_ego_m"] = 2.1     # as close as the pedestrian ...
+    car["meta"]["group"] = "pedestrian"        # ... and now the same group text
+    labels = [step.label for step in path_steps(event)]
+    assert len(labels) == len(set(labels))
+    assert labels[2:4] == ["3 · Pedestrian · 2.1 m", "4 · Pedestrian · 2.1 m"]
+
+
+def test_path_steps_without_the_backbone_chain_keeps_the_object_story() -> None:
+    """``assemble_subgraph`` appends the backbone chain ONLY when both the Scene and
+    the EgoPose exist, so a subgraph without them carries object chains alone. The
+    keyframe step is then read off a chain's own first element, and the two steps
+    whose nodes the export never wrote are simply absent -- never filled in with a
+    guess."""
+    event = {
+        "nodes": [
+            {
+                "id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True,
+                "meta": {"timestamp": 1533151603547590, "is_night": None, "is_rain": None},
+            },
+            {
+                "id": "object:ped", "label": "ObjectObservation", "group": "pedestrian",
+                "on_path": True,
+                "meta": {
+                    "category": "human.pedestrian.adult", "group": "pedestrian",
+                    "distance_to_ego_m": 2.1, "visibility": "4",
+                },
+            },
+            {
+                "id": "category:human.pedestrian.adult", "label": "Category",
+                "group": "pedestrian", "on_path": True,
+                "meta": {"name": "human.pedestrian.adult", "group": "pedestrian"},
+            },
+        ],
+        "edges": [],
+        "path": [["sample:sa1", "object:ped", "category:human.pedestrian.adult"]],
+    }
+    steps = path_steps(event)
+    assert [step.label for step in steps] == ["1 · Keyframe", "2 · Pedestrian · 2.1 m"]
+    assert steps[0].node_ids == ("sample:sa1",)
+    assert steps[0].facts == (
+        ("Timestamp", "2018-08-01 19:26:43 UTC"), ("Lighting", "n/a"), ("Rain", "n/a")
+    )
+
+
+def test_path_steps_reads_n_a_for_meta_the_export_did_not_carry() -> None:
+    event = {
+        "nodes": [
+            {"id": "scene:sc1", "label": "Scene", "group": "scene", "on_path": True, "meta": {}},
+            {"id": "sample:sa1", "label": "Sample", "group": "sample", "on_path": True, "meta": {}},
+            {"id": "egopose:sa1", "label": "EgoPose", "group": "egopose", "on_path": True, "meta": {}},
+        ],
+        "edges": [],
+        "path": [["scene:sc1", "sample:sa1", "egopose:sa1"]],
+    }
+    scene, keyframe, ego = path_steps(event)
+    assert scene.label == "1 · Scene"
+    assert scene.facts == (
+        ("Scene", "n/a"), ("Location", "n/a"), ("Lighting", "n/a"), ("Rain", "n/a"),
+    )
+    assert keyframe.facts == (("Timestamp", "n/a"), ("Lighting", "n/a"), ("Rain", "n/a"))
+    assert ego.facts == (
+        ("CAN speed", "n/a"), ("Min longitudinal accel", "n/a"), ("Hard braking", "n/a"),
+    )
+
+
 def test_parity_caption_pluralizes_keyframe_on_count() -> None:
     """(item 6, Phase 6 follow-up review) "keyframe" singular only for
     sql_count == 1; plural for every other count, including 0."""
@@ -903,6 +1196,310 @@ def test_model_label_names_the_champion_checkpoint_honestly() -> None:
     assert model_label("champion") == "champion (yolov8m @960)"
     assert model_label("baseline") == "baseline"
     assert model_label("graph_rate_night") == "graph_rate_night"
+
+
+def test_model_label_distinguishes_the_two_weak_supervision_arms() -> None:
+    """Phase 9b puts both weak-supervision checkpoints on screen at once, and their
+    raw names differ by a bare ``_gt`` suffix -- which is precisely the distinction
+    the page exists to make. Each carries what it was trained on (pseudo labels vs
+    the human-labelled control) and the architecture, so the two are never confused
+    for one another, nor for the yolov8m ``champion``."""
+    assert model_label("weak_graph_rate_night") == (
+        "weak_graph_rate_night (pseudo labels, yolov8n)"
+    )
+    assert model_label("weak_graph_rate_night_gt") == (
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)"
+    )
+    assert model_label("some_unlabelled_model") == "some_unlabelled_model"
+
+
+# --- Phase 9b (Task 6): acquisition coverage + per-frame reason chips -------------
+
+
+def _acquisition_arms() -> pd.DataFrame:
+    """The real package's four relevant arm rows: the baseline (no mined set of its
+    own, so NA composition columns) and the three acquisition strategies."""
+    return pd.DataFrame({
+        "arm": ["baseline", "graph_rate_night", "mined", "random"],
+        "n_scenes": pd.array([None, 368, 219, 501], dtype="Int64"),
+        "night_share": [float("nan"), 0.309, 0.0, 0.127],
+        "delta_night": [0.0, 0.0101, 0.0072, -0.0048],
+        "n_train_images": pd.array([7035, 8535, 8535, 8535], dtype="Int64"),
+    })
+
+
+_ACQUISITIONS = {
+    "random": "Random sample",
+    "mined": "Similarity mining",
+    "graph_rate_night": "Graph-aware mining",
+}
+
+
+def test_strategy_coverage_keeps_the_mapping_order() -> None:
+    """One row per acquisition strategy, in the ORDER THE MAPPING gives (the page
+    reads it as a chart axis, and the arm table is sorted alphabetically) -- with
+    each arm's own mined-set composition and its night result beside it."""
+    coverage = strategy_coverage(_acquisition_arms(), strategies=_ACQUISITIONS)
+
+    assert list(coverage.columns) == [
+        "arm", "strategy", "n_scenes", "night_share", "delta_night", "n_train_images",
+    ]
+    assert list(coverage["arm"]) == ["random", "mined", "graph_rate_night"]
+    assert list(coverage["strategy"]) == [
+        "Random sample", "Similarity mining", "Graph-aware mining"
+    ]
+    assert list(coverage["n_scenes"]) == [501, 219, 368]
+    assert list(coverage["night_share"]) == pytest.approx([0.127, 0.0, 0.309])
+    assert list(coverage["delta_night"]) == pytest.approx([-0.0048, 0.0072, 0.0101])
+    assert list(coverage["n_train_images"]) == [8535, 8535, 8535]
+
+
+def test_strategy_coverage_skips_arms_this_package_never_ran() -> None:
+    """An arm the mapping names but the package has no row for is skipped, not
+    guessed at -- the fixture package (and any run that skipped an arm) simply
+    compares fewer strategies."""
+    arms = _acquisition_arms()
+
+    coverage = strategy_coverage(arms.loc[arms["arm"] != "mined"], strategies=_ACQUISITIONS)
+
+    assert list(coverage["arm"]) == ["random", "graph_rate_night"]
+    # a stale/empty arm table has no strategies at all, and raises nothing
+    assert strategy_coverage(arms.iloc[:0], strategies=_ACQUISITIONS).empty
+    assert strategy_coverage(pd.DataFrame(), strategies=_ACQUISITIONS).empty
+
+
+def test_strategy_coverage_carries_missing_composition_through_as_na() -> None:
+    """NA in, NA out: the baseline has no mined set, and this helper says so rather
+    than inventing a zero -- the page decides what to print for a missing number."""
+    coverage = strategy_coverage(_acquisition_arms(), strategies={"baseline": "No mining"})
+
+    assert list(coverage["arm"]) == ["baseline"]
+    assert pd.isna(coverage.iloc[0]["n_scenes"])
+    assert pd.isna(coverage.iloc[0]["night_share"])
+    assert coverage.iloc[0]["delta_night"] == pytest.approx(0.0)
+
+
+def _reason_row() -> dict[str, object]:
+    """A row shaped like the AppTest fixture's own "wA" selection-explain row: a
+    night frame the night pass took (floor 1) from community #0, ranked 2nd inside
+    it by similarity degree, with no failure mass routed to the frame itself."""
+    return {
+        "sample_data_token": "wA",
+        "arm": "graph_rate_night",
+        "is_night": True,
+        "scene_name": "scene-wA",
+        "community": 0,
+        "community_size": 10,
+        "community_night_members": 2,
+        "community_mass": 5.0,
+        "community_mass_rank": 1,
+        "community_quota": 2,
+        "degree": 3.0,
+        "degree_rank_in_community": 2,
+        "pick_pass": "night",
+        "n_failures_routed": 0,
+        "mass_routed": 0.0,
+    }
+
+
+def _reason_gt(*categories: str) -> pd.DataFrame:
+    """One frame's visible GT rows (what ``visible_gt`` hands the page)."""
+    return pd.DataFrame({
+        "sample_data_token": ["wA"] * len(categories),
+        "category_group": list(categories),
+    })
+
+
+def test_reason_chips_state_the_facts_the_explain_row_carries() -> None:
+    """The chip row above the factor panel, in the order the mechanism runs. Every
+    chip is a fact that EXISTS in this package (spec's honesty rule "reason chips
+    state facts that exist"): the frame's own lighting and visible pedestrian GT,
+    then its community, that community's mass rank and quota, the pass that took
+    it, and its rank inside the community."""
+    chips = reason_chips(
+        _reason_row(), _reason_gt("pedestrian", "car"), n_communities=2, night_floor=1
+    )
+
+    assert chips == [
+        "night",
+        "1 pedestrian GT box",
+        "community #0 · 10 frames",
+        "mass rank 1 of 2",
+        "quota 2",
+        "night-pass pick (floor 1)",
+        "degree rank 2 of 10",
+    ]
+
+
+def test_reason_chips_count_and_pluralise_visible_pedestrian_gt() -> None:
+    """The pedestrian chip counts the frame's VISIBLE pedestrian GT boxes (the
+    caller passes ``visible_gt``) and is omitted entirely at zero -- "0 pedestrian
+    GT boxes" is not a reason anything was selected."""
+    two = reason_chips(
+        _reason_row(), _reason_gt("pedestrian", "pedestrian"), n_communities=2, night_floor=1
+    )
+    none = reason_chips(_reason_row(), _reason_gt("car"), n_communities=2, night_floor=1)
+
+    assert "2 pedestrian GT boxes" in two
+    assert not any("pedestrian" in chip for chip in none)
+    # a package/frame with no GT rows at all is the same story, not a crash
+    assert not any("pedestrian" in chip for chip in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    ))
+
+
+def test_reason_chips_name_routed_failures_only_when_there_are_some() -> None:
+    """Routed failure mass is context, never the reason -- 1249 of the 1500 real
+    selected frames have none, so the chip exists only when the count does."""
+    row = {**_reason_row(), "n_failures_routed": 2, "mass_routed": 4.25}
+
+    chips = reason_chips(row, _reason_gt(), n_communities=2, night_floor=1)
+
+    assert chips[-1] == "2 routed failures"
+    assert not any("routed" in chip for chip in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    ))
+
+
+def test_reason_chips_omit_the_ranks_this_package_has_no_value_for() -> None:
+    """Both rank columns are nullable Int64 -- a backfill frame drawn from outside
+    every community has neither. The chips are dropped rather than rendered as
+    "rank <NA>"."""
+    row = {
+        **_reason_row(),
+        "community_mass_rank": pd.NA,
+        "degree_rank_in_community": pd.NA,
+        "pick_pass": "backfill",
+    }
+
+    chips = reason_chips(row, _reason_gt("pedestrian"), n_communities=2)
+
+    assert chips == [
+        "night",
+        "1 pedestrian GT box",
+        "community #0 · 10 frames",
+        "quota 2",
+        "seeded backfill",
+    ]
+
+
+def test_reason_chips_show_the_quota_jump_when_the_before_quota_is_known() -> None:
+    """``quota_before`` (this frame's own community's quota under the other arm)
+    turns the quota chip into the change the night floor made."""
+    chips = reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1, quota_before=1
+    )
+
+    assert "quota 1 → 2" in chips
+    assert "quota 2" not in chips
+
+
+def test_reason_chips_name_every_pick_pass_the_factor_panel_names() -> None:
+    """The chip vocabulary is the factor panel's: a day frame taken by the main
+    pass, and the night pass with no floor recorded in this package."""
+    day = reason_chips(
+        {**_reason_row(), "is_night": False, "pick_pass": "main"},
+        _reason_gt(), n_communities=2,
+    )
+    no_floor = reason_chips(_reason_row(), _reason_gt(), n_communities=2)
+
+    assert "night" not in day
+    assert "main-pass pick" in day
+    assert "night-pass pick" in no_floor
+    # the two label tables cover exactly the same passes, so the chip row and the
+    # factor panel can never name one of them and not the other
+    assert set(_PICK_PASS_CHIPS) == set(_PICK_PASS_LABELS)
+
+
+def test_no_reason_chip_ever_says_rate() -> None:
+    """Spec honesty rule: there is NO per-frame failure rate in the package (the
+    only per-frame facts are the explain columns and the frame's visible GT), so no
+    chip may use the word -- including via the arm name ``graph_rate_night``, which
+    is the one string on this row that contains it."""
+    cases = [
+        reason_chips(_reason_row(), _reason_gt("pedestrian"), n_communities=2, night_floor=1),
+        reason_chips(_reason_row(), _reason_gt(), n_communities=2),
+        reason_chips(
+            {**_reason_row(), "is_night": False, "pick_pass": "main",
+             "n_failures_routed": 2, "mass_routed": 4.25},
+            _reason_gt("pedestrian", "pedestrian"), n_communities=97, night_floor=375,
+            quota_before=83,
+        ),
+        reason_chips(
+            {**_reason_row(), "pick_pass": "backfill", "community_mass_rank": pd.NA,
+             "degree_rank_in_community": pd.NA},
+            _reason_gt(), n_communities=97,
+        ),
+    ]
+
+    assert all(chips for chips in cases)
+    assert all("rate" not in chip for chips in cases for chip in chips)
+
+
+def test_reason_chips_survive_a_night_flag_the_package_left_na() -> None:
+    """Item M7, Phase 9b consolidated review: ``is_night`` is a nullable-boolean
+    column and ``bool(pd.NA)`` RAISES -- the chip row blew up on a frame whose
+    lighting the package never recorded. NA is not a night frame (the same reading
+    ``_lighting_fact`` and ``visible_gt`` already take), so it draws no chip and the
+    row's other facts still render.
+    """
+    for missing in (pd.NA, None, float("nan")):
+        chips = reason_chips(
+            {**_reason_row(), "is_night": missing},
+            _reason_gt("pedestrian"), n_communities=2, night_floor=1,
+        )
+        assert "night" not in chips
+        assert chips   # every other recorded fact is still a chip
+
+    assert "night" in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    )
+
+
+def test_quota_column_pair_is_the_one_derivation_the_chip_and_the_caption_share() -> None:
+    """Item M4: the Active Learning caption ("quota 83 -> 323") and the reason chip
+    that repeats the same jump each derived their (after, before) quota columns, so
+    a change to either could silently have drifted them apart. Both read this."""
+    communities = _communities()
+    assert quota_column_pair(communities, arm="graph_rate_night") == (
+        "quota_graph_rate_night",
+        "quota_graph_rate",
+    )
+    # One arm's quota exported -- the column exists, but there is nothing to
+    # compare it against, so the paired chart/chip simply isn't drawn.
+    assert quota_column_pair(
+        communities.drop(columns=["quota_graph_rate"]), arm="graph_rate_night"
+    ) == ("quota_graph_rate_night", None)
+    # No quota column for this arm at all: a stale package for this page.
+    assert quota_column_pair(communities, arm="an_arm_with_no_quota_column") is None
+    assert quota_column_pair(communities.iloc[:0], arm="graph_rate_night") is None
+
+
+def test_frame_quota_before_only_speaks_for_the_frames_own_community() -> None:
+    """The quota jump is a fact about ONE community. ``community_jump`` reports the
+    largest all-night community's -- printing that on a frame from a different
+    community would be a number this frame's community never had, so it is returned
+    only when the frame is actually in it."""
+    communities = _communities()
+    in_the_jumped_community = {**_reason_row(), "community": 10301}
+
+    assert frame_quota_before(
+        communities, in_the_jumped_community, arm="graph_rate_night"
+    ) == 83
+    assert frame_quota_before(communities, _reason_row(), arm="graph_rate_night") is None
+
+
+def test_frame_quota_before_needs_two_quota_columns_and_an_all_night_community() -> None:
+    """A package that exported one arm's quota (or has no all-night community) has
+    no "before" to show, and the chip stays a plain quota."""
+    communities = _communities()
+    row = {**_reason_row(), "community": 10301}
+
+    assert frame_quota_before(
+        communities.drop(columns=["quota_graph_rate"]), row, arm="graph_rate_night"
+    ) is None
+    assert frame_quota_before(communities, row, arm="an_arm_with_no_quota_column") is None
+    assert frame_quota_before(communities.iloc[:0], row, arm="graph_rate_night") is None
 
 
 # --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
@@ -1321,3 +1918,267 @@ def test_tour_frame_candidates_without_al_selected_by_is_empty_list() -> None:
     assert tour_frame_candidates(
         manifest, _tour_explain(), _tour_gt(), arm="graph_rate_night"
     ) == []
+
+
+# --- Phase 9b (Task 2): the filmstrip's steps -------------------------------------
+
+
+def _event_row(**overrides: object) -> pd.Series:
+    """One ``scenario_events.parquet`` row as the pages read it (``.iloc[0]`` of a
+    ranked frame), v0.8 schema: CAN speed for the event frame and for each of the
+    four t-2..t+2 neighbours, alongside the ego-pose ``speed_*`` columns the older
+    readouts still use."""
+    row = {
+        "sample_data_token": "e0",
+        "speed_mps": 10.0,
+        "can_speed_kmh": 36.0,
+        "accel_long_min_mps2": -7.5,
+        "t_minus2": "m2", "speed_t_minus2": 12.0, "can_speed_t_minus2": 44.0,
+        "accel_t_minus2": -0.5,
+        "t_minus1": "m1", "speed_t_minus1": 11.0, "can_speed_t_minus1": 41.0,
+        "accel_t_minus1": -1.5,
+        "t_plus1": "p1", "speed_t_plus1": 8.0, "can_speed_t_plus1": 28.0,
+        "accel_t_plus1": -6.0,
+        "t_plus2": "p2", "speed_t_plus2": 6.0, "can_speed_t_plus2": 20.0,
+        "accel_t_plus2": -2.0,
+    }
+    row.update(overrides)
+    return pd.Series(row)
+
+
+def test_filmstrip_steps_pins_the_five_column_label_pairs() -> None:
+    """The single definition both the Scenario page and the tour derive their own
+    strip order from -- plain ASCII hyphens, the event itself (column None) in the
+    middle."""
+    assert FILMSTRIP_STEPS == (
+        ("t_minus2", "t-2"),
+        ("t_minus1", "t-1"),
+        (None, "current"),
+        ("t_plus1", "t+1"),
+        ("t_plus2", "t+2"),
+    )
+
+
+def test_filmstrip_steps_reads_can_speed_in_time_order() -> None:
+    curve = filmstrip_steps(_event_row())
+
+    assert curve.speed_is_can is True
+    assert [step.label for step in curve.steps] == ["t-2", "t-1", "current", "t+1", "t+2"]
+    assert [step.token for step in curve.steps] == ["m2", "m1", "e0", "p1", "p2"]
+    # the CAN column, never the ego-pose speed_* one (which would read 43.2 here)
+    assert [step.can_speed_kmh for step in curve.steps] == [44.0, 41.0, 36.0, 28.0, 20.0]
+    assert [step.accel_mps2 for step in curve.steps] == [-0.5, -1.5, -7.5, -6.0, -2.0]
+    assert [step.is_current for step in curve.steps] == [False, False, True, False, False]
+    assert curve.steps[2] == FilmstripStep(
+        label="current", token="e0", can_speed_kmh=36.0, accel_mps2=-7.5, is_current=True
+    )
+
+
+def test_filmstrip_steps_drops_na_neighbours_at_a_scene_edge() -> None:
+    """A scene-edge event has NA neighbour tokens -- those steps are left out of the
+    strip entirely (the current frame is always there), exactly as the pages do."""
+    curve = filmstrip_steps(
+        _event_row(t_minus2=None, speed_t_minus2=None, can_speed_t_minus2=None,
+                   accel_t_minus2=None, t_plus2=float("nan"))
+    )
+
+    assert [step.label for step in curve.steps] == ["t-1", "current", "t+1"]
+    assert curve.speed_is_can is True
+
+
+def test_filmstrip_steps_falls_back_to_ego_speed_on_a_pre_0_8_package() -> None:
+    """A package built before v0.8 carries no ``can_speed_*`` columns at all: the
+    helper falls back to ``speed_mps`` x 3.6 and says so, so the caller titles the
+    axis "ego speed" rather than mislabelling an ego-pose figure as CAN."""
+    row = _event_row()
+    old_package = row.drop(
+        ["can_speed_kmh", *(f"can_speed_{column}" for column, _ in FILMSTRIP_STEPS if column)]
+    )
+
+    curve = filmstrip_steps(old_package)
+
+    assert curve.speed_is_can is False
+    assert [step.can_speed_kmh for step in curve.steps] == pytest.approx(
+        [43.2, 39.6, 36.0, 28.8, 21.6]
+    )
+    assert [step.accel_mps2 for step in curve.steps] == [-0.5, -1.5, -7.5, -6.0, -2.0]
+
+
+def test_filmstrip_steps_missing_readouts_are_none_not_nan() -> None:
+    curve = filmstrip_steps(_event_row(can_speed_t_plus1=None, accel_t_plus1=float("nan")))
+
+    plus_one = curve.steps[3]
+    assert plus_one.label == "t+1" and plus_one.token == "p1"
+    assert plus_one.can_speed_kmh is None and plus_one.accel_mps2 is None
+
+
+def test_filmstrip_steps_accepts_a_dict_and_an_itertuples_row() -> None:
+    """The two pages hold an event row in different shapes -- a ``pd.Series`` read
+    with ``getattr``/``[]`` and (via ``itertuples``) an attribute-only namedtuple --
+    so the shared helper reads both, plus a plain mapping for tests."""
+    frame = pd.DataFrame([_event_row().to_dict()])
+    from_tuple = filmstrip_steps(next(iter(frame.itertuples(index=False))))
+    from_dict = filmstrip_steps(_event_row().to_dict())
+
+    assert from_tuple == from_dict == filmstrip_steps(_event_row())
+
+
+# --- Phase 9b (Task 8): the Weak Supervision page's two frame choices --------------
+#
+# "One frame, three views" needs two frames out of the package, each picked for what
+# it can SHOW: a train-pool frame the verifier accepted that actually carries pseudo
+# boxes AND a visible pedestrian (row 1), and a held-out val frame where the
+# GT-labelled twin detects a box the weak-labelled arm misses (row 2). Both choices
+# are pure functions over the package's own tables, so they are pinned here rather
+# than through an AppTest.
+
+_WEAK_ARM = "weak_graph_rate_night"
+_GT_ARM = "weak_graph_rate_night_gt"
+
+
+def _showcase_manifest() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sample_data_token": ["wA", "wB", "wC", "wR", "vA"],
+        "split": ["train_pool", "train_pool", "train_pool", "train_pool", "val"],
+        "weak_verdict": pd.array(
+            ["accepted", "accepted", "accepted", "rejected", "accepted"], dtype="string"
+        ),
+    })
+
+
+def _showcase_labels(extra: tuple[str, ...] = ()) -> pd.DataFrame:
+    """weak_labels.parquet rows: wC carries the MOST pseudo boxes, wA two, wB one,
+    wR none (rejected frames have none by construction)."""
+    tokens = ["wA", "wA", "wB", "wC", "wC", "wC", "vA", *extra]
+    return pd.DataFrame({
+        "sample_data_token": tokens,
+        "category_group": ["car"] * len(tokens),
+        "x_min": [50.0] * len(tokens), "y_min": [50.0] * len(tokens),
+        "x_max": [150.0] * len(tokens), "y_max": [150.0] * len(tokens),
+        "score": [0.73] * len(tokens),
+    })
+
+
+def _showcase_gt(*, pedestrians: bool = True) -> pd.DataFrame:
+    """One visible GT box per token -- a pedestrian everywhere except wC, whose only
+    box is a car (so wC is excluded despite having the most pseudo boxes)."""
+    tokens = ["wA", "wB", "wC", "wR", "vA"]
+    groups = ["pedestrian", "pedestrian", "car", "pedestrian", "pedestrian"]
+    return pd.DataFrame({
+        "annotation_token": [f"{token}-g" for token in tokens],
+        "sample_data_token": tokens,
+        "category_group": groups if pedestrians else ["car"] * len(tokens),
+        "below_visibility_min": pd.array([False] * len(tokens), dtype="boolean"),
+    })
+
+
+def test_weak_showcase_token_picks_an_accepted_frame_that_can_show_all_three_views() -> None:
+    """The row-1 frame has to carry every layer the row draws: the verifier's
+    ACCEPTED verdict, at least one pseudo box, and at least one visible pedestrian
+    GT box. wC has the most pseudo boxes but no pedestrian, wR was rejected (no
+    boxes by construction), vA is a val frame (row 1 is about the train pool) --
+    so the pick is wA, the accepted train-pool frame with the most pseudo boxes."""
+    assert weak_showcase_token(
+        _showcase_manifest(), _showcase_labels(), _showcase_gt()
+    ) == "wA"
+
+
+def test_weak_showcase_token_breaks_a_pseudo_box_tie_on_the_token() -> None:
+    """Ties go to the token, so the page shows the same frame on every rerun."""
+    tied = _showcase_labels(extra=("wB",))          # wB now has two boxes, like wA
+
+    assert weak_showcase_token(_showcase_manifest(), tied, _showcase_gt()) == "wA"
+
+
+def test_weak_showcase_token_is_none_when_no_frame_qualifies() -> None:
+    """Each requirement on its own is enough to leave the page with no showcase
+    frame -- and an older package without ``weak_verdict`` at all is not a crash."""
+    manifest, labels, gt = _showcase_manifest(), _showcase_labels(), _showcase_gt()
+
+    assert weak_showcase_token(manifest, labels.iloc[0:0], gt) is None
+    assert weak_showcase_token(manifest, labels, _showcase_gt(pedestrians=False)) is None
+    assert weak_showcase_token(manifest.drop(columns=["weak_verdict"]), labels, gt) is None
+    rejected = manifest.assign(
+        weak_verdict=pd.array(["rejected"] * len(manifest), dtype="string")
+    )
+    assert weak_showcase_token(rejected, labels, gt) is None
+    assert weak_showcase_token(manifest.iloc[0:0], labels, gt) is None
+
+
+def _result_manifest() -> pd.DataFrame:
+    return pd.DataFrame({
+        "sample_data_token": ["d0", "n1", "n2", "n3", "x0", "t0"],
+        "split": ["val", "val", "val", "val", "val", "train_pool"],
+        # x0's is_night is NA (an unenriched frame): bool(pd.NA) raises, so it has
+        # to sort as a day frame rather than take the page down.
+        "is_night": pd.array([False, True, True, True, None, True], dtype="boolean"),
+    })
+
+
+def _result_boxes(fixes: dict[str, int]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``gt_boxes``/``predictions`` rows for the tokens in ``fixes``: one box both
+    arms detect, plus ``n`` boxes only the GT-labelled twin detects (the weak arm
+    never claims them at all)."""
+    gt_records, pred_records = [], []
+    for token, n_fixed in fixes.items():
+        boxes = [(f"{token}-shared", True)] + [(f"{token}-b{i}", False) for i in range(n_fixed)]
+        for annotation, by_weak in boxes:
+            gt_records.append({
+                "annotation_token": annotation, "sample_data_token": token,
+                "category_group": "pedestrian", "distance_to_ego_m": 12.0,
+                "below_visibility_min": False,
+                f"matched_{_WEAK_ARM}": by_weak, f"matched_{_GT_ARM}": True,
+            })
+            models = [_GT_ARM, _WEAK_ARM] if by_weak else [_GT_ARM]
+            for model in models:
+                pred_records.append({
+                    "sample_data_token": token, "model": model, "status": "tp",
+                    "conf": 0.8, "matched_annotation_token": annotation,
+                })
+    return pd.DataFrame(gt_records), pd.DataFrame(pred_records)
+
+
+def test_weak_result_token_ranks_night_then_most_fixed_boxes_then_token() -> None:
+    """Row 2's frame is the one where the control detector most visibly beats the
+    weak-labelled arm: night first (the arm these checkpoints were trained for is
+    night-targeted), then the most boxes the twin fixes, then the token. d0 has the
+    most fixed boxes but is a day frame, n3 ties n2 on count, t0 is a train-pool
+    frame (neither checkpoint ran on it) -- so the pick is n2."""
+    gt, preds = _result_boxes({"d0": 3, "n1": 1, "n2": 2, "n3": 2, "x0": 2, "t0": 4})
+
+    assert weak_result_token(
+        _result_manifest(), gt, preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) == "n2"
+
+
+def test_weak_result_token_is_none_on_a_package_without_the_weak_arms() -> None:
+    """A package built before the two checkpoints ran carries no ``matched_weak_*``
+    column at all -- the page then says the held-out predictions are missing rather
+    than comparing two models one of which was never evaluated."""
+    gt, preds = _result_boxes({"n1": 1})
+    manifest = _result_manifest()
+
+    assert weak_result_token(
+        manifest, gt.drop(columns=[f"matched_{_WEAK_ARM}"]), preds,
+        weak_arm=_WEAK_ARM, gt_arm=_GT_ARM,
+    ) is None
+    assert weak_result_token(
+        manifest, gt.drop(columns=[f"matched_{_GT_ARM}"]), preds,
+        weak_arm=_WEAK_ARM, gt_arm=_GT_ARM,
+    ) is None
+
+
+def test_weak_result_token_is_none_when_no_val_frame_shows_a_difference() -> None:
+    """Both arms detecting the same boxes is not a before/after -- and a package
+    whose val split is empty has no frame to show either."""
+    gt, preds = _result_boxes({"n1": 0, "d0": 0})
+    manifest = _result_manifest()
+
+    assert weak_result_token(
+        manifest, gt, preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) is None
+    train_pool_only = manifest.assign(split=["train_pool"] * len(manifest))
+    fixed_gt, fixed_preds = _result_boxes({"n1": 2})
+    assert weak_result_token(
+        train_pool_only, fixed_gt, fixed_preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
+    ) is None

@@ -475,6 +475,44 @@ def _stage_chat_replays(staging_dir: Path) -> None:
     (out / "chat_replay_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
+# Phase 9b (Task 8): four staged models, so `demo infer` writes twelve ordered
+# fixes_fn_vs_<a>_<b> exemplar columns rather than the two a two-model package had.
+# Generated from the frames' own matched_<model> flags (below) with infer.py's own
+# rule -- "A missed a GT box that B caught" -- so the fixture cannot drift out of
+# agreement with the gt_boxes/predictions rows it is derived from.
+_FIXTURE_MODELS = (
+    "baseline", "graph_rate_night", "weak_graph_rate_night", "weak_graph_rate_night_gt",
+)
+_V0_MATCHED = {
+    "baseline": {"a1": True, "a2": False},
+    "graph_rate_night": {"a1": True, "a2": True},
+    "weak_graph_rate_night": {"a1": True, "a2": False},
+    "weak_graph_rate_night_gt": {"a1": True, "a2": True},
+}
+
+
+def _fixes_fn_columns() -> dict[str, Any]:
+    """``fixes_fn_vs_<a>_<b>`` for every ordered model pair, over the fixture's four
+    manifest rows (v0, v1, wA, wR): computed on v0, False on v1 (no GT rows at all,
+    so there is no false negative to fix) and NA on the two train-pool frames (no
+    model ever ran on them)."""
+    return {
+        f"fixes_fn_vs_{model_a}_{model_b}": pd.array(
+            [
+                any(
+                    not _V0_MATCHED[model_a][box] and _V0_MATCHED[model_b][box]
+                    for box in ("a1", "a2")
+                ),
+                False, pd.NA, pd.NA,
+            ],
+            dtype="boolean",
+        )
+        for model_a in _FIXTURE_MODELS
+        for model_b in _FIXTURE_MODELS
+        if model_a != model_b
+    }
+
+
 @pytest.fixture()
 def built_demo_data(tmp_path: Path) -> Path:
     """A real (tiny) demo_data/ package, built through the actual exporters/build path.
@@ -540,11 +578,37 @@ def built_demo_data(tmp_path: Path) -> Path:
     # carry a detector category_group (pedestrian/car/pedestrian) and the 4th is
     # None (ignored) -- s1's detector count is 3, matching random_pseudo_summary.
     # json's mean_gt_boxes_per_accepted_frame=3.0 below (random_accepted=["s1"]).
+    #
+    # Phase 9b (Task 7): the same table is also autolabel's gt_counts input (the
+    # recomputed crowding buckets), which reads category_name/visibility_token --
+    # both carried here, mapping through GT_COUNT_GROUPS to the same coarse classes
+    # category_group already names. "b1"/"b2" are two extra tokens whose GT counts
+    # deliberately land in ALL FOUR count buckets (b1: cars 2 -> "1-3",
+    # pedestrians 5 -> "4-9", traffic_cones 10 -> "10+", the other seven fields 0;
+    # b2: no rows at all, so all ten are 0), so the fixture package's
+    # vlm_count_buckets.parquet carries a row per bucket. They are in no arm, no
+    # candidate set and no curated frame, so every other exporter is untouched.
+    bucket_gt = (
+        [("b1", "vehicle.car", "car")] * 2
+        + [("b1", "human.pedestrian.adult", "pedestrian")] * 5
+        + [("b1", "movable_object.trafficcone", None)] * 10
+    )
     pd.DataFrame(
         {
-            "sample_token": ["s1"] * 4,
-            "sample_data_token": ["s1"] * 4,
-            "category_group": ["pedestrian", "car", "pedestrian", None],
+            "sample_token": ["s1"] * 4 + [token for token, _, _ in bucket_gt],
+            "sample_data_token": ["s1"] * 4 + [token for token, _, _ in bucket_gt],
+            "category_group": (
+                ["pedestrian", "car", "pedestrian", None]
+                + [group for _, _, group in bucket_gt]
+            ),
+            "category_name": (
+                [
+                    "human.pedestrian.adult", "vehicle.car",
+                    "human.pedestrian.adult", "movable_object.debris",
+                ]
+                + [name for _, name, _ in bucket_gt]
+            ),
+            "visibility_token": ["4"] * (4 + len(bucket_gt)),
         }
     ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
@@ -697,44 +761,69 @@ def built_demo_data(tmp_path: Path) -> Path:
         "is_night": [True, False, True, False], "is_rain": [False, False, False, False],
         "n_preds_baseline": pd.array([1, 2, pd.NA, pd.NA], dtype="Int64"),
         "n_preds_graph_rate_night": pd.array([2, 2, pd.NA, pd.NA], dtype="Int64"),
-        "fixes_fn_vs_baseline_graph_rate_night": pd.array(
-            [True, False, pd.NA, pd.NA], dtype="boolean"
-        ),
-        "fixes_fn_vs_graph_rate_night_baseline": pd.array(
-            [False, False, pd.NA, pd.NA], dtype="boolean"
-        ),
+        # Phase 9b (Task 8): the two weak checkpoints found 1/2 boxes on v0 and
+        # nothing on v1 -- 0 is a recorded finding, NA is "never ran" (the two
+        # train-pool frames).
+        "n_preds_weak_graph_rate_night": pd.array([1, 0, pd.NA, pd.NA], dtype="Int64"),
+        "n_preds_weak_graph_rate_night_gt": pd.array([2, 0, pd.NA, pd.NA], dtype="Int64"),
+        **_fixes_fn_columns(),
     }).to_parquet(staging / "frame_manifest.parquet")
+    # Phase 9b (Task 8): `demo infer` now runs the two weak-supervision checkpoints
+    # over the held-out val frames as well -- `weak_graph_rate_night` (trained on the
+    # VLM-verified pseudo labels) and `weak_graph_rate_night_gt` (the GT-labelled
+    # twin over the same frames). On v0 the twin catches the pedestrian a2 that the
+    # weak arm misses, which is exactly the before/after the Weak Supervision page's
+    # "One frame, three views" row 2 draws. Neither weak checkpoint claims anything
+    # on v1 -- a RECORDED finding of zero (n_preds 0 below), not "never ran".
     pd.DataFrame({
-        "sample_data_token": ["v0", "v0", "v0", "v1", "v1", "v1", "v1"],
+        "sample_data_token": ["v0"] * 6 + ["v1"] * 4,
         "model": [
             "baseline", "graph_rate_night", "graph_rate_night",
+            "weak_graph_rate_night", "weak_graph_rate_night_gt",
+            "weak_graph_rate_night_gt",
             "baseline", "baseline", "graph_rate_night", "graph_rate_night",
         ],
-        "category_group": ["car", "car", "pedestrian", "car", "car", "car", "car"],
-        "x_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
-        "y_min": [1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
-        "x_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
-        "y_max": [2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
-        "conf": [0.9, 0.9, 0.8, 0.4, 0.5, 0.4, 0.5],
+        "category_group": [
+            "car", "car", "pedestrian", "car", "car", "pedestrian",
+            "car", "car", "car", "car",
+        ],
+        "x_min": [1.0, 1.0, 10.0, 1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "y_min": [1.0, 1.0, 10.0, 1.0, 1.0, 10.0, 5.0, 6.0, 5.0, 6.0],
+        "x_max": [2.0, 2.0, 30.0, 2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "y_max": [2.0, 2.0, 30.0, 2.0, 2.0, 30.0, 7.0, 8.0, 7.0, 8.0],
+        "conf": [0.9, 0.9, 0.8, 0.85, 0.86, 0.77, 0.4, 0.5, 0.4, 0.5],
         # v0: baseline only ever claims a1 (misses a2); graph_rate_night claims
-        # both a1 and a2 (a genuine catch). v1 has zero GT rows, so every claim
-        # from either model is necessarily a false positive.
-        "status": ["tp", "tp", "tp", "fp", "fp", "fp", "fp"],
-        "matched_annotation_token": ["a1", "a1", "a2", None, None, None, None],
+        # both a1 and a2 (a genuine catch); the weak arm claims a1 only and its
+        # GT-labelled twin claims both. v1 has zero GT rows, so every claim
+        # from either of the first two models is necessarily a false positive.
+        "status": ["tp", "tp", "tp", "tp", "tp", "tp", "fp", "fp", "fp", "fp"],
+        "matched_annotation_token": [
+            "a1", "a1", "a2", "a1", "a1", "a2", None, None, None, None,
+        ],
     }).to_parquet(staging / "predictions.parquet")
+    # a3 (Phase 9b, Task 8): one visible PEDESTRIAN GT box on the accepted weak
+    # frame "wA" -- the Weak Supervision page's row-1 showcase frame has to carry
+    # both a pseudo box and a visible pedestrian, and wA carried no GT row at all
+    # before. Every matched_<model> is NA on it: it is a train-pool frame, so no
+    # model ever evaluated it ("not evaluated" is not "missed").
     pd.DataFrame({
-        "annotation_token": ["a1", "a2"], "sample_data_token": ["v0", "v0"],
-        "category_group": ["car", "pedestrian"],
-        "x_min": [1.0, 10.0], "y_min": [1.0, 10.0],
-        "x_max": [2.0, 30.0], "y_max": [2.0, 30.0],
-        "matched_baseline": pd.array([True, False], dtype="boolean"),
-        "matched_graph_rate_night": pd.array([True, True], dtype="boolean"),
+        "annotation_token": ["a1", "a2", "a3"],
+        "sample_data_token": ["v0", "v0", "wA"],
+        "category_group": ["car", "pedestrian", "pedestrian"],
+        "x_min": [1.0, 10.0, 20.0], "y_min": [1.0, 10.0, 20.0],
+        "x_max": [2.0, 30.0, 60.0], "y_max": [2.0, 30.0, 60.0],
+        "matched_baseline": pd.array([True, False, None], dtype="boolean"),
+        "matched_graph_rate_night": pd.array([True, True, None], dtype="boolean"),
+        # The two weak checkpoints, same shape as their predictions above: the
+        # pseudo-labelled arm misses a2, its GT-labelled twin catches it.
+        "matched_weak_graph_rate_night": pd.array([True, False, None], dtype="boolean"),
+        "matched_weak_graph_rate_night_gt": pd.array([True, True, None], dtype="boolean"),
         # below_visibility_min: real gt_boxes always carries this column: the
         # Failure Explorer drops such rows everywhere (rendering + the box table),
         # so it must be present for the page to even read gt_boxes.parquet. v1 has
         # no gt_boxes rows at all (the zero-GT case both review-fix regression
         # tests below depend on).
-        "below_visibility_min": [False, False],
+        "below_visibility_min": [False, False, False],
     }).to_parquet(staging / "gt_boxes.parquet")
     hero_bytes = io.BytesIO()
     Image.new("RGB", (2, 2), color=(120, 120, 120)).save(hero_bytes, format="JPEG")
@@ -813,6 +902,31 @@ def built_demo_data(tmp_path: Path) -> Path:
         "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
         "pedestrians": [0.0, 1.0], "traffic_cones": [0.0, 0.0], "barriers": [0.0, 0.0],
     }).to_parquet(al / "autolabel_weak" / "labels.parquet")
+    # Phase 9b (Task 7): the Phase-6b VLM label table -- the ONLY source the
+    # crowding buckets are recomputed from (the weak run's table just above is a
+    # pseudo-labelling input, not a count-accuracy eval). Written inside tmp_path
+    # and wired through paths.autolabel_dir below so this fixture can never reach
+    # for the machine's real data/autolabel/ (5,000 rows).
+    #
+    # Against b1/b2's GT above these give: "0" n=17 (b2's cars off by one, the rest
+    # exact), "1-3" n=1 MAE 1, "4-9" n=1 MAE 1, "10+" n=1 MAE 2 -- 20 = 2 ok rows x
+    # the ten count fields, the pairs invariant the exporter asserts.
+    autolabel = tmp_path / "autolabel"
+    autolabel.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["b1", "b2"],
+        "model": ["qwen2.5-vl", "qwen2.5-vl"],
+        "parse_status": ["ok", "ok"],
+        "time_of_day": ["day", "day"],
+        "weather": ["clear", "clear"],
+        "hazards": ["[]", "[]"],
+        "notable_conditions": ["[]", "[]"],
+        "label_confidence": ["high", "medium"],
+        "cars": [3.0, 1.0], "trucks": [0.0, 0.0], "buses": [0.0, 0.0],
+        "trailers": [0.0, 0.0], "construction_vehicles": [0.0, 0.0],
+        "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
+        "pedestrians": [4.0, 0.0], "traffic_cones": [8.0, 0.0], "barriers": [0.0, 0.0],
+    }).to_parquet(autolabel / "labels.parquet")
 
     out = tmp_path / "demo_data"
     config = {
@@ -820,6 +934,7 @@ def built_demo_data(tmp_path: Path) -> Path:
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
             "active_learning_config": str(al_config_path),
+            "autolabel_dir": str(autolabel),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -828,6 +943,11 @@ def built_demo_data(tmp_path: Path) -> Path:
         "models": {
             "baseline": {"run": "runX", "imgsz": 640},
             "graph_rate_night": {"run": "runY", "imgsz": 640},
+            # Phase 9b (Task 8): configs/demo.yaml's two weak-supervision
+            # checkpoints -- configured models, so run_build validates that every
+            # val token has recorded coverage from all four.
+            "weak_graph_rate_night": {"run": "runW", "imgsz": 640},
+            "weak_graph_rate_night_gt": {"run": "runWG", "imgsz": 640},
         },
         "hero": {"token": "v0"},
         "budgets": {"max_package_mb": 100},
@@ -997,6 +1117,93 @@ def built_demo_data_without_chat_replay(built_demo_data: Path) -> Path:
     manifest["validation"]["chat_replay"] = "absent"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return built_demo_data
+
+
+@pytest.fixture()
+def built_demo_data_without_weak_models(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo infer` wrote it: the three original
+    models only, with no held-out predictions from the two weak-supervision
+    checkpoints.
+
+    Same edit-the-built-package idiom as ``built_demo_data_without_explain`` -- the
+    page's absent branch keys off the ``matched_<model>`` columns being absent
+    (``filters.weak_result_token``), which is exactly what an older `demo infer`
+    leaves behind.
+    """
+    gt_path = built_demo_data / "gt_boxes.parquet"
+    gt = pd.read_parquet(gt_path)
+    gt.drop(
+        columns=[column for column in gt.columns if column.startswith("matched_weak_")]
+    ).to_parquet(gt_path, index=False)
+
+    preds_path = built_demo_data / "predictions.parquet"
+    preds = pd.read_parquet(preds_path)
+    preds.loc[~preds["model"].str.startswith("weak_")].to_parquet(preds_path, index=False)
+
+    manifest_path = built_demo_data / "frame_manifest.parquet"
+    manifest = pd.read_parquet(manifest_path)
+    manifest.drop(
+        columns=[column for column in manifest.columns if "weak_graph_rate_night" in column]
+    ).to_parquet(manifest_path, index=False)
+    return built_demo_data
+
+
+@pytest.fixture()
+def built_demo_data_without_buckets(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo build` wrote it: no recomputed crowding
+    buckets (and the same state a machine with no ``data/autolabel/`` builds today).
+
+    Deletes the file from an otherwise-normal built package rather than rebuilding
+    without the staging, for the same reason ``built_demo_data_without_explain``
+    does: the loader's absent branch keys off the file's presence, and the
+    builder's own absent/included recording is pinned on the builder side
+    (tests/test_demo_export.py::test_build_records_vlm_count_buckets_absent_
+    without_a_phase6b_table).
+    """
+    (built_demo_data / "vlm_count_buckets.parquet").unlink()
+    manifest_path = built_demo_data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"]["vlm_count_buckets"] = "absent"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
+
+
+_VLM_COUNT_BUCKET_COLUMNS = ["model", "bucket", "n", "mae"]
+
+
+def test_load_vlm_count_buckets_reads_the_packages_table(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loader hands the page the builder's own four-column table, buckets in
+    count order -- the fixture's b1/b2 labels put a row in every bucket."""
+    pytest.importorskip("streamlit")
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    import data as demo_data  # type: ignore[import-not-found]
+
+    buckets = demo_data.load_vlm_count_buckets()
+    assert list(buckets.columns) == _VLM_COUNT_BUCKET_COLUMNS
+    assert list(buckets["bucket"]) == ["0", "1-3", "4-9", "10+"]
+    # frame x class PAIRS, not frames: two ok rows x the ten count fields
+    assert int(buckets["n"].sum()) == 20
+
+
+def test_load_vlm_count_buckets_is_empty_on_a_pre_0_8_package(
+    built_demo_data_without_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older package simply has no such file -- the loader returns the empty
+    frame with the four columns (the graceful-absence shape every optional table
+    uses), so the page can draw its own absent note instead of raising."""
+    pytest.importorskip("streamlit")
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data_without_buckets))
+    import data as demo_data  # type: ignore[import-not-found]
+
+    buckets = demo_data.load_vlm_count_buckets()
+    assert buckets.empty
+    assert list(buckets.columns) == _VLM_COUNT_BUCKET_COLUMNS
 
 
 def test_overview_page_renders_from_a_built_package(
@@ -1211,6 +1418,224 @@ def test_failure_explorer_renders_grid_and_detail(
     assert not at.exception
 
 
+# --- Phase 9b (Task 3): the Failure Explorer as a visual hook ------------------------
+#
+# Spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec1: the page stops
+# reading as a filter dashboard with a grid. The model radio moves out of the sidebar
+# to sit beside the overlay it changes, the two "tuning" controls fold away into an
+# "Advanced filters" expander, and the detail comes FIRST -- auto-selected from the
+# sorted filtered set so the page never opens on a wall of thumbnails. Every string and
+# key the earlier phases pinned (asserted in the test above) survives verbatim.
+
+
+def test_failure_explorer_model_radio_sits_beside_the_image(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model choice is no longer a sidebar filter: it is instantiated in the detail
+    header, next to the overlay it changes, while ``render()`` reads the value out of
+    session state before filtering so the grid follows it on the rerun."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    # The only radio left in the sidebar is the failure-type filter.
+    assert [r.key for r in at.sidebar.radio] == ["failure_type_select"]
+    model_radio = at.radio(key="failure_model")   # ... but the widget still exists
+    # AppTest reports the option list as the widget sends it (format_func applied).
+    # filters.model_label leaves any name it has no entry for untouched, so the two
+    # detection models read as their raw names, while the two weak-supervision
+    # checkpoints (Phase 9b) carry the labels that keep them apart -- the arm
+    # trained on pseudo labels and its GT-labelled twin differ by a `_gt` suffix
+    # alone, which is exactly the distinction the page must not blur.
+    assert model_radio.options == [
+        "baseline",
+        "graph_rate_night",
+        "weak_graph_rate_night (pseudo labels, yolov8n)",
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+    ]
+    assert model_radio.value == "baseline"
+
+    # The radio really drives the detail beside it: v0's per-box table is its 2 GT
+    # rows plus the selected model's claims -- baseline claims a1 only (3 rows),
+    # graph_rate_night claims a1 and a2 (4 rows).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 3
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 4
+
+
+def test_failure_explorer_advanced_filters_fold(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Curation bucket and Sort by fold into ``st.sidebar.expander("Advanced
+    filters")``; the primary condition filters keep the spec's order above it."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    folds = [e for e in at.sidebar.expander if e.label == "Advanced filters"]
+    assert len(folds) == 1
+    fold = folds[0]
+    assert fold.multiselect(key="failure_bucket_select").label == "Curation bucket"
+    assert fold.selectbox(key="failure_sort_select").label == "Sort by"
+
+    # AppTest walks into the expander and flattens it into the same document order,
+    # so this single list pins both the primary order and the fact that the two
+    # advanced controls come last (inside the fold) -- and that the model radio is
+    # not among them.
+    sidebar_widgets = [
+        node.label
+        for node in at.sidebar
+        if node.type in {"selectbox", "slider", "radio", "multiselect"}
+    ]
+    assert sidebar_widgets == [
+        "Lighting",
+        "Rain",
+        "Category",
+        "Size",
+        "Distance to ego (m)",
+        "Failure type",
+        "Curation bucket",
+        "Sort by",
+    ]
+
+
+def test_failure_explorer_auto_selects_the_first_frame(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The detail renders on the very first load -- no click needed -- for the first
+    frame of the sorted filtered set, saying so; an explicit View click (which writes
+    ``failure_token``) wins and drops the auto-selected note."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "Detail" in [str(s.value) for s in at.subheader]
+    assert len(at.image) > 0
+    assert any("auto-selected" in str(c.value) for c in at.caption)
+    # Not merely "some frame": the default sort is failure count, worst first, and
+    # under baseline v1 (2 FPs) outranks v0 (1 FN) -- so the auto-selected frame is
+    # v1. A page that just fell back to the manifest's first row would show v0.
+    assert {m.label: m.value for m in at.metric}["Scene"] == "scene-v1"
+
+    view_radio = at.radio(key="failure_view_mode")
+    assert view_radio.options == ["Overlay", "GT only", "Predictions only"]
+
+    per_box = [e for e in at.get("expander") if e.label == "Per-box detail"]
+    assert len(per_box) == 1
+    assert len(per_box[0].dataframe) == 1
+
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert {m.label: m.value for m in at.metric}["Scene"] == "scene-v0"
+    assert not any("auto-selected" in str(c.value) for c in at.caption)
+
+
+def test_failure_explorer_n_preds_cards_name_the_two_weak_arms_apart(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Visual walk: the per-model n_preds cards sit in the detail's 2/5 column, and
+    the two weak checkpoints' raw names differ only by a trailing ``_gt`` -- both
+    labels truncated to the identical "n_preds (weak_graph_rate..." and the reader
+    could not tell the pseudo-labelled arm from its GT twin.
+
+    The cards now carry short display names (``failures._N_PREDS_SHORT``); the model
+    RADIO is untouched and keeps ``filters.model_label``'s full names, which it has
+    the width for.
+    """
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+
+    labels = [str(m.label) for m in at.metric]
+    n_preds = [label for label in labels if label.startswith("n_preds")]
+    assert n_preds == [
+        "n_preds (baseline)",
+        "n_preds (graph_rate_night)",
+        "n_preds (weak)",
+        "n_preds (weak GT twin)",
+    ]
+    assert len(set(n_preds)) == len(n_preds)          # ... and no two read alike
+    # Short LABELS, unchanged VALUES: v0's two weak arms found 1 and 2 boxes.
+    values = {str(m.label): str(m.value) for m in at.metric}
+    assert values["n_preds (weak)"] == "1"
+    assert values["n_preds (weak GT twin)"] == "2"
+
+    # The radio is untouched: its options are still `filters.model_label`'s full,
+    # self-describing names (AppTest's `options` are the FORMATTED labels), so the
+    # short names are a card-width fix, not a rename.
+    options = at.radio(key="failure_model").options
+    assert "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)" in options
+    assert "weak GT twin" not in " ".join(options)
+
+
+def test_failure_explorer_empty_filter_shows_no_detail(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detail-first must not mean "detail always": a filter combination that empties
+    the set still shows only the nudge -- no auto-selected frame, no per-box table."""
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+    # Same combination the grid/detail test uses for the empty state:
+    # graph_rate_night has zero FN across both fixture frames.
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+
+    caption = next(str(c.value) for c in at.caption if "val frames" in str(c.value))
+    assert caption.startswith("0 / 2")
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
+    assert "Detail" not in [str(s.value) for s in at.subheader]
+    assert not any("auto-selected" in str(c.value) for c in at.caption)
+    assert len(at.dataframe) == 0
+    assert len(at.image) == 0
+
+
+def test_failure_explorer_keeps_the_model_choice_across_an_empty_filter(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M6, Phase 9b consolidated review: a filter combination that matches
+    nothing renders no detail, so the model radio is never instantiated on that run
+    and streamlit drops its widget state -- the page silently fell back to
+    `baseline` once the filters were widened again, discarding a choice the viewer
+    made and never told them.
+
+    The choice is now shadow-persisted in a key no widget owns, so the round trip
+    (choose -> empty -> widen) comes back to the model the viewer picked.
+    """
+    pytest.importorskip("streamlit")
+    at = _failures_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert at.radio(key="failure_model").value == "graph_rate_night"
+
+    # graph_rate_night has zero FN across both fixture frames -- the same empty
+    # combination the two tests above use.
+    at.radio(key="failure_type_select").set_value("Has FN").run(timeout=30)
+    assert not at.exception
+    assert any("No frames match these filters" in str(m.value) for m in at.info)
+
+    at.radio(key="failure_type_select").set_value("All").run(timeout=30)
+    assert not at.exception
+    assert at.radio(key="failure_model").value == "graph_rate_night"
+    # ... and the choice really is driving the detail again: v0's per-box table is
+    # its 2 GT rows plus graph_rate_night's two claims (baseline claims a1 alone).
+    at.session_state["failure_token"] = "v0"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.dataframe[0].value) == 4
+
+
 def test_overview_hero_renders_overlay(
     built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1230,7 +1655,7 @@ def test_overview_hero_renders_overlay(
     # substring unique to the corrected caption so a regression to the fallback
     # (or a wrong caption) fails loudly instead of silently matching either path.
     hero_captions = [caption for img in at.image for caption in img.captions]
-    assert any("defeats all three models" in caption for caption in hero_captions)
+    assert any("defeats all five models" in caption for caption in hero_captions)
 
 
 def test_overview_hero_overlay_keeps_a_gt_box_whose_visibility_flag_is_na(
@@ -1391,9 +1816,11 @@ def test_scenario_event_viewer_curated_vs_not_curated(
     at.session_state["scenario_token"] = "s1"
     at.run(timeout=30)
     assert not at.exception
-    assert any(
+    # Once, not twice: the viewer's caption beside the frame is the only place the
+    # page spells the sentence out (the metric row shows the short card value).
+    assert sum(
         "not in the curated prediction set" in str(c.value) for c in at.caption
-    )
+    ) == 1
 
 
 def test_scenario_filmstrip_slider_changes_readout(
@@ -1414,10 +1841,71 @@ def test_scenario_filmstrip_slider_changes_readout(
     assert set(slider.options) == {"current", "t+1"}
 
     before_captions = [str(c.value) for c in at.caption]
+    # Item I3, Phase 9b consolidated review: the readout is the GT EGO-POSE speed in
+    # m/s while the metric card above it is the CAN speed in km/h -- the same
+    # keyframe, ~25 % apart. Both are labelled now, so the two figures cannot read
+    # as one contradicting itself.
+    assert any(
+        caption.startswith("current: ego ") and ", accel " in caption
+        for caption in before_captions
+    ), before_captions
     slider.set_value("t+1").run(timeout=30)
     assert not at.exception
     after_captions = [str(c.value) for c in at.caption]
     assert before_captions != after_captions   # the speed/accel readout changed
+    assert any(caption.startswith("t+1: ego ") for caption in after_captions)
+
+
+@pytest.fixture()
+def built_demo_data_with_a_fast_cyclist(built_demo_data: Path) -> Path:
+    """The flagship event, additionally tagged as a ``fast_cyclists`` hit with a
+    cyclist distance of its own.
+
+    Four of the six presets have no event at all in this tiny package, so the
+    preset whose VRU card differs from every other one's is staged on the built
+    package -- the same edit-the-built-package idiom
+    ``built_demo_data_without_can_speed`` uses.
+    """
+    path = built_demo_data / "scenario_events.parquet"
+    events = pd.read_parquet(path)
+    hit = events["sample_data_token"] == "s1"
+    events.loc[hit, "preset_rank_fast_cyclists"] = 1
+    events.loc[hit, "min_dist_cyclist_m"] = 4.3
+    events.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_scenario_metric_row_names_the_vru_the_preset_is_about(
+    built_demo_data_with_a_fast_cyclist: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M2, Phase 9b consolidated review: the merged metric row showed the
+    PEDESTRIAN distance under every preset, including the one whose whole subject is
+    a cyclist. The distance card switches with the preset (it does not duplicate --
+    the row stays six cards), so a fast_cyclists event reads its own VRU's distance.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data_with_a_fast_cyclist, monkeypatch)
+
+    at.session_state["scenario_preset"] = "fast_cyclists"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert len(at.metric) == 6
+    labels = [str(m.label) for m in at.metric]
+    assert labels == [
+        "CAN speed", "Min long. accel", "Min cyclist dist", "Peds within 10m",
+        "Lighting / rain", "Model result",
+    ]
+    assert {str(m.label): str(m.value) for m in at.metric}["Min cyclist dist"] == "4.3 m"
+
+    # Every other preset keeps the pedestrian distance -- the same six cards.
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.run(timeout=30)
+    assert not at.exception
+    assert len(at.metric) == 6
+    assert "Min ped dist" in [str(m.label) for m in at.metric]
+    assert "Min cyclist dist" not in [str(m.label) for m in at.metric]
 
 
 def test_scenario_flagship_badge(
@@ -1514,6 +2002,189 @@ def test_scenario_graph_panel_shows_parity_narrative_and_legend(
         "Scene" in c and "Sample" in c and "EgoPose" in c and "ObjectObservation" in c
         and "Category" in c and "Location" in c
         for c in captions
+    )
+
+
+# Phase 9b (Task 5): the graph panel's progressive path reveal. The Phase-6 path
+# colour doubles as the reveal's "amber" (views/scenarios.py's _NODE_ON_PATH_COLOR
+# / _AMBER, so the legend's "Orange = the matched path" stays true) -- pinned here
+# as a literal, like every other page string this file asserts on.
+_AMBER = "#FF851B"
+
+
+def _capture_agraph(
+    monkeypatch: pytest.MonkeyPatch, *, clicked: str | None = None
+) -> list[dict[str, Any]]:
+    """Capture the Node/Edge/Config objects the graph panel hands to
+    ``streamlit_agraph.agraph``, and decide what a click returns.
+
+    ``_render_graph_panel`` imports ``agraph`` INSIDE the function (so a missing
+    streamlit-agraph degrades to a warning instead of a fatal module import),
+    which is exactly what makes this patch bite: the name is resolved on the
+    module at call time. AppTest never round-trips a custom component, so without
+    this the real ``agraph`` returns its default (None) and everything the panel
+    computed -- which nodes it drew, in which colour -- stays unobservable.
+    """
+    streamlit_agraph = pytest.importorskip("streamlit_agraph")
+    calls: list[dict[str, Any]] = []
+
+    def _fake_agraph(nodes: Any, edges: Any, config: Any) -> str | None:
+        calls.append({"nodes": list(nodes), "edges": list(edges), "config": config})
+        return clicked
+
+    monkeypatch.setattr(streamlit_agraph, "agraph", _fake_agraph)
+    return calls
+
+
+def test_scenario_graph_path_reveal(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 9b Task 5) The select_slider walks the matched path one step at a
+    time and the toggle folds the context nodes away.
+
+    The fixture's flagship subgraph ("s1", built by _stage_subgraphs_with_event
+    through the real assemble_subgraph) has 5 on-path nodes -- scene:sceneX,
+    sample:s1, object:f1 (+ its Category) and egopose:s1 -- and 3 context ones:
+    the 20 m pedestrian object:f2, the next Sample sample:v1, and
+    location:boston-seaport.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    calls = _capture_agraph(monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    slider = at.select_slider(key="scenario_path_step")
+    assert list(slider.options) == [
+        "1 · Scene scene-X", "2 · Keyframe", "3 · Pedestrian · 5.0 m", "4 · Ego pose",
+    ]
+    assert slider.value == slider.options[-1]   # the whole path is revealed by default
+
+    # --- context nodes off (the default): the on-path 5, and no dangling edge ----
+    drawn = calls[-1]
+    ids = [node.id for node in drawn["nodes"]]
+    assert len(ids) == 5
+    assert set(ids) == {
+        "scene:sceneX", "sample:s1", "egopose:s1", "object:f1",
+        "category:human.pedestrian.adult",
+    }
+    # object:f2 (context) hangs off the SAME Category node as the matched
+    # pedestrian, so an edge filter that only checked its source would leave that
+    # OF_CATEGORY edge pointing at a node the panel never drew.
+    assert all(edge.source in set(ids) and edge.to in set(ids) for edge in drawn["edges"])
+    assert all(node.color == _AMBER for node in drawn["nodes"])
+
+    # --- the facts table for the selected step (the ego pose, by default) --------
+    tables = [table.value for table in at.table]
+    assert any(
+        list(table["fact"]) == ["CAN speed", "Min longitudinal accel", "Hard braking"]
+        and list(table["value"]) == ["36.0 km/h", "-7.50 m/s²", "yes"]
+        for table in tables
+    )
+    captions = [str(caption.value) for caption in at.caption]
+    assert any("EgoPose node" in caption for caption in captions)   # where CAN lives
+    assert any("Amber" in caption and "hollow" in caption for caption in captions)
+
+    # --- context nodes on: the full subgraph ------------------------------------
+    at.toggle(key="scenario_graph_context").set_value(True).run(timeout=30)
+    assert not at.exception
+    with_context = calls[-1]
+    assert len(with_context["nodes"]) == 8
+    assert {"object:f2", "sample:v1", "location:boston-seaport"} <= {
+        node.id for node in with_context["nodes"]
+    }
+    assert len(with_context["edges"]) == 8
+
+    # --- step 1: only the Scene node is revealed --------------------------------
+    at.select_slider(key="scenario_path_step").set_value("1 · Scene scene-X").run(timeout=30)
+    assert not at.exception
+    first_step = calls[-1]
+    amber = [node.id for node in first_step["nodes"] if node.color == _AMBER]
+    assert amber == ["scene:sceneX"]
+    # The other four on-path nodes are still DRAWN (the force layout must not jump
+    # between steps) -- just hollow: white fill, grey border.
+    hollow = [
+        node.id for node in first_step["nodes"]
+        if isinstance(node.color, dict) and node.color.get("background") == "#FFFFFF"
+    ]
+    assert sorted(hollow) == [
+        "category:human.pedestrian.adult", "egopose:s1", "object:f1", "sample:s1",
+    ]
+    tables = [table.value for table in at.table]
+    assert any(list(table["fact"]) == ["Scene", "Location", "Lighting", "Rain"] for table in tables)
+
+
+def test_scenario_graph_reveal_survives_switching_to_another_event(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 9b Task 5) The step the viewer left the slider on belongs to the
+    PREVIOUS event: "3 · Pedestrian · 5.0 m" is s1's third step and no step of
+    v1's at all (its matched pedestrian is at 7 m). Selecting another event must
+    fall back to that event's own last step -- the whole path revealed -- not
+    raise, and not silently reveal a step number that means something else here.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    calls = _capture_agraph(monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    at.select_slider(key="scenario_path_step").set_value("3 · Pedestrian · 5.0 m").run(timeout=30)
+    assert not at.exception
+
+    at.session_state["scenario_preset"] = "night_pedestrians"
+    at.session_state["scenario_token"] = "v1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    slider = at.select_slider(key="scenario_path_step")
+    assert list(slider.options) == [
+        "1 · Scene scene-X", "2 · Keyframe", "3 · Pedestrian · 7.0 m", "4 · Ego pose",
+    ]
+    assert slider.value == "4 · Ego pose"
+    assert all(node.color == _AMBER for node in calls[-1]["nodes"])
+    # v1's OWN ego readings (can_speed_kmh 18.0, accel -0.5, not hard braking) --
+    # the facts follow the selected event, not the one the slider was set on.
+    tables = [table.value for table in at.table]
+    assert any(
+        list(table["value"]) == ["18.0 km/h", "-0.50 m/s²", "no"] for table in tables
+    )
+
+
+def test_scenario_graph_click_still_shows_the_clicked_nodes_meta(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(Phase 6 behaviour, kept through Task 5's reveal) A clicked node's own
+    ``meta`` table takes precedence over the selected step's facts table -- and
+    the path narrative stays on screen either way."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+    _capture_agraph(monkeypatch, clicked="object:f1")
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    tables = [table.value for table in at.table]
+    # object:f1's own meta, key order as the staged JSON carries it (sorted).
+    assert any(
+        list(table["key"]) == [
+            "category", "distance_to_ego_m", "ego_rel_x", "ego_rel_y", "group", "visibility",
+        ]
+        and list(table["value"]) == [
+            "human.pedestrian.adult", "5.0", "3.0", "-1.0", "pedestrian", "4",
+        ]
+        for table in tables
+    )
+    # The step facts table is NOT drawn while a node is selected.
+    assert not any("fact" in table.columns for table in tables)
+    assert any(
+        "pedestrian at 5.00 m" in str(caption.value) for caption in at.caption
     )
 
 
@@ -1693,6 +2364,246 @@ def test_scenario_curated_event_falls_back_to_thumb_when_crop_missing(
     assert not any("no image available" in str(c.value) for c in at.caption)
 
 
+# --- Phase 9b (Task 4): the one-screen event viewer + its CAN curve -------------
+#
+# The viewer's two curves are built by render.curve_charts from
+# filters.filmstrip_steps, so the Scenario page and tour step 2 draw the SAME pair
+# (spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec2). These tests
+# read the charts back off the wire the way Streamlit sends them: st.altair_chart
+# marshals the vega-lite spec as a JSON string on the element proto and hoists each
+# layer's own data into a named, Arrow-encoded dataset beside it.
+
+_CAN_SPEED_TITLE = "CAN speed (km/h)"
+_EGO_SPEED_TITLE = "ego speed (km/h)"
+# Short: the long "CAN longitudinal accel (m/s²)" clipped to "CAN longitudinal
+# accel (n" at the viewer's chart width. The full words stay in the caption under
+# the pair (asserted below), so only the axis got shorter.
+_CAN_ACCEL_TITLE = "CAN accel (m/s²)"
+
+
+def _chart_specs(at: Any) -> list[dict[str, Any]]:
+    return [json.loads(chart.proto.spec) for chart in at.get("vega_lite_chart")]
+
+
+def _y_titles(at: Any) -> list[str]:
+    """One y-axis title per chart on the page -- the line layer's, which is the
+    layer that carries the series (the rule layers encode x only)."""
+    return [str(spec["layer"][0]["encoding"]["y"]["title"]) for spec in _chart_specs(at)]
+
+
+def _all_y_titles(at: Any) -> list[str]:
+    """Every y-axis title on the page, layered charts flattened -- ``bar_chart``
+    returns a plain chart when ``zero_line=False`` and a two-layer one otherwise,
+    and this reads both shapes."""
+    titles: list[str] = []
+    for spec in _chart_specs(at):
+        for layer in spec.get("layer", [spec]):
+            title = (layer.get("encoding", {}).get("y") or {}).get("title")
+            if title is not None:
+                titles.append(str(title))
+    return titles
+
+
+def _strategy_chart_frames(at: Any) -> list[Any]:
+    """The data behind every chart on the page that carries a ``strategy`` column
+    -- Streamlit hoists each altair chart's own frame into an Arrow-encoded dataset
+    beside the spec, so this reads the bars back exactly as the page drew them."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    frames = []
+    for chart in at.get("vega_lite_chart"):
+        for dataset in chart.proto.datasets:
+            frame = convert_arrow_bytes_to_pandas_df(dataset.data.data)
+            if "strategy" in frame.columns:
+                frames.append(frame)
+    return frames
+
+
+def _rule_steps(chart: Any) -> list[str]:
+    """The step label(s) the chart's selected-step rule sits on, decoded from the
+    Arrow dataset Streamlit hoisted the rule's own one-row frame into."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    spec = json.loads(chart.proto.spec)
+    rule = spec["layer"][1]
+    datasets = {
+        dataset.name: convert_arrow_bytes_to_pandas_df(dataset.data.data)
+        for dataset in chart.proto.datasets
+    }
+    return [str(value) for value in datasets[rule["data"]["name"]]["step"]]
+
+
+@pytest.fixture()
+def built_demo_data_without_can_speed(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo build` would have written it: no
+    per-step CAN speed on ``scenario_events.parquet``.
+
+    Same edit-the-built-package idiom as ``built_demo_data_without_explain`` --
+    the app's own fallback keys off the COLUMNS being absent
+    (``filters.filmstrip_steps``), so dropping them from the built table is
+    exactly the state an older package puts the page in.
+    """
+    path = built_demo_data / "scenario_events.parquet"
+    events = pd.read_parquet(path)
+    events = events.drop(columns=[c for c in events.columns if c.startswith("can_speed")])
+    assert not [c for c in events.columns if c.startswith("can_speed")]
+    events.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_scenario_viewer_is_one_screen_with_can_curve(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The viewer is one screen: the frame beside the two CAN curves, then ONE
+    metric row, then the filmstrip -- not the six stacked full-width panels the
+    page drew before (spec sec2).
+
+    The fixture's flagship event ("s1") has exactly two filmstrip steps (its only
+    non-NA neighbour is "v1" at t+1), so the curves' x order is ["current", "t+1"]
+    -- read straight off the chart spec, which is also what proves the axis is the
+    nominal step sequence rather than a time axis.
+    """
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    # (a) the two curves, titled as CAN readings (the package carries can_speed_*)
+    titles = _y_titles(at)
+    assert _CAN_SPEED_TITLE in titles
+    assert _CAN_ACCEL_TITLE in titles
+    specs = _chart_specs(at)
+    for spec in specs:
+        assert spec["layer"][0]["encoding"]["x"]["sort"] == ["current", "t+1"]
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the "
+        "CAN bus" in c
+        for c in captions
+    )
+
+    # (b) six cards -- the ego/context/model panels' figures merged -- laid out
+    # THREE to a row (visual walk: at six per row st.metric truncated the speed,
+    # accel and model values). Same cards, same order, two rows.
+    assert len(at.metric) == 6
+    labels = [str(m.label) for m in at.metric]
+    assert labels == [
+        "CAN speed", "Min long. accel", "Min ped dist", "Peds within 10m",
+        "Lighting / rain", "Model result",
+    ]
+    values = {str(m.label): str(m.value) for m in at.metric}
+    assert values["CAN speed"] == "36.0 km/h"
+    assert values["Min long. accel"] == "-7.50 m/s²"
+    assert values["Min ped dist"] == "5.0 m"
+    assert values["Peds within 10m"] == "1"
+    assert values["Lighting / rain"] == "day"
+    # "s1" is not in the curated prediction set. The CARD says so in two words
+    # (item M3, Phase 9b consolidated review: the 33-character sentence truncates as
+    # an st.metric value, and this is the flagship preset's default state) and the
+    # page's own pinned wording is _render_viewer's caption beside the frame --
+    # EXACTLY ONCE (visual walk: the metric row said it a second time).
+    assert values["Model result"] == "not curated"
+    assert sum("not in the curated prediction set" in c for c in captions) == 1
+
+    # (c) the three stacked panels' headings are gone
+    markdowns = [str(m.value) for m in at.markdown]
+    for heading in ("Ego dynamics", "Scene context", "Model context"):
+        assert not any(heading in text for text in markdowns), heading
+
+    # (d) the viewer's pinned trust chrome survives the relayout
+    assert any("1 event found · SQL 1 / Graph 1 ✓" in c for c in captions)
+    assert any("recorded experiment output" in c for c in captions)
+
+    # (e) ... and a model-family preset still gets the graph-holds-GT-only note
+    at.session_state["scenario_preset"] = "fn_pedestrians_night"
+    at.run(timeout=30)
+    assert not at.exception
+    assert any(
+        "graph holds GT only — model verdict comes from the prediction set" in str(c.value)
+        for c in at.caption
+    )
+
+
+def test_scenario_curve_rule_follows_the_filmstrip_slider(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filmstrip slider is the curves' cursor: moving it moves the vertical
+    rule on BOTH charts, so the strip and the curve always point at the same
+    keyframe."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+    charts = at.get("vega_lite_chart")
+    assert len(charts) == 2
+    assert all(_rule_steps(chart) == ["current"] for chart in charts)
+
+    at.select_slider(key="scenario_filmstrip").set_value("t+1").run(timeout=30)
+    assert not at.exception
+    charts = at.get("vega_lite_chart")
+    assert len(charts) == 2
+    assert all(_rule_steps(chart) == ["t+1"] for chart in charts)
+
+
+def test_scenario_viewer_titles_ego_speed_on_an_old_package(
+    built_demo_data_without_can_speed: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The honesty rule "a CAN curve must be CAN": a package built before v0.8 has
+    no per-step CAN speed, so the speed series falls back to the GT ego pose and
+    the chart says "ego speed" -- it never labels an ego-pose reading as CAN. The
+    acceleration series IS CAN on every package, so its title is unchanged."""
+    pytest.importorskip("streamlit")
+    at = _scenarios_apptest(built_demo_data_without_can_speed, monkeypatch)
+
+    at.session_state["scenario_preset"] = "hard_braking_near_pedestrians"
+    at.session_state["scenario_token"] = "s1"
+    at.run(timeout=30)
+    assert not at.exception
+
+    titles = _y_titles(at)
+    assert _EGO_SPEED_TITLE in titles
+    assert _CAN_SPEED_TITLE not in titles
+    assert _CAN_ACCEL_TITLE in titles
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "Keyframes are ~0.5 s apart; ego speed from the GT ego pose, longitudinal "
+        "acceleration from the CAN bus" in c
+        for c in captions
+    )
+    assert not any("speed and longitudinal acceleration from the CAN bus" in c for c in captions)
+    # ... and the metric card names the same source as the chart it sits under.
+    assert "Ego speed" in [str(m.label) for m in at.metric]
+    assert "CAN speed" not in [str(m.label) for m in at.metric]
+
+
+def test_tour_step_2_shows_the_can_curve(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tour step 2 draws the SAME pair of curves under its filmstrip (no slider --
+    a tour screen is one visual, not a control panel), so the condensed step and
+    the deep page tell the identical story about the ego's motion."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 2)
+    assert not at.exception
+
+    titles = _y_titles(at)
+    assert titles == [_CAN_SPEED_TITLE, _CAN_ACCEL_TITLE]
+    charts = at.get("vega_lite_chart")
+    assert all(_rule_steps(chart) == ["current"] for chart in charts)
+    assert any(
+        "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the "
+        "CAN bus" in str(c.value)
+        for c in at.caption
+    )
+
+
 # --- Phase 7 (Task 4): the Active Learning page --------------------------------
 
 
@@ -1737,7 +2648,15 @@ def test_active_learning_page_renders_story_chart_and_exemplar_table(
     # (e) exemplar controls: the selectbox over al_exemplars.json's tokens and the
     # model radio, whose options are the package's own model labels.
     assert at.selectbox(key="al_exemplar")
-    assert at.radio(key="al_model").options == ["baseline", "graph_rate_night"]
+    # The package's own model labels (filters.model_label): the two detection
+    # models by their raw names, the Phase-9b weak pair by the labels that say what
+    # each was trained on.
+    assert at.radio(key="al_model").options == [
+        "baseline",
+        "graph_rate_night",
+        "weak_graph_rate_night (pseudo labels, yolov8n)",
+        "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+    ]
 
     # (e) the per-box table: v0's GT box a2 is caught by graph_rate_night (tp 0.8)
     # and never claimed by baseline -- exactly one upgraded row.
@@ -1838,6 +2757,156 @@ def test_active_learning_page_with_an_empty_exemplar_list(
     assert any("no exemplar frames in this package" in str(i.value) for i in at.info)
     # the rest of the page is unaffected -- the arm chart is still there
     assert len(at.get("vega_lite_chart")) >= 1
+
+
+def test_active_learning_page_compares_the_acquisition_strategies(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec sec4: the acquisition comparison sits ABOVE the all-arms chart and
+    answers "why graph-aware mining rather than similarity mining?" from the arms'
+    own mined-set composition -- scenes covered and night share, two charts over
+    the same budget.
+
+    This fixture ran two of the three strategies (it has no ``mined`` arm), so both
+    the heading's count word and the callout are COMPUTED from what is in the
+    package: the strategies are listed side by side with no ranking claim, and the
+    "found near-duplicates" lesson is not written at all.
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    subheaders = [str(s.value) for s in at.subheader]
+    # 20 = this arm's own 120 training images minus the baseline's 100, never a
+    # literal; "Two" because two of the three strategies have a row here.
+    assert "Two ways to pick 20 frames" in subheaders
+    assert subheaders.index("Two ways to pick 20 frames") < subheaders.index(
+        "Every arm, one chart"
+    )
+
+    titles = _all_y_titles(at)
+    assert "scenes covered" in titles
+    assert "night share" in titles
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 2
+    for frame in drawn:
+        assert list(frame["strategy"]) == ["Random sample", "Graph-aware mining"]
+
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(
+        caption.startswith("**Graph-aware mining** (`graph_rate_night`) —")
+        for caption in captions
+    )
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Random sample: 1 scene · 0% night · +0.0100" in text
+        and "Graph-aware mining: 1 scene · 100% night · +0.0300" in text
+        for text in learned
+    )
+    assert not any("near-duplicates" in text for text in learned)
+
+
+def _add_mined_arm(built_demo_data: Path) -> None:
+    """Give the built package the third acquisition strategy, with the real
+    package's own composition for the two arms the lesson compares (`mined` 219
+    scenes / 0% night / +0.0072; `graph_rate_night` 368 scenes / 30.9% night).
+
+    Deliberately absent from the base fixture -- which is what makes the neutral
+    branch of the strategy callout testable at all (see the test above) -- and
+    added here the same way ``_add_weak_night_twin_arm`` adds the weak twin: only
+    the columns the section reads are set, the rest come back NaN through
+    ``pd.concat``'s own column align.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    graph = arms["arm"] == "graph_rate_night"
+    arms.loc[graph, "n_scenes"] = 368
+    arms.loc[graph, "night_share"] = 0.309
+    extra = pd.DataFrame({
+        "arm": ["mined"],
+        "family": ["mined"],
+        "round_order": [int(arms["round_order"].max()) + 1],
+        "n_train_images": [118],
+        "overall_map5095": [0.215],
+        "night_map5095": [0.1072],
+        "delta_overall": [0.015],
+        "delta_night": [0.0072],
+        "n_scenes": pd.array([219], dtype="Int64"),
+        "night_share": [0.0],
+    })
+    pd.concat([arms, extra], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_active_learning_strategy_lesson_is_computed_not_asserted(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With all three strategies in the package the callout may make its comparison
+    -- and only because this package's own numbers support every clause of it: the
+    graph arm really does cover more scenes AND a higher night share than the
+    similarity arm, and really does hold the table's best night gain (spec's
+    "computed, never asserted, superlatives")."""
+    pytest.importorskip("streamlit")
+    _add_mined_arm(built_demo_data)
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "Three ways to pick 20 frames" in [str(s.value) for s in at.subheader]
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Similarity mining found near-duplicates: 219 scenes, 0% night, +0.0072 "
+        "night mAP50-95; graph-aware mining spread the same budget over 368 scenes "
+        "at 31% night and took the best night gain (+0.0300)." in text
+        for text in learned
+    )
+
+
+def test_active_learning_why_selected_panel_leads_with_reason_chips(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) Spec sec4: the per-frame panel opens with the frame's selection facts as
+    chips, above the factor lines that spell the same facts out. "wA" carries one
+    visible pedestrian GT box and no routed failure mass, so the pedestrian chip is
+    written and the routed-failures chip is not -- and no chip anywhere says "rate"
+    (there is no per-frame failure rate in the package; the zero-pedestrian branch
+    is pinned in tests/test_demo_filters.py::test_reason_chips_count_and_pluralise_
+    visible_pedestrian_gt).
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    markdowns = [str(m.value) for m in at.markdown]
+    chips = next(text for text in markdowns if ":blue-badge[night]" in text)
+    assert chips == (
+        ":blue-badge[night] :blue-badge[1 pedestrian GT box] "
+        ":blue-badge[community #0 · 10 frames] "
+        ":blue-badge[mass rank 1 of 2] :blue-badge[quota 1] "
+        ":blue-badge[night-pass pick (floor 1)] :blue-badge[degree rank 2 of 10]"
+    )
+    assert "rate" not in chips
+    factors = next(text for text in markdowns if text.startswith("**Night frame:**"))
+    assert markdowns.index(chips) < markdowns.index(factors)
+
+
+def test_active_learning_page_writes_no_reason_chips_without_the_explain_group(
+    built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No staged selection facts, no chips: the panel says exactly what is missing
+    rather than tagging the frame with reasons this package cannot support."""
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data_without_explain, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert not any(":blue-badge[" in str(m.value) for m in at.markdown)
+    assert any(
+        "per-frame community and routed mass are not included in this package" in str(i.value)
+        for i in at.info
+    )
 
 
 def test_active_learning_gallery_pages_night_frames_first(
@@ -2215,6 +3284,267 @@ def test_weak_supervision_page_on_a_pre_phase_7_package(
     assert any(m.label == "Verifier retention — random" for m in at.metric)
 
 
+# --- Phase 9b (Task 8): Weak Supervision's one frame, three views -------------------
+#
+# Spec docs/superpowers/specs/2026-08-22-demo-phase9b-design.md sec6: the page stops
+# stating the weak-supervision result only as a retention number. Row 1 shows what the
+# VLM's counts bought on ONE accepted train-pool frame (GT | pseudo labels | the
+# verdict and the count vote), row 2 what the two checkpoints trained on those frames
+# then did on a held-out val frame neither of them saw -- the weak-labelled arm beside
+# its GT-labelled twin, with the per-box difference underneath. The count-bucket chart
+# below the loss split is the same story from the verifier's side. Every pinned string
+# and key of the earlier phases survives verbatim (asserted in the tests above).
+
+# filters._FIXED_BOX_COLUMNS, copied rather than imported (this module never imports
+# the app package at collection time; the page tests reach it through AppTest only).
+_FIXED_BOX_COLUMNS = [
+    "annotation_token", "category_group", "distance_to_ego_m", "baseline_claim", "arm_claim",
+]
+_WEAK_ARM_LABEL = "weak_graph_rate_night (pseudo labels, yolov8n)"
+_GT_ARM_LABEL = "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)"
+_RESULT_ABSENT_NOTE = "held-out weak-arm predictions need demo_data >= 0.8 — rerun demo build"
+_BUCKETS_ABSENT_NOTE = "count-bucket chart needs demo_data >= 0.8 — rerun demo build"
+
+
+def _image_captions(at: Any) -> list[str]:
+    """Every caption the page attached to an ``st.image``. The six "One frame, three
+    views" images are the only captioned ones on this page (the galleries caption
+    their thumbs with a separate ``st.caption``), so this is also how the section's
+    two rows of three are counted."""
+    return [caption for image in at.image for caption in image.captions if caption]
+
+
+def _bucket_chart(at: Any) -> tuple[dict[str, Any], Any] | None:
+    """The count-bucket chart's spec and the frame Streamlit hoisted it into --
+    identified by the ``bucket`` column, the way ``_strategy_chart_frames`` finds the
+    strategy chart."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    for chart in at.get("vega_lite_chart"):
+        for dataset in chart.proto.datasets:
+            frame = convert_arrow_bytes_to_pandas_df(dataset.data.data)
+            if "bucket" in frame.columns:
+                return json.loads(chart.proto.spec), frame
+    return None
+
+
+def test_weak_supervision_one_frame_three_views(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The section's two rows: the train-pool showcase frame (wA -- accepted, one
+    pseudo box, one visible pedestrian GT box) and the held-out val frame (v0 --
+    the GT-labelled twin catches the pedestrian a2 the weak arm misses), three
+    images each, with the pair's provenance stated for what it is."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "One frame, three views" in [str(h.value) for h in at.subheader]
+    captions = _image_captions(at)
+    assert len(captions) == 6
+    # row 1: the same train-pool frame under three layers
+    assert any(caption.startswith("ground truth") for caption in captions)
+    assert any(caption.startswith("pseudo labels") for caption in captions)
+    assert any(caption.startswith("both layers") for caption in captions)
+    # row 2: the two checkpoints, each named for what it was trained on
+    assert _WEAK_ARM_LABEL in captions
+    assert _GT_ARM_LABEL in captions
+
+    page_captions = [str(c.value) for c in at.caption]
+    assert any(
+        "held-out val frame — neither detector saw it in training" in caption
+        for caption in page_captions
+    )
+    # the inference is RECORDED output of an offline run, labelled as such
+    assert any(
+        "demo infer, CPU, checkpoint of the training run" in caption
+        for caption in page_captions
+    )
+    assert any(
+        "pseudo boxes from weak_labels.parquet" in caption for caption in page_captions
+    )
+    # ... and the row-2 OVERLAYS are drawn here from the package tables (item M1,
+    # Phase 9b consolidated review): the row stated where the predictions came from
+    # and left the drawing itself unattributed, unlike row 1 just above it.
+    assert any(
+        "overlay drawn from gt_boxes.parquet and predictions.parquet" in caption
+        for caption in page_captions
+    )
+    # row 1's count vote is a static table, so the galleries' own count dataframes
+    # stay the only two of that shape on the page (pinned above).
+    vote = [t.value for t in at.table if list(getattr(t.value, "columns", [])) == [
+        "vlm_count", "gt_count"
+    ]]
+    assert len(vote) == 1
+
+
+def test_weak_supervision_result_table_follows_the_detector_radio(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The radio picks which of the two detectors the per-box table credits. It
+    opens on the GT-labelled twin -- the frame was chosen because the twin fixes
+    something -- whose one upgraded box is v0's pedestrian a2; the weak-labelled
+    arm upgrades nothing over the twin, and the page says so rather than showing an
+    empty grid."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    radio = at.radio(key="ws_result_model")
+    assert radio.options == [_WEAK_ARM_LABEL, _GT_ARM_LABEL]
+    assert radio.value == "weak_graph_rate_night_gt"
+    boxes = [
+        d.value for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == _FIXED_BOX_COLUMNS
+    ]
+    assert len(boxes) == 1
+    assert list(boxes[0]["annotation_token"]) == ["a2"]
+
+    at.radio(key="ws_result_model").set_value("weak_graph_rate_night").run(timeout=30)
+    assert not at.exception
+    assert not [
+        d for d in at.dataframe
+        if list(getattr(d.value, "columns", [])) == _FIXED_BOX_COLUMNS
+    ]
+    assert any("no such box on this frame" in str(c.value) for c in at.caption)
+
+
+def test_weak_supervision_count_bucket_chart_and_callout(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The crowding buckets, drawn from vlm_count_buckets.parquet: one bar per
+    bucket in count order, ``n`` named as frame-class PAIRS (the exporter pools the
+    ten count fields, so a bucket counts pairs, not frames), and a callout whose
+    numbers are the table's own MAEs (this fixture: 1/17 wrong on the 17 empty
+    pairs, then 1, 1 and 2).
+    """
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    found = _bucket_chart(at)
+    assert found is not None
+    spec, frame = found
+    assert list(frame["bucket"]) == ["0", "1-3", "4-9", "10+"]
+    assert spec["encoding"]["x"]["sort"] == ["0", "1-3", "4-9", "10+"]
+    assert spec["encoding"]["y"]["title"] == "count MAE"
+
+    captions = [str(c.value) for c in at.caption]
+    assert any(
+        "n = frame-class pairs" in caption and "0 → 17" in caption and "10+ → 1" in caption
+        for caption in captions
+    )
+    # Item I1, Phase 9b consolidated review: the pooling is over the VLM's TEN count
+    # fields (49,860 = 4,986 x 10 in the real package), not the five detector classes
+    # the count-vote table above shows -- the caption said "five" and invited the
+    # reader to equate the two sets.
+    assert any(
+        "ten count fields" in caption and "five detector classes" in caption
+        for caption in captions
+    )
+    assert not any("The five classes are pooled" in caption for caption in captions)
+    assert any("vlm_count_buckets.parquet" in caption for caption in captions)
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Why crowded frames defeat the VLM" in text
+        and "0.06" in text and "1.00" in text and "2.00" in text
+        for text in learned
+    )
+
+
+@pytest.fixture()
+def built_demo_data_with_non_monotone_buckets(built_demo_data: Path) -> Path:
+    """The same package with a bucket table whose MAEs FALL between two buckets --
+    the shape the callout's neutral branch exists for."""
+    path = built_demo_data / "vlm_count_buckets.parquet"
+    buckets = pd.read_parquet(path)
+    falls = {"0": 0.50, "1-3": 2.00, "4-9": 0.25, "10+": 1.00}
+    buckets["mae"] = [falls[str(bucket)] for bucket in buckets["bucket"]]
+    buckets.to_parquet(path, index=False)
+    return built_demo_data
+
+
+def test_weak_supervision_count_bucket_callout_is_neutral_when_the_maes_fall(
+    built_demo_data_with_non_monotone_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item M9, Phase 9b consolidated review: "rises with the crowd" is a claim about
+    THIS package's table, so it is only written when the table's own MAEs never fall.
+    Nothing covered the other branch -- on a table that falls between buckets the
+    callout must say the neutral thing and still quote every bucket's own figure.
+    """
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_with_non_monotone_buckets, monkeypatch)
+    assert not at.exception
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any("moves with the crowd" in text for text in learned)
+    assert not any("rises with the crowd" in text for text in learned)
+    assert any(
+        "0.50 on empty frame-class pairs" in text
+        and "2.00 at 1-3 objects" in text
+        and "0.25 at 4-9 objects" in text
+        and "1.00 at 10+ objects" in text
+        for text in learned
+    )
+
+
+def test_weak_supervision_without_the_count_buckets(
+    built_demo_data_without_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A package built before 0.8 carries no bucket table: the note names the
+    version and the rebuild, and no chart or callout is drawn from nothing."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_without_buckets, monkeypatch)
+    assert not at.exception
+
+    assert any(_BUCKETS_ABSENT_NOTE in str(i.value) for i in at.info)
+    assert _bucket_chart(at) is None
+    assert not any(
+        "Why crowded frames defeat the VLM" in str(m.value) for m in at.markdown
+    )
+
+
+def test_weak_supervision_without_the_weak_arm_predictions(
+    built_demo_data_without_weak_models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the two checkpoints' held-out predictions there is no second row to
+    draw: the page says which package version carries them instead of comparing a
+    model this package never evaluated. Row 1 is unaffected -- it needs no
+    predictions at all."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data_without_weak_models, monkeypatch)
+    assert not at.exception
+
+    assert any(_RESULT_ABSENT_NOTE in str(i.value) for i in at.info)
+    assert not [r for r in at.radio if r.key == "ws_result_model"]
+    assert len(_image_captions(at)) == 3
+    assert "Weak-arm detections on this frame" not in [
+        str(e.label) for e in at.get("expander")
+    ]
+
+
+def test_weak_supervision_folds_the_weak_arms_out_of_the_gallery_panel(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gallery's downstream panel keeps its arm-level lines in the open and
+    folds the weak checkpoints' own story away: the curated frames are train-pool
+    frames, so neither checkpoint has a detection on them, and saying so belongs
+    behind an expander rather than beside the result."""
+    pytest.importorskip("streamlit")
+    at = _weak_supervision_apptest(built_demo_data, monkeypatch)
+    at.session_state["ws_accepted_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert "Weak-arm detections on this frame" in [str(e.label) for e in at.get("expander")]
+    folded = [
+        str(m.value) for m in at.markdown
+        if "`weak_graph_rate_night`" in str(m.value) and "held-out val frames" in str(m.value)
+    ]
+    assert len(folded) == 1
+
+
 def _chat_replay_apptest(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     from streamlit.testing.v1 import AppTest
 
@@ -2477,7 +3807,7 @@ def test_tour_walks_steps_0_and_1(
 
     assert at.radio(key="tour_hero_model").options == ["baseline", "graph_rate_night"]
     assert len(at.image) == 1
-    assert any("defeats all three models" in text for text in captions)
+    assert any("defeats all five models" in text for text in captions)
 
     markdowns = [str(block.value) for block in at.markdown]
     # the derived fact line: baseline never claims v0's pedestrian (a2);
@@ -2602,6 +3932,32 @@ def test_tour_walks_steps_2_to_5(
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
 
 
+def test_tour_step_3_leads_with_the_same_reason_chips(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec sec4: step 3 opens with the same chip row the Active Learning page's
+    per-frame panel does, between the frame and the factor lines -- built by the
+    same ``filters.reason_chips`` from the same explain row, so the tour cannot
+    tell a different story about why a frame was picked. Its frame ("v0") does
+    carry one visible pedestrian GT box, which the chips count."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 3)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    chips = next(text for text in markdowns if ":blue-badge[night]" in text)
+    assert chips == (
+        ":blue-badge[night] :blue-badge[1 pedestrian GT box] "
+        ":blue-badge[community #0 · 10 frames] :blue-badge[mass rank 1 of 2] "
+        ":blue-badge[quota 1] :blue-badge[night-pass pick (floor 1)] "
+        ":blue-badge[degree rank 1 of 10]"
+    )
+    assert "rate" not in chips
+    factors = next(text for text in markdowns if text.startswith("**Night frame:**"))
+    assert markdowns.index(chips) < markdowns.index(factors)
+
+
 def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Step 6 (screen 7): four bordered answers -- the weakness, what was added,
     whether the model improved, and what failed -- every number read straight off
@@ -2644,8 +4000,10 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     # (2) what was added -- the arm's mined-set composition vs the random comparator
     # (this fixture has no "mined" arm, so that comparator clause is skipped)
     assert any(
-        "mined 20 frames across 1 scenes, 100% at night" in text
-        and "random covered 1 scenes at 0% night" in text
+        # singular nouns: the fixture's arm covers exactly one scene, and the
+        # comparator one too -- the page must not say "1 scenes"
+        "mined 20 frames across 1 scene, 100% at night" in text
+        and "random covered 1 scene at 0% night" in text
         for text in markdowns
     )
     assert not any("similarity mining" in text for text in markdowns)
@@ -2896,9 +4254,16 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
     tour = importlib.import_module("views.tour")
     scenarios = importlib.import_module("views.scenarios")
     active_learning = importlib.import_module("views.active_learning")
+    weak_supervision = importlib.import_module("views.weak_supervision")
+    filters = importlib.import_module("filters")
     try:
         # (a) the strings the pages DO name -- compared attribute to attribute
         assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
+        # The overlay legend is now written on THREE pages (the Weak Supervision
+        # page's held-out result row copies it too) -- item M5, Phase 9b
+        # consolidated review: two of the three were compared, so a reword of the
+        # weak page's copy could have drifted away unnoticed.
+        assert tour._OVERLAY_LEGEND == weak_supervision._OVERLAY_LEGEND
         assert tour._EXPLAIN_ABSENT_NOTE == active_learning._EXPLAIN_ABSENT_NOTE
         assert tour._EXPLAIN_FRAME_ABSENT_NOTE == active_learning._EXPLAIN_FRAME_ABSENT_NOTE
         assert tour._TRAIN_POOL_NOTE == active_learning._TRAIN_POOL_NOTE
@@ -2916,12 +4281,14 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
         # (c) the filmstrip's own step columns and labels, in strip order: the
         # Scenario page splits them either side of the current frame, which the
         # tour flattens into one tuple with the event itself (column None) between.
+        # Phase 9b: both are now DERIVED from filters.FILMSTRIP_STEPS (one
+        # definition, two shapes), and this is the check that they stay derived.
         page_steps = (
             *scenarios._BEFORE_STEPS,
             (None, scenarios._CURRENT_STEP),
             *scenarios._AFTER_STEPS,
         )
-        assert page_steps == tour._FILMSTRIP_STEPS
+        assert page_steps == tour._FILMSTRIP_STEPS == filters.FILMSTRIP_STEPS
     finally:
         _reset_demo_app_modules()
 
@@ -3290,3 +4657,4 @@ def test_loss_learned_callout_counts_only_ranked_arms(monkeypatch: pytest.Monkey
     weak_supervision._render_loss_learned_callout(loss, arms)
     assert len(calls) == 1
     assert "posted the worst night result of the 3 arms" in calls[0]
+

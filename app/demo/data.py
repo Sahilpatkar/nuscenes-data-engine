@@ -237,6 +237,8 @@ _EMPTY_VLM_COUNTS_COLUMNS = [
     "gt_car", "gt_truck", "gt_bus", "gt_pedestrian", "gt_bicycle",
 ]
 
+_EMPTY_VLM_COUNT_BUCKETS_COLUMNS = ["model", "bucket", "n", "mae"]
+
 
 @st.cache_data
 def load_weak_loss() -> pd.DataFrame:
@@ -284,6 +286,25 @@ def load_vlm_counts() -> pd.DataFrame:
     path = DEMO_DATA / "vlm_counts.parquet"
     if not path.is_file():
         return pd.DataFrame(columns=_EMPTY_VLM_COUNTS_COLUMNS)
+    return pd.read_parquet(path)
+
+
+@st.cache_data
+def load_vlm_count_buckets() -> pd.DataFrame:
+    """The VLM's count MAE by GT-count bucket, per model (package >= 0.8).
+
+    ``n`` counts frame x CLASS pairs, not frames -- the builder pools all ten count
+    fields into one bucket table (``eval_count_buckets``), so any caption over this
+    table has to say "frame-class pairs".
+
+    Absent from every package built before 0.8 (and from any built on a machine
+    without ``data/autolabel/labels.parquet``), so it follows the same graceful-
+    absence shape as the other optional tables: the empty frame with the four
+    columns, and the page draws its own note.
+    """
+    path = DEMO_DATA / "vlm_count_buckets.parquet"
+    if not path.is_file():
+        return pd.DataFrame(columns=_EMPTY_VLM_COUNT_BUCKETS_COLUMNS)
     return pd.read_parquet(path)
 
 

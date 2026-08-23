@@ -7,6 +7,8 @@ pandas is the only dependency.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -451,6 +453,241 @@ def graph_node_label(node: Mapping[str, Any]) -> str:
     return label
 
 
+# --- Phase 9b (Task 5): the graph panel's progressive path reveal -----------------
+#
+# The panel used to draw all ~27 nodes of an event's subgraph at once, which reads
+# as a hairball rather than as the reason this event matched. `path_steps` turns the
+# export's own `path` -- the ordered id chains `assemble_subgraph` wrote -- into the
+# story a select_slider walks one step at a time: Scene, the keyframe, each MATCHING
+# object nearest first, then the ego pose (spec docs/superpowers/specs/2026-08-22-
+# demo-phase9b-design.md §3). Pure, like everything else here: the view supplies the
+# widgets and the colours, this supplies the order, the labels and the facts.
+
+# Every fact is read straight off a node's own `meta`. A field the export didn't
+# carry reads as this, never as a guess, a "None" literal or a "nan m".
+_NA_TEXT = "n/a"
+
+
+@dataclass(frozen=True)
+class PathStep:
+    """One step of a matched path: the slider's option text for it, the nodes it
+    reveals, and the ``(label, value)`` facts the detail column shows beside it.
+
+    ``label`` carries a 1-based index prefix ("3 · Pedestrian · 2.1 m") because
+    ``st.select_slider`` needs distinct options and two matching objects of the same
+    group at the same distance would otherwise collide.
+    """
+
+    label: str
+    node_ids: tuple[str, ...]
+    facts: tuple[tuple[str, str], ...]
+
+
+def _is_missing(value: Any) -> bool:
+    """True when a meta field is absent/NA -- pd.isna over anything it can't judge
+    (a list, an odd object) is False, not an exception."""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _text_fact(value: Any) -> str:
+    """A meta value as display text, or "n/a" when it is missing or blank."""
+    if _is_missing(value):
+        return _NA_TEXT
+    return str(value).strip() or _NA_TEXT
+
+
+def _flag_fact(value: Any) -> str:
+    """A boolean meta field as "yes"/"no" -- "n/a" when the export has no value,
+    which is NOT the same statement as "no"."""
+    return _NA_TEXT if _is_missing(value) else ("yes" if bool(value) else "no")
+
+
+def _lighting_fact(is_night: Any) -> str:
+    return _NA_TEXT if _is_missing(is_night) else ("night" if bool(is_night) else "day")
+
+
+def _timestamp_fact(value: Any) -> str:
+    """A keyframe's ``timestamp`` meta as a readable UTC instant (item M10, Phase 9b
+    consolidated review). nuScenes writes it as MICROSECONDS since the epoch, so the
+    raw 1533151603547590 the export carries is not a fact anyone can read off the
+    panel. A value that is not a number falls back to its own text rather than being
+    forced through a conversion that would invent a date.
+    """
+    micros = _numeric(value)
+    if micros is None:
+        return _text_fact(value)
+    return datetime.fromtimestamp(micros / 1_000_000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+# nuScenes' four visibility levels (the fraction of a box visible across all six
+# cameras), from the dataset's own visibility.json. The export carries the TOKEN
+# ("1".."4"), which says nothing on its own -- the panel shows the band with it.
+_VISIBILITY_BANDS = {
+    "1": "0-40 % visible",
+    "2": "40-60 % visible",
+    "3": "60-80 % visible",
+    "4": "80-100 % visible",
+}
+
+
+def _visibility_fact(value: Any) -> str:
+    """One object's visibility token with the band it stands for ("4 (80-100 %
+    visible)"). A token outside nuScenes' four levels -- and a missing one, which
+    ``_text_fact`` already reads as "n/a" -- is shown exactly as it came, never
+    given a band it does not have.
+    """
+    token = _text_fact(value)
+    band = _VISIBILITY_BANDS.get(token)
+    return token if band is None else f"{token} ({band})"
+
+
+def _object_step_name(meta: Mapping[str, Any]) -> str:
+    """An ObjectObservation's display name: its taxonomy GROUP ("pedestrian" ->
+    "Pedestrian"), falling back to the category's own tail when the export carried
+    no group."""
+    group = meta.get("group")
+    if _is_missing(group) or not str(group).strip():
+        category = meta.get("category")
+        group = None if _is_missing(category) else str(category).rsplit(".", 1)[-1]
+    if group is None or not str(group).strip():
+        return _DEFAULT_CATEGORY_TAIL.capitalize()
+    return str(group).strip().replace("_", " ").capitalize()
+
+
+def path_steps(event: Mapping[str, Any]) -> list[PathStep]:
+    """One event's subgraph as the ordered reveal: Scene → Keyframe → each matching
+    object, NEAREST FIRST → Ego pose.
+
+    WHICH nodes each step reveals comes from ``path`` itself (segment 0 is the
+    backbone ``[scene, sample, egopose]``, each later segment a ``[sample, object,
+    category]`` chain), never from re-deciding which objects matched -- the export
+    already made that call, and this must not disagree with the narrative or the
+    card caption that read the same chains. The sample id belongs to the Keyframe
+    step alone, even though every object chain also starts with it, and a node
+    already revealed by an earlier step (two matching objects can share a Category)
+    is not claimed again by a later one.
+
+    An event with no chains at all -- ``{}``, an empty ``path``, the empty subgraph
+    ``assemble_subgraph`` returns for a record-less event -- has no story to reveal
+    and returns ``[]``; the panel then draws its on-path nodes all at once, as it
+    did before this existed. Missing meta reads "n/a" (see ``_text_fact``).
+    """
+    nodes = event.get("nodes") or []
+    by_id = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
+    chains = [list(chain) for chain in (event.get("path") or []) if chain]
+    if not chains:
+        return []
+
+    # The backbone is located by its EgoPose-labelled TAIL, not by position (item
+    # I3, the same rule subgraph_narrative follows): assemble_subgraph appends it
+    # only when both the Scene and the EgoPose exist, so on a subgraph missing
+    # either one, path[0] is already an object chain.
+    backbone_index = next(
+        (
+            index
+            for index, chain in enumerate(chains)
+            if len(chain) == 3 and (by_id.get(chain[2]) or {}).get("label") == "EgoPose"
+        ),
+        None,
+    )
+    backbone = chains[backbone_index] if backbone_index is not None else None
+    object_chains = [
+        chain
+        for index, chain in enumerate(chains)
+        if index != backbone_index and len(chain) >= 2
+    ]
+    scene_id = backbone[0] if backbone is not None else None
+    ego_id = backbone[2] if backbone is not None else None
+    sample_id = backbone[1] if backbone is not None else (
+        object_chains[0][0] if object_chains else None
+    )
+
+    def _meta(node_id: str) -> Mapping[str, Any]:
+        node = by_id.get(node_id) or {}
+        meta: Mapping[str, Any] = node.get("meta") or {}
+        return meta
+
+    def _distance(node_id: str) -> float | None:
+        return _numeric(_meta(node_id).get("distance_to_ego_m"))
+
+    unlabelled: list[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]]] = []
+
+    if scene_id is not None:
+        meta = _meta(scene_id)
+        name = _text_fact(meta.get("name"))
+        unlabelled.append((
+            "Scene" if name == _NA_TEXT else f"Scene {name}",
+            (scene_id,),
+            (
+                ("Scene", name),
+                ("Location", _text_fact(meta.get("location"))),
+                ("Lighting", _lighting_fact(meta.get("is_night"))),
+                ("Rain", _flag_fact(meta.get("is_rain"))),
+            ),
+        ))
+
+    if sample_id is not None:
+        meta = _meta(sample_id)
+        unlabelled.append((
+            "Keyframe",
+            (sample_id,),
+            (
+                ("Timestamp", _timestamp_fact(meta.get("timestamp"))),
+                ("Lighting", _lighting_fact(meta.get("is_night"))),
+                ("Rain", _flag_fact(meta.get("is_rain"))),
+            ),
+        ))
+
+    # Nearest first, ties broken by id so the order is deterministic -- the same
+    # (distance, token) key assemble_subgraph itself sorts the chains by, applied
+    # here too rather than trusted, since a hand-staged or older export need not
+    # have been written in that order.
+    for chain in sorted(object_chains, key=lambda c: (_distance(c[1]) or float("inf"), str(c[1]))):
+        object_id = chain[1]
+        meta = _meta(object_id)
+        distance = _distance(object_id)
+        name = _object_step_name(meta)
+        unlabelled.append((
+            name if distance is None else f"{name} · {distance:.1f} m",
+            (object_id, *chain[2:3]),
+            (
+                ("Category", _text_fact(meta.get("category"))),
+                ("Distance to ego", _NA_TEXT if distance is None else f"{distance:.1f} m"),
+                ("Visibility", _visibility_fact(meta.get("visibility"))),
+            ),
+        ))
+
+    if ego_id is not None:
+        meta = _meta(ego_id)
+        speed = _numeric(meta.get("can_speed_kmh"))
+        accel = _numeric(meta.get("accel_long_min_mps2"))
+        unlabelled.append((
+            "Ego pose",
+            (ego_id,),
+            (
+                ("CAN speed", _NA_TEXT if speed is None else f"{speed:.1f} km/h"),
+                (
+                    "Min longitudinal accel",
+                    _NA_TEXT if accel is None else f"{accel:.2f} m/s²",
+                ),
+                ("Hard braking", _flag_fact(meta.get("is_hard_braking"))),
+            ),
+        ))
+
+    steps: list[PathStep] = []
+    claimed: set[str] = set()
+    for index, (label, node_ids, facts) in enumerate(unlabelled, start=1):
+        fresh = tuple(node_id for node_id in node_ids if node_id not in claimed)
+        claimed.update(fresh)
+        steps.append(PathStep(label=f"{index} · {label}", node_ids=fresh, facts=facts))
+    return steps
+
+
 def parity_caption(
     sql_count: int, cypher_count: int | None, parity: bool | None, n_shown: int
 ) -> str:
@@ -507,7 +744,17 @@ _FIXED_BOX_COLUMNS = [
 # MODEL-SIZE champion from the Phase-3 comparison, NOT an active-learning arm and
 # not the best AL result (that is `graph`, +0.0344 overall). Labelling it plainly
 # wherever it appears keeps the two kinds of "winner" apart on screen.
-_MODEL_LABELS = {"champion": "champion (yolov8m @960)"}
+#
+# Phase 9b adds the two weak-supervision checkpoints, whose raw names differ only by
+# a trailing `_gt` -- the very distinction that pairing exists to show. Each label
+# says what the checkpoint was trained on (VLM pseudo labels vs the human-labelled
+# control over the same frames) so neither can be mistaken for the other, or for the
+# larger `champion`.
+_MODEL_LABELS = {
+    "champion": "champion (yolov8m @960)",
+    "weak_graph_rate_night": "weak_graph_rate_night (pseudo labels, yolov8n)",
+    "weak_graph_rate_night_gt": "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)",
+}
 
 
 def model_label(model: str) -> str:
@@ -665,6 +912,13 @@ def community_jump(
 
 _PICK_PASS_LABELS = {"main": "main pass", "backfill": "seeded backfill"}
 
+# The same two passes as a CHIP: a chip is read on its own, out of the "Picked in:"
+# sentence the factor panel puts around it, so "main pass" becomes "main-pass pick"
+# while "seeded backfill" already stands alone. Same keys as _PICK_PASS_LABELS
+# (tests/test_demo_filters.py compares the two key sets), so the chip row and the
+# factor panel can never name a pass the other one doesn't.
+_PICK_PASS_CHIPS = {"main": "main-pass pick", "backfill": "seeded backfill"}
+
 
 # 11th/12th/13th (and the whole 111-119 family) break the last-digit rule, so the
 # teens are handled before this lookup is consulted.
@@ -762,6 +1016,211 @@ def selection_factors(
             None,
         ),
     ]
+
+
+# --- Phase 9b (Task 6): acquisition coverage + per-frame reason chips -------------
+#
+# Two more pure helpers for the Active Learning page (and the guided tour step that
+# condenses it): how each acquisition strategy spent the SAME mining budget, and one
+# selected frame's recorded selection facts as a chip row.
+
+_STRATEGY_COVERAGE_COLUMNS = [
+    "arm",
+    "strategy",
+    "n_scenes",
+    "night_share",
+    "delta_night",
+    "n_train_images",
+]
+
+
+def strategy_coverage(
+    arms: pd.DataFrame, *, strategies: Mapping[str, str]
+) -> pd.DataFrame:
+    """``active_learning_results.parquet`` narrowed to the acquisition strategies
+    ``strategies`` names, as ``arm, strategy, n_scenes, night_share, delta_night,
+    n_train_images`` -- one row per named arm THIS package actually has, in the
+    mapping's own order.
+
+    The order is the mapping's, not the table's: the arm table is sorted
+    alphabetically, and the page reads this straight onto a chart axis where the
+    strategies should read in the order the story tells them (random, similarity,
+    graph-aware). An arm the mapping names but the package never ran is skipped
+    rather than filled in -- a run that skipped an arm compares fewer strategies,
+    it does not compare an invented one.
+
+    NA in, NA out: ``n_scenes``/``night_share`` are absent on any arm with no mined
+    set of its own (the baseline), and this helper carries that through as NA for
+    the caller to decide about, rather than reading it as a zero.
+    """
+    if arms.empty or "arm" not in arms.columns:
+        return pd.DataFrame({column: [] for column in _STRATEGY_COVERAGE_COLUMNS})
+    records: list[dict[str, Any]] = []
+    for arm, strategy in strategies.items():
+        rows = arms.loc[arms["arm"] == arm]
+        if rows.empty:
+            continue
+        row = rows.iloc[0]
+        records.append({
+            "arm": arm,
+            "strategy": strategy,
+            "n_scenes": _optional_int(row.get("n_scenes")),
+            "night_share": _numeric(row.get("night_share")),
+            "delta_night": _numeric(row.get("delta_night")),
+            "n_train_images": _optional_int(row.get("n_train_images")),
+        })
+    frame = pd.DataFrame(records, columns=_STRATEGY_COVERAGE_COLUMNS)
+    return frame.astype({
+        "n_scenes": "Int64",
+        "night_share": "float64",
+        "delta_night": "float64",
+        "n_train_images": "Int64",
+    })
+
+
+def quota_column_pair(
+    communities: pd.DataFrame, *, arm: str
+) -> tuple[str, str | None] | None:
+    """``al_communities``'s ``(after, before)`` quota columns for ``arm``: the arm's
+    own ``quota_<arm>`` and the OTHER arm's over the same communities -- the run's
+    control for "what did the night floor change?", since the two allocations differ
+    in nothing else.
+
+    ``None`` when the table is empty or carries no quota column for this arm at all
+    (a stale package for the pages that ask); ``(after, None)`` when it exported
+    only this arm's quota, in which case there is nothing to compare and the paired
+    chart/chip is simply not drawn rather than charting a column against itself.
+
+    ONE derivation, two callers (item M4, Phase 9b consolidated review): the Active
+    Learning page's community caption ("quota 83 → 323") and ``frame_quota_before``,
+    which puts the same jump on a reason chip. They each derived this pair before,
+    so a change to either could have drifted the two apart silently.
+    """
+    if communities.empty:
+        return None
+    after = f"quota_{arm}"
+    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
+    if after not in quota_columns:
+        return None
+    return after, next((c for c in quota_columns if c != after), None)
+
+
+def frame_quota_before(
+    communities: pd.DataFrame, row: Mapping[str, Any], *, arm: str
+) -> int | None:
+    """The quota this frame's OWN community held under the other arm, or ``None``.
+
+    The reason chips can show a frame's community quota as the change the night
+    floor made to it ("quota 83 -> 323") -- but only when the change is this
+    community's. ``community_jump`` reports the largest ALL-NIGHT community's
+    reallocation (the one the page's caption points at), so its "before" belongs to
+    a frame only when the frame is actually in that community; on any other frame
+    it would be a number that community never had, and the chip stays a plain
+    quota instead (spec's honesty rule: reason chips state facts that exist).
+
+    ``None`` also when the table is empty, when this package exported only one
+    arm's quota (nothing to compare), or when no community is all-night.
+    """
+    pair = quota_column_pair(communities, arm=arm)
+    if pair is None:
+        return None
+    after, before = pair
+    if before is None:
+        return None
+    jump = community_jump(communities, before=before, after=after)
+    if jump is None:
+        return None
+    community = _optional_int(row.get("community"))
+    return int(jump["quota_before"]) if community == jump["community"] else None
+
+
+def _pedestrian_gt_chip(gt_rows: pd.DataFrame) -> str | None:
+    """How many VISIBLE pedestrian GT boxes this frame carries (the caller passes
+    ``visible_gt``), or ``None`` at zero -- "0 pedestrian GT boxes" is not a reason
+    anything was selected."""
+    if gt_rows.empty or "category_group" not in gt_rows.columns:
+        return None
+    n_peds = int((gt_rows["category_group"] == "pedestrian").sum())
+    if n_peds == 0:
+        return None
+    return f"{n_peds} pedestrian GT box{'' if n_peds == 1 else 'es'}"
+
+
+def _pick_pass_chip(pick_pass: str, night_floor: int | None) -> str | None:
+    """The pass that took this frame, as a chip. ``None`` for a pass this app has
+    no name for -- an unnamed one would be an identifier, not a fact."""
+    if pick_pass == "night":
+        return (
+            "night-pass pick"
+            if night_floor is None
+            else f"night-pass pick (floor {night_floor})"
+        )
+    return _PICK_PASS_CHIPS.get(pick_pass)
+
+
+def reason_chips(
+    row: Mapping[str, Any],
+    gt_rows: pd.DataFrame,
+    *,
+    n_communities: int,
+    night_floor: int | None = None,
+    quota_before: int | None = None,
+) -> list[str]:
+    """One selected frame's recorded selection facts as a chip row, in the same
+    order ``selection_factors`` spells them out below it: the frame's own lighting
+    and visible pedestrian GT, then its community, that community's mass rank and
+    quota, the pass that took it, its rank inside the community, and last the
+    failure mass routed to the frame itself.
+
+    EVERY chip is a fact this package carries. The only per-frame selection facts
+    that exist are ``al_selection_explain``'s columns and the frame's visible GT
+    (``gt_rows``, which the caller passes as ``visible_gt(gt, token)``); each chip
+    is written only when its own value is there -- no pedestrian chip at zero, no
+    rank chip on a NA rank (both rank columns are nullable), no routed-failures
+    chip on the 1249-in-1500 frames that were never a routing target.
+
+    In particular there is NO per-frame failure rate in the package, so no chip
+    says "rate" -- not even by way of the arm name ``graph_rate_night``, which is
+    never written into a chip (tests/test_demo_filters.py asserts the word over
+    every chip of every branch).
+    """
+    chips: list[str] = []
+    # _is_missing, not a bare bool(): is_night is a nullable-boolean column and
+    # bool(pd.NA) RAISES (item M7, Phase 9b consolidated review). A frame whose
+    # lighting the package never recorded is not a night frame -- it gets no chip,
+    # the same reading _lighting_fact and visible_gt already take on an NA flag.
+    is_night = row.get("is_night")
+    if not _is_missing(is_night) and bool(is_night):
+        chips.append("night")
+    pedestrians = _pedestrian_gt_chip(gt_rows)
+    if pedestrians is not None:
+        chips.append(pedestrians)
+
+    community = _optional_int(row.get("community"))
+    size = _optional_int(row.get("community_size"))
+    if community is not None and size is not None:
+        chips.append(f"community #{community} · {size} frames")
+
+    mass_rank = _optional_int(row.get("community_mass_rank"))
+    if mass_rank is not None:
+        chips.append(f"mass rank {mass_rank} of {n_communities}")
+
+    quota = _optional_int(row.get("community_quota"))
+    if quota is not None:
+        chips.append(f"quota {quota}" if quota_before is None else f"quota {quota_before} → {quota}")
+
+    pick_pass = _pick_pass_chip(str(row.get("pick_pass")), night_floor)
+    if pick_pass is not None:
+        chips.append(pick_pass)
+
+    degree_rank = _optional_int(row.get("degree_rank_in_community"))
+    if degree_rank is not None and size is not None:
+        chips.append(f"degree rank {degree_rank} of {size}")
+
+    n_routed = _optional_int(row.get("n_failures_routed")) or 0
+    if n_routed > 0:
+        chips.append(f"{n_routed} routed failure{'' if n_routed == 1 else 's'}")
+    return chips
 
 
 # --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------
@@ -899,6 +1358,99 @@ def crowding_long(results: pd.DataFrame) -> pd.DataFrame:
         for side in ("accepted", "rejected")
     ]
     return pd.DataFrame.from_records(records, columns=_CROWDING_COLUMNS)
+
+
+# --- Phase 9b (Task 8): the Weak Supervision page's two frame choices --------------
+#
+# "One frame, three views" (spec docs/superpowers/specs/2026-08-22-demo-phase9b-
+# design.md sec6) draws two frames out of the package, and each has to be picked for
+# what it can actually SHOW -- a frame missing any one of its layers turns a row into
+# an absent note. Both picks are total orders over the package's own tables, so the
+# page renders the same frame on every rerun, and both return None (never a guess) on
+# a package that carries no such frame.
+
+
+def weak_showcase_token(
+    manifest: pd.DataFrame, weak_labels: pd.DataFrame, gt: pd.DataFrame
+) -> str | None:
+    """The train-pool frame row 1 draws: a candidate the verifier ACCEPTED that
+    carries at least one pseudo box and at least one VISIBLE pedestrian GT box.
+
+    All three conditions are what the row shows: the verdict badge, the blue pseudo
+    layer, and a pedestrian to compare the two layers on (the class this whole arm
+    was mined for, and the one the VLM miscounts most). Most pseudo boxes first --
+    a one-box frame makes a thin picture -- then the token, so the choice is stable.
+
+    ``None`` when nothing qualifies, including on a package whose manifest predates
+    ``weak_verdict`` (Phase 7): the page then says what is missing rather than
+    drawing a frame that cannot carry the row.
+    """
+    if manifest.empty or not {"split", "weak_verdict"} <= set(manifest.columns):
+        return None
+    accepted = manifest.loc[
+        (manifest["split"] == "train_pool") & (manifest["weak_verdict"] == "accepted")
+    ]
+    if accepted.empty or weak_labels.empty or "category_group" not in gt.columns:
+        return None
+    pseudo_counts = weak_labels.groupby("sample_data_token").size()
+
+    ranked = []
+    for token in accepted["sample_data_token"].astype(str):
+        n_pseudo = int(pseudo_counts.get(token, 0))
+        if n_pseudo == 0:
+            continue
+        visible = visible_gt(gt, token)
+        if not bool((visible["category_group"] == "pedestrian").any()):
+            continue
+        ranked.append((-n_pseudo, token))
+    return min(ranked)[1] if ranked else None
+
+
+def weak_result_token(
+    manifest: pd.DataFrame, gt: pd.DataFrame, preds: pd.DataFrame, *,
+    weak_arm: str, gt_arm: str,
+) -> str | None:
+    """The held-out val frame row 2 draws: one where the GT-labelled twin detects a
+    GT box the weak-labelled arm misses (``fixed_boxes``' own upgrade rule, the same
+    one `demo build` validates the hand-approved exemplars with).
+
+    Night frames first -- these two checkpoints were trained on a night-targeted
+    arm's frames, so the frame that shows what pseudo labels cost should be one of
+    the frames the arm was built for -- then the most upgraded boxes, then the token.
+
+    ``None`` on a package whose ``gt_boxes`` carries no ``matched_`` column for one
+    of the two arms (i.e. one of them never ran: `demo infer` predates them), and
+    ``None`` when no val frame shows a difference at all -- two detectors that agree
+    on every box are not a before/after, and the page says so instead.
+    """
+    if manifest.empty or "split" not in manifest.columns:
+        return None
+    if not {f"matched_{weak_arm}", f"matched_{gt_arm}"} <= set(gt.columns):
+        return None
+    val = manifest.loc[manifest["split"] == "val"]
+    if val.empty:
+        return None
+
+    # NA-safe, like tour_frame_candidates: an unenriched frame's is_night can be
+    # pd.NA, and bool(pd.NA) raises rather than sorting -- it goes with the day
+    # frames rather than taking the page down.
+    night = (
+        val["is_night"].fillna(False).astype(bool)
+        if "is_night" in val.columns
+        else pd.Series(False, index=val.index)
+    )
+    ranked = []
+    for is_night, row in zip(night, val.itertuples(index=False), strict=True):
+        token = str(row.sample_data_token)
+        upgraded = fixed_boxes(
+            gt.loc[gt["sample_data_token"] == token],
+            preds.loc[preds["sample_data_token"] == token],
+            baseline=weak_arm, arm=gt_arm,
+        )
+        if upgraded.empty:
+            continue
+        ranked.append((not is_night, -len(upgraded), token))
+    return min(ranked)[2] if ranked else None
 
 
 # --- the recorded chat replays ----------------------------------------------------
@@ -1111,3 +1663,115 @@ def tour_frame_candidates(
         for is_night, row in zip(night, selected.itertuples(index=False), strict=True)
     )
     return [token for _night, _mass_rank, _peds, token in ranked]
+
+
+# --- Phase 9b (Task 2): the event filmstrip's steps -------------------------------
+#
+# ONE definition of the strip order, in the module both the Scenario page and the
+# guided tour already import: the four t-2..t+2 neighbour columns of
+# scenario_events.parquet with the event itself (column None) in the middle. The
+# pages derive their own shapes from it (views/scenarios.py splits it either side of
+# the current frame; views/tour.py re-exports it whole) and a copy-contract test
+# compares all three. Plain ASCII hyphens in the labels -- ruff RUF001 flags the
+# design doc's typographic U+2212 minus as an ambiguous character.
+
+FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = (
+    ("t_minus2", "t-2"),
+    ("t_minus1", "t-1"),
+    (None, "current"),
+    ("t_plus1", "t+1"),
+    ("t_plus2", "t+2"),
+)
+
+# km/h per m/s -- the pre-0.8 fallback below converts the GT ego-pose speed so the
+# curve keeps one unit; the result is labelled as ego speed, never as CAN.
+_KMH_PER_MPS = 3.6
+
+
+@dataclass(frozen=True)
+class FilmstripStep:
+    """One step of the filmstrip: its label, the frame it shows, and the two
+    readings the event viewer's curves plot against it.
+
+    ``can_speed_kmh`` keeps the CAN name because that is what it holds on a v0.8+
+    package (``canbus.can_speed_kmh``, the same signal for the event frame and each
+    neighbour). On an older package the value is the ego-pose fallback and
+    ``FilmstripCurve.speed_is_can`` is False -- the caller must read that flag
+    before it puts the word "CAN" on an axis.
+    """
+
+    label: str
+    token: str
+    can_speed_kmh: float | None
+    accel_mps2: float | None
+    is_current: bool
+
+
+@dataclass(frozen=True)
+class FilmstripCurve:
+    """``filmstrip_steps``'s result: the steps in time order, plus where their speed
+    came from. ``speed_is_can`` is the whole point of returning a pair -- see the
+    Phase 9b honesty rule "a CAN curve must be CAN"."""
+
+    steps: list[FilmstripStep]
+    speed_is_can: bool
+
+
+def _row_get(row: Any, key: str) -> Any:
+    """One value out of an event row, whatever shape the caller holds it in: a
+    ``pd.Series`` or mapping (``.get``) or an ``itertuples`` namedtuple
+    (attributes). A key the row does not carry reads as None, never a KeyError --
+    an older package is simply missing columns."""
+    getter = getattr(row, "get", None)
+    if callable(getter):
+        return getter(key)
+    return getattr(row, key, None)
+
+
+def _row_has(row: Any, key: str) -> bool:
+    """Whether the row carries ``key`` AT ALL -- distinct from carrying it as NA.
+    ``in`` is only safe on the mapping/Series shapes (on a namedtuple it would test
+    the VALUES), so the tuple shape falls back to ``hasattr``."""
+    return key in row if callable(getattr(row, "keys", None)) else hasattr(row, key)
+
+
+def filmstrip_steps(row: Any) -> FilmstripCurve:
+    """The event's t-2..t+2 steps, in time order, with their CAN readings.
+
+    One entry per ``FILMSTRIP_STEPS`` pair whose token is present: the current step
+    reads ``sample_data_token``/``can_speed_kmh``/``accel_long_min_mps2``, a
+    neighbour reads ``<column>``/``can_speed_<column>``/``accel_<column>``. A
+    neighbour at a scene edge is NA in the table and is dropped from the strip
+    entirely (the pages have always drawn it that way).
+
+    ``speed_is_can`` is False only on a package built before v0.8, which has no
+    ``can_speed_*`` columns: the speed then falls back to ``speed_mps`` x 3.6 (GT
+    ego pose) so the curve still draws, and the caller titles it "ego speed". An
+    old package must never be mislabelled as a CAN reading.
+    """
+    speed_is_can = _row_has(row, "can_speed_kmh")
+    steps: list[FilmstripStep] = []
+    for column, label in FILMSTRIP_STEPS:
+        is_current = column is None
+        if column is None:  # the event's own frame: its columns carry no suffix
+            token_key, can_key, ego_key = "sample_data_token", "can_speed_kmh", "speed_mps"
+            accel_key = "accel_long_min_mps2"
+        else:
+            token_key, can_key, ego_key = column, f"can_speed_{column}", f"speed_{column}"
+            accel_key = f"accel_{column}"
+        token = _row_get(row, token_key)
+        if token is None or bool(pd.isna(token)):
+            continue
+        speed = _numeric(_row_get(row, can_key if speed_is_can else ego_key))
+        if speed is not None and not speed_is_can:
+            speed *= _KMH_PER_MPS
+        steps.append(
+            FilmstripStep(
+                label=label,
+                token=str(token),
+                can_speed_kmh=speed,
+                accel_mps2=_numeric(_row_get(row, accel_key)),
+                is_current=is_current,
+            )
+        )
+    return FilmstripCurve(steps=steps, speed_is_can=speed_is_can)

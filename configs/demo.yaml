@@ -35,6 +35,12 @@ models:              # MLflow run ids (weights + artifacts live under mlruns/art
   champion:           # yolov8m, the third of Task 5's three checkpoints
     run: 3869d068100a4af6a274c6d134feed2f
     imgsz: 960
+  weak_graph_rate_night:      # Phase 9b: the weak-supervision arm (pseudo labels), held-out
+    run: 8d953609142d44abb443f882e6f00735   # yolov8n_imgsz640_e20_al-weak_graph_rate_night
+    imgsz: 640
+  weak_graph_rate_night_gt:   # its GT-labelled twin (same frames, human labels) -- the control
+    run: c10a4fedc8c04e43a3d47fbb0bdd623c   # yolov8n_imgsz640_e20_al-weak_graph_rate_night_gt
+    imgsz: 640
 
 hero:                # Phase 3: a hand-picked exemplar crop token from the curated-
                       # frames group (demo_data/sample_frames/crops/<token>.jpg),
