@@ -12,6 +12,8 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from filters import (  # noqa: E402
+    FILMSTRIP_STEPS,
+    FilmstripStep,
     braking_caption,
     community_jump,
     confidence_caption,
@@ -19,6 +21,7 @@ from filters import (  # noqa: E402
     distance_caption,
     failure_counts,
     failure_flags,
+    filmstrip_steps,
     filter_frames,
     fixed_boxes,
     frame_caption,
@@ -1336,3 +1339,106 @@ def test_tour_frame_candidates_without_al_selected_by_is_empty_list() -> None:
     assert tour_frame_candidates(
         manifest, _tour_explain(), _tour_gt(), arm="graph_rate_night"
     ) == []
+
+
+# --- Phase 9b (Task 2): the filmstrip's steps -------------------------------------
+
+
+def _event_row(**overrides: object) -> pd.Series:
+    """One ``scenario_events.parquet`` row as the pages read it (``.iloc[0]`` of a
+    ranked frame), v0.8 schema: CAN speed for the event frame and for each of the
+    four t-2..t+2 neighbours, alongside the ego-pose ``speed_*`` columns the older
+    readouts still use."""
+    row = {
+        "sample_data_token": "e0",
+        "speed_mps": 10.0,
+        "can_speed_kmh": 36.0,
+        "accel_long_min_mps2": -7.5,
+        "t_minus2": "m2", "speed_t_minus2": 12.0, "can_speed_t_minus2": 44.0,
+        "accel_t_minus2": -0.5,
+        "t_minus1": "m1", "speed_t_minus1": 11.0, "can_speed_t_minus1": 41.0,
+        "accel_t_minus1": -1.5,
+        "t_plus1": "p1", "speed_t_plus1": 8.0, "can_speed_t_plus1": 28.0,
+        "accel_t_plus1": -6.0,
+        "t_plus2": "p2", "speed_t_plus2": 6.0, "can_speed_t_plus2": 20.0,
+        "accel_t_plus2": -2.0,
+    }
+    row.update(overrides)
+    return pd.Series(row)
+
+
+def test_filmstrip_steps_pins_the_five_column_label_pairs() -> None:
+    """The single definition both the Scenario page and the tour derive their own
+    strip order from -- plain ASCII hyphens, the event itself (column None) in the
+    middle."""
+    assert FILMSTRIP_STEPS == (
+        ("t_minus2", "t-2"),
+        ("t_minus1", "t-1"),
+        (None, "current"),
+        ("t_plus1", "t+1"),
+        ("t_plus2", "t+2"),
+    )
+
+
+def test_filmstrip_steps_reads_can_speed_in_time_order() -> None:
+    curve = filmstrip_steps(_event_row())
+
+    assert curve.speed_is_can is True
+    assert [step.label for step in curve.steps] == ["t-2", "t-1", "current", "t+1", "t+2"]
+    assert [step.token for step in curve.steps] == ["m2", "m1", "e0", "p1", "p2"]
+    # the CAN column, never the ego-pose speed_* one (which would read 43.2 here)
+    assert [step.can_speed_kmh for step in curve.steps] == [44.0, 41.0, 36.0, 28.0, 20.0]
+    assert [step.accel_mps2 for step in curve.steps] == [-0.5, -1.5, -7.5, -6.0, -2.0]
+    assert [step.is_current for step in curve.steps] == [False, False, True, False, False]
+    assert curve.steps[2] == FilmstripStep(
+        label="current", token="e0", can_speed_kmh=36.0, accel_mps2=-7.5, is_current=True
+    )
+
+
+def test_filmstrip_steps_drops_na_neighbours_at_a_scene_edge() -> None:
+    """A scene-edge event has NA neighbour tokens -- those steps are left out of the
+    strip entirely (the current frame is always there), exactly as the pages do."""
+    curve = filmstrip_steps(
+        _event_row(t_minus2=None, speed_t_minus2=None, can_speed_t_minus2=None,
+                   accel_t_minus2=None, t_plus2=float("nan"))
+    )
+
+    assert [step.label for step in curve.steps] == ["t-1", "current", "t+1"]
+    assert curve.speed_is_can is True
+
+
+def test_filmstrip_steps_falls_back_to_ego_speed_on_a_pre_0_8_package() -> None:
+    """A package built before v0.8 carries no ``can_speed_*`` columns at all: the
+    helper falls back to ``speed_mps`` x 3.6 and says so, so the caller titles the
+    axis "ego speed" rather than mislabelling an ego-pose figure as CAN."""
+    row = _event_row()
+    old_package = row.drop(
+        ["can_speed_kmh", *(f"can_speed_{column}" for column, _ in FILMSTRIP_STEPS if column)]
+    )
+
+    curve = filmstrip_steps(old_package)
+
+    assert curve.speed_is_can is False
+    assert [step.can_speed_kmh for step in curve.steps] == pytest.approx(
+        [43.2, 39.6, 36.0, 28.8, 21.6]
+    )
+    assert [step.accel_mps2 for step in curve.steps] == [-0.5, -1.5, -7.5, -6.0, -2.0]
+
+
+def test_filmstrip_steps_missing_readouts_are_none_not_nan() -> None:
+    curve = filmstrip_steps(_event_row(can_speed_t_plus1=None, accel_t_plus1=float("nan")))
+
+    plus_one = curve.steps[3]
+    assert plus_one.label == "t+1" and plus_one.token == "p1"
+    assert plus_one.can_speed_kmh is None and plus_one.accel_mps2 is None
+
+
+def test_filmstrip_steps_accepts_a_dict_and_an_itertuples_row() -> None:
+    """The two pages hold an event row in different shapes -- a ``pd.Series`` read
+    with ``getattr``/``[]`` and (via ``itertuples``) an attribute-only namedtuple --
+    so the shared helper reads both, plus a plain mapping for tests."""
+    frame = pd.DataFrame([_event_row().to_dict()])
+    from_tuple = filmstrip_steps(next(iter(frame.itertuples(index=False))))
+    from_dict = filmstrip_steps(_event_row().to_dict())
+
+    assert from_tuple == from_dict == filmstrip_steps(_event_row())

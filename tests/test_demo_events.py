@@ -67,6 +67,12 @@ def _write_processed(processed_dir: Path, frames: list[dict[str, Any]]) -> None:
             "sample_token": [f["st"] for f in frames],
             "is_hard_braking": [f["hard_braking"] for f in frames],
             "accel_long_min_mps2": [f["accel"] for f in frames],
+            # Phase 9b: the CAN wheel-speed reading the event viewer's curve plots.
+            # It defaults to the frame's ego speed in km/h purely so the fixture
+            # stays readable -- frames that a can_speed assertion depends on set
+            # their own "can_speed", DIFFERENT from speed * 3.6, so a test can tell
+            # a real canbus read from an ego_pose conversion.
+            "can_speed_kmh": [f.get("can_speed", f["speed"] * 3.6) for f in frames],
         }
     ).to_parquet(processed_dir / "canbus.parquet")
 
@@ -317,6 +323,7 @@ def _base_frames() -> list[dict[str, Any]]:
             "hard_braking": True,
             "accel": -6.0,
             "speed": 7.0,
+            "can_speed": 30.0,  # NOT 7.0 * 3.6 -- see _write_processed's canbus block
             "pedestrians": [40.0],
         },
         {
@@ -330,6 +337,7 @@ def _base_frames() -> list[dict[str, Any]]:
             "hard_braking": False,
             "accel": -0.5,
             "speed": 12.0,
+            "can_speed": 44.0,  # NOT 12.0 * 3.6
             "cyclists": [6.0],
         },
     ]
@@ -398,6 +406,10 @@ def test_event_features_and_flagship_agrees_with_sql(tmp_path: Path) -> None:
         assert col in events.columns
     assert row["speed_mps"] == 8.0
     assert row["accel_long_min_mps2"] == -7.5
+    # Phase 9b: the CAN speed of the event frame itself, alongside its neighbours'
+    assert "can_speed_kmh" in events.columns
+    for label in ("t_minus2", "t_minus1", "t_plus1", "t_plus2"):
+        assert f"can_speed_{label}" in events.columns
     assert row["min_dist_vehicle_m"] == 30.0
     assert bool(row["in_curated_set"]) is False  # a1 was never staged
 
@@ -425,6 +437,30 @@ def test_neighbors_ordered_and_na_at_scene_edges(tmp_path: Path) -> None:
     # ...but its t_minus neighbors are real: b2 (previous), b_mid (before that).
     assert b3["t_minus1"] == "b2_sdt"
     assert b3["t_minus2"] == "b_mid_sdt"
+
+
+def test_can_speed_neighbors_come_from_canbus_not_ego_pose(tmp_path: Path) -> None:
+    """Phase 9b honesty rule ("a CAN curve must be CAN"): the per-step speed the
+    event viewer plots is ``canbus.can_speed_kmh``, shifted per scene by exactly
+    the same loop as ``accel_long_min_mps2`` -- never ``ego_pose.speed_mps``
+    converted to km/h. b0 and b1 carry a CAN reading that is deliberately NOT
+    ``speed * 3.6``, so a conversion of the ego speed cannot pass this test.
+    """
+    events = _build(tmp_path)
+
+    # b1 is scene B's earliest frame: its own CAN reading, its t_plus neighbours'
+    # readings (b0 next, b_mid after that), and NA on the t_minus scene edge.
+    b1 = events.loc[events["sample_data_token"] == "b1_sdt"].iloc[0]
+    assert b1["can_speed_kmh"] == 44.0
+    assert b1["speed_mps"] == 12.0  # the ego-pose column stays, unchanged
+    assert b1["can_speed_t_plus1"] == 30.0  # b0's CAN reading, not 7.0 * 3.6
+    assert b1["can_speed_t_plus2"] == pytest.approx(14.4)  # b_mid (no override)
+    assert pd.isna(b1["can_speed_t_minus1"]) and pd.isna(b1["can_speed_t_minus2"])
+
+    # b3 is scene B's latest frame -- the mirror edge.
+    b3 = events.loc[events["sample_data_token"] == "b3_sdt"].iloc[0]
+    assert pd.isna(b3["can_speed_t_plus1"]) and pd.isna(b3["can_speed_t_plus2"])
+    assert b3["can_speed_t_minus1"] == pytest.approx(18.0)  # b2: 5.0 * 3.6
 
 
 def test_null_hard_braking_treated_false(tmp_path: Path) -> None:

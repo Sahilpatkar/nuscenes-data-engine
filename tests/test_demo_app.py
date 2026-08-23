@@ -2896,6 +2896,7 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
     tour = importlib.import_module("views.tour")
     scenarios = importlib.import_module("views.scenarios")
     active_learning = importlib.import_module("views.active_learning")
+    filters = importlib.import_module("filters")
     try:
         # (a) the strings the pages DO name -- compared attribute to attribute
         assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
@@ -2916,12 +2917,14 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
         # (c) the filmstrip's own step columns and labels, in strip order: the
         # Scenario page splits them either side of the current frame, which the
         # tour flattens into one tuple with the event itself (column None) between.
+        # Phase 9b: both are now DERIVED from filters.FILMSTRIP_STEPS (one
+        # definition, two shapes), and this is the check that they stay derived.
         page_steps = (
             *scenarios._BEFORE_STEPS,
             (None, scenarios._CURRENT_STEP),
             *scenarios._AFTER_STEPS,
         )
-        assert page_steps == tour._FILMSTRIP_STEPS
+        assert page_steps == tour._FILMSTRIP_STEPS == filters.FILMSTRIP_STEPS
     finally:
         _reset_demo_app_modules()
 

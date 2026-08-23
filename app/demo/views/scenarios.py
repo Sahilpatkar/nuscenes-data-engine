@@ -18,6 +18,7 @@ from typing import Any, TypedDict
 import pandas as pd
 import streamlit as st
 from filters import (
+    FILMSTRIP_STEPS,
     graph_node_label,
     parity_caption,
     parity_short,
@@ -157,12 +158,19 @@ _VIEWER_PROVENANCE_DETAIL = (
     "scenario_events.parquet"
 )
 
-# Filmstrip step order, before/after the current frame -- plain ASCII hyphens
-# (ruff RUF001 flags the design doc's typographic U+2212 minus sign as an
-# ambiguous character), matching the t_minus/t_plus column-name convention.
-_BEFORE_STEPS = (("t_minus2", "t-2"), ("t_minus1", "t-1"))
-_AFTER_STEPS = (("t_plus1", "t+1"), ("t_plus2", "t+2"))
-_CURRENT_STEP = "current"
+# Filmstrip step order, before/after the current frame -- this page's two-sided
+# shape of filters.FILMSTRIP_STEPS (Phase 9b: one definition, shared with the tour
+# and with filters.filmstrip_steps; the copy-contract test compares all three).
+# The `is not None` guard is what tells the type checker that the two neighbour
+# halves are (column, label) pairs with a REAL column -- only the middle entry,
+# the event's own frame, carries None, and it is _CURRENT_STEP below.
+_BEFORE_STEPS: tuple[tuple[str, str], ...] = tuple(
+    (column, label) for column, label in FILMSTRIP_STEPS[:2] if column is not None
+)
+_AFTER_STEPS: tuple[tuple[str, str], ...] = tuple(
+    (column, label) for column, label in FILMSTRIP_STEPS[3:] if column is not None
+)
+_CURRENT_STEP = FILMSTRIP_STEPS[2][1]
 
 
 def _card_image_path(token: str) -> Path | None:

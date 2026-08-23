@@ -22,7 +22,9 @@ import nav
 import pandas as pd
 import streamlit as st
 from filters import (
+    FILMSTRIP_STEPS,
     failure_flags,
+    filmstrip_steps,
     fixed_boxes,
     gt_for_render,
     model_label,
@@ -121,16 +123,12 @@ _HERO_HONESTY_LINE = (
 )
 
 # scenario_events' t-2..t+2 neighbour columns in strip order, with the event itself
-# (column None) in the middle. Plain ASCII hyphens in the labels, matching
-# views/scenarios.py's own _BEFORE_STEPS/_AFTER_STEPS -- ruff RUF001 flags the design
-# doc's typographic U+2212 minus as an ambiguous character.
-_FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = (
-    ("t_minus2", "t-2"),
-    ("t_minus1", "t-1"),
-    (None, "current"),
-    ("t_plus1", "t+1"),
-    ("t_plus2", "t+2"),
-)
+# (column None) in the middle. Phase 9b: filters.FILMSTRIP_STEPS is the single
+# definition (this step order is shared with views/scenarios.py and with
+# filters.filmstrip_steps, which this page's strip reads below); the name stays
+# because the copy-contract test pins the tour's strip order to the Scenario
+# page's, and that is what it names here.
+_FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = FILMSTRIP_STEPS
 
 
 @dataclass
@@ -456,20 +454,17 @@ def _render_event_filmstrip(row: pd.Series) -> None:
     """The event's t-2..t+2 thumbs with their step labels -- the Scenario page's
     filmstrip without its step slider (a tour screen is one visual, not a control
     panel). A scene-edge neighbour is NA and is left out of the strip entirely,
-    exactly as that page leaves it out."""
-    steps = []
-    for column, label in _FILMSTRIP_STEPS:
-        token = row["sample_data_token"] if column is None else row.get(column)
-        if pd.notna(token):
-            steps.append((label, str(token)))
+    exactly as that page leaves it out -- filters.filmstrip_steps is where that
+    rule (and the strip order) now lives, for both pages."""
+    steps = filmstrip_steps(row).steps
     if not steps:
         return
-    for strip_column, (label, token) in zip(st.columns(len(steps)), steps, strict=True):
+    for strip_column, step in zip(st.columns(len(steps)), steps, strict=True):
         with strip_column:
-            thumb = thumb_path(token)
+            thumb = thumb_path(step.token)
             if thumb.is_file():
                 st.image(str(thumb))
-            st.caption(label)
+            st.caption(step.label)
 
 
 def _render_mine(data: _TourData) -> None:

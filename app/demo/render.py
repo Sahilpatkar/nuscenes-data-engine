@@ -410,6 +410,80 @@ def bar_chart(
     return chart
 
 
+def line_chart(
+    frame: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    order: Sequence[str],
+    y_title: str,
+    selected: str | None = None,
+    zero_line: bool = False,
+    height: int = 160,
+    title: str = "",
+) -> alt.LayerChart:
+    """A small line chart of ``y`` over an ORDERED categorical ``x`` -- the event
+    viewer's CAN speed/accel over the filmstrip's five keyframe steps.
+
+    Not ``bar_chart(mark="line")``: that helper's x order is optional and its rules
+    are about zero, while this one is a sequence chart whose whole meaning is the
+    order (``sort=order`` is required, since alphabetically the filmstrip's steps
+    would read "current, t+1, t+2, t-1, t-2") and whose defining layer is a vertical
+    rule at the step the viewer has selected.
+
+    ``selected`` must name one of ``order``: vega silently drops a rule on an
+    unknown band, so a typo'd/stale step would just not draw and the chart would
+    quietly stop pointing at anything. ``zero_line`` layers the y = 0 rule (the
+    acceleration curve runs mostly negative, and without the rule a deceleration
+    reads as just a lower point); ``height`` keeps a pair of these short enough
+    that the viewer stays on one screen.
+
+    Axis conventions are ``bar_chart``'s (``labelLimit: 0``, ``labelOverlap:
+    False``): five step labels only work as a sequence if all five are drawn, and
+    Streamlit's own Vega theme would otherwise thin them. The return type is always
+    a LayerChart -- ``st.altair_chart`` takes either kind, and a single, stable type
+    keeps the caller from branching on how many rules it asked for.
+    """
+    if selected is not None and selected not in order:
+        raise ValueError(
+            f"line_chart: unknown selected step {selected!r} — expected one of {list(order)}"
+        )
+    sort = list(order)
+    line = (
+        alt.Chart(frame)
+        # point=True: five steps through a bare polyline hide where the readings are.
+        .mark_line(point=True)
+        .encode(
+            x=alt.X(
+                f"{x}:N",
+                sort=sort,
+                axis=alt.Axis(labelAngle=0, labelOverlap=False, labelLimit=0, title=None),
+            ),
+            y=alt.Y(f"{y}:Q", title=y_title),
+            tooltip=[c for c in (x, y) if c in frame.columns],
+        )
+    )
+    layers: list[alt.Chart] = [line]
+    if selected is not None:
+        layers.append(
+            alt.Chart(pd.DataFrame({x: [selected]}))
+            .mark_rule(color=_ACCENT, size=2)
+            .encode(x=alt.X(f"{x}:N", sort=sort, title=None, axis=None))
+        )
+    if zero_line:
+        layers.append(
+            alt.Chart(pd.DataFrame({"zero": [0.0]}))
+            .mark_rule(color=_ZERO_RULE)
+            .encode(y="zero:Q")
+        )
+    # alt.layer is typed as LayerChart | FacetChart (it facets only when given a
+    # facet spec, which this never does) -- same cast bar_chart's zero rule uses.
+    properties: dict[str, Any] = {"height": height}
+    if title:
+        properties["title"] = title
+    return cast("alt.LayerChart", alt.layer(*layers)).properties(**properties)
+
+
 # --- Phase 9a (Task 1): trust chrome ----------------------------------------------
 #
 # The guided tour and every page it visits need two small, recurring pieces of

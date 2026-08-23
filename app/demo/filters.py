@@ -7,6 +7,7 @@ pandas is the only dependency.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -1121,3 +1122,115 @@ def tour_frame_candidates(
         for is_night, row in zip(night, selected.itertuples(index=False), strict=True)
     )
     return [token for _night, _mass_rank, _peds, token in ranked]
+
+
+# --- Phase 9b (Task 2): the event filmstrip's steps -------------------------------
+#
+# ONE definition of the strip order, in the module both the Scenario page and the
+# guided tour already import: the four t-2..t+2 neighbour columns of
+# scenario_events.parquet with the event itself (column None) in the middle. The
+# pages derive their own shapes from it (views/scenarios.py splits it either side of
+# the current frame; views/tour.py re-exports it whole) and a copy-contract test
+# compares all three. Plain ASCII hyphens in the labels -- ruff RUF001 flags the
+# design doc's typographic U+2212 minus as an ambiguous character.
+
+FILMSTRIP_STEPS: tuple[tuple[str | None, str], ...] = (
+    ("t_minus2", "t-2"),
+    ("t_minus1", "t-1"),
+    (None, "current"),
+    ("t_plus1", "t+1"),
+    ("t_plus2", "t+2"),
+)
+
+# km/h per m/s -- the pre-0.8 fallback below converts the GT ego-pose speed so the
+# curve keeps one unit; the result is labelled as ego speed, never as CAN.
+_KMH_PER_MPS = 3.6
+
+
+@dataclass(frozen=True)
+class FilmstripStep:
+    """One step of the filmstrip: its label, the frame it shows, and the two
+    readings the event viewer's curves plot against it.
+
+    ``can_speed_kmh`` keeps the CAN name because that is what it holds on a v0.8+
+    package (``canbus.can_speed_kmh``, the same signal for the event frame and each
+    neighbour). On an older package the value is the ego-pose fallback and
+    ``FilmstripCurve.speed_is_can`` is False -- the caller must read that flag
+    before it puts the word "CAN" on an axis.
+    """
+
+    label: str
+    token: str
+    can_speed_kmh: float | None
+    accel_mps2: float | None
+    is_current: bool
+
+
+@dataclass(frozen=True)
+class FilmstripCurve:
+    """``filmstrip_steps``'s result: the steps in time order, plus where their speed
+    came from. ``speed_is_can`` is the whole point of returning a pair -- see the
+    Phase 9b honesty rule "a CAN curve must be CAN"."""
+
+    steps: list[FilmstripStep]
+    speed_is_can: bool
+
+
+def _row_get(row: Any, key: str) -> Any:
+    """One value out of an event row, whatever shape the caller holds it in: a
+    ``pd.Series`` or mapping (``.get``) or an ``itertuples`` namedtuple
+    (attributes). A key the row does not carry reads as None, never a KeyError --
+    an older package is simply missing columns."""
+    getter = getattr(row, "get", None)
+    if callable(getter):
+        return getter(key)
+    return getattr(row, key, None)
+
+
+def _row_has(row: Any, key: str) -> bool:
+    """Whether the row carries ``key`` AT ALL -- distinct from carrying it as NA.
+    ``in`` is only safe on the mapping/Series shapes (on a namedtuple it would test
+    the VALUES), so the tuple shape falls back to ``hasattr``."""
+    return key in row if callable(getattr(row, "keys", None)) else hasattr(row, key)
+
+
+def filmstrip_steps(row: Any) -> FilmstripCurve:
+    """The event's t-2..t+2 steps, in time order, with their CAN readings.
+
+    One entry per ``FILMSTRIP_STEPS`` pair whose token is present: the current step
+    reads ``sample_data_token``/``can_speed_kmh``/``accel_long_min_mps2``, a
+    neighbour reads ``<column>``/``can_speed_<column>``/``accel_<column>``. A
+    neighbour at a scene edge is NA in the table and is dropped from the strip
+    entirely (the pages have always drawn it that way).
+
+    ``speed_is_can`` is False only on a package built before v0.8, which has no
+    ``can_speed_*`` columns: the speed then falls back to ``speed_mps`` x 3.6 (GT
+    ego pose) so the curve still draws, and the caller titles it "ego speed". An
+    old package must never be mislabelled as a CAN reading.
+    """
+    speed_is_can = _row_has(row, "can_speed_kmh")
+    steps: list[FilmstripStep] = []
+    for column, label in FILMSTRIP_STEPS:
+        is_current = column is None
+        if column is None:  # the event's own frame: its columns carry no suffix
+            token_key, can_key, ego_key = "sample_data_token", "can_speed_kmh", "speed_mps"
+            accel_key = "accel_long_min_mps2"
+        else:
+            token_key, can_key, ego_key = column, f"can_speed_{column}", f"speed_{column}"
+            accel_key = f"accel_{column}"
+        token = _row_get(row, token_key)
+        if token is None or bool(pd.isna(token)):
+            continue
+        speed = _numeric(_row_get(row, can_key if speed_is_can else ego_key))
+        if speed is not None and not speed_is_can:
+            speed *= _KMH_PER_MPS
+        steps.append(
+            FilmstripStep(
+                label=label,
+                token=str(token),
+                can_speed_kmh=speed,
+                accel_mps2=_numeric(_row_get(row, accel_key)),
+                is_current=is_current,
+            )
+        )
+    return FilmstripCurve(steps=steps, speed_is_can=speed_is_can)
