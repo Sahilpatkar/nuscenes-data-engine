@@ -50,7 +50,11 @@ _PACKAGE_MARKERS = ("manifest.json", "overview_metrics.json")
 # 0.7 (Phase 8, Task 2): chat_replays.json + chat_replay_summary.json (validated
 # against chat_record.RECORD_KEYS/FRAME_COLUMNS, curation-gated) join the package
 # when `demo chat-record` staged them, plus their frame thumbnails.
-_PACKAGE_VERSION = "0.7"
+# 0.8 (Phase 9b): scenario_events.parquet gains can_speed_kmh + can_speed_t_minus2..
+# t_plus2 (the CAN bus's own speed, per filmstrip step); vlm_count_buckets.parquet
+# (the crowding MAEs, recomputed from the Phase-6b VLM label table) joins the
+# package whenever that table exists on the build machine.
+_PACKAGE_VERSION = "0.8"
 
 # Filmstrip neighbor columns (demo/events.py's t_minus2..t_plus2) -- NA at scene
 # edges, so every token collection over these columns must drop the NA entries.
@@ -970,6 +974,32 @@ def run_build(config_path: Path) -> dict[str, Any]:
     weak_loss_df = exporters.export_weak_loss_decomposition(al_dir=al_dir, out_dir=out_dir)
     exporters.export_weak_verifier_by_class(al_dir=al_dir, out_dir=out_dir)
 
+    # Both VLM label tables the weak run merged (C3) -- resolved once, so the
+    # exports and the input-hash sweep below can never read different files.
+    vlm_label_paths = _vlm_label_paths(config, al_dir=al_dir)
+
+    # Phase 9b (Task 7): the crowding buckets are recomputed here (never
+    # transcribed from docs/AUTOLABEL_EVAL.md) from the PHASE-6B table alone --
+    # vlm_label_paths[0], the count-accuracy eval run. The weak run's own table
+    # (vlm_label_paths[1]) is a pseudo-labelling input, not a count eval, and must
+    # not be pooled in. Curation-INDEPENDENT like the two exports just above: the
+    # eval is over the Phase-6b run's own 5,000 frames, not the curated set. A
+    # machine without data/autolabel/ (a fresh clone) simply ships without the
+    # group, the same ordinary state every other optional group has.
+    phase6b_labels_path = vlm_label_paths[0]
+    if phase6b_labels_path.is_file():
+        exporters.export_vlm_count_buckets(
+            labels_path=phase6b_labels_path, processed_dir=processed, out_dir=out_dir,
+        )
+        vlm_count_buckets_status = "included"
+    else:
+        vlm_count_buckets_status = "absent"
+        logger.warning(
+            "demo build: no Phase-6b VLM label table at %s — shipping without "
+            "vlm_count_buckets (run `autolabel run` first, see docs/AUTOLABEL_EVAL.md)",
+            phase6b_labels_path,
+        )
+
     # weak_loss_decomposition's retention is computed independently of (but from
     # the same results.json numbers as) export_overview's own by_base_arm ratio --
     # the two must never be allowed to silently drift apart. A base arm overview
@@ -986,10 +1016,6 @@ def run_build(config_path: Path) -> dict[str, Any]:
                 f"results.weak_retention.by_base_arm[{base_arm!r}] "
                 f"({overview_retention!r}) — the two recipes have drifted"
             )
-
-    # Both VLM label tables the weak run merged (C3) -- resolved once, so the
-    # export and the input-hash sweep below can never read different files.
-    vlm_label_paths = _vlm_label_paths(config, al_dir=al_dir)
 
     n_weak_labels = 0
     n_vlm_counts = 0
@@ -1161,6 +1187,13 @@ def run_build(config_path: Path) -> dict[str, Any]:
     for arm in al_cfg["community_arms"]:
         path = al_dir / f"communities_{arm}.json"
         inputs[str(path)] = _sha256(path)
+    # Phase 9b (Task 7): vlm_count_buckets' own input. The Phase-6b label table is
+    # ALSO hashed by the curation-gated both-tables loop below, but the buckets
+    # export is curation-independent -- so it is hashed here whenever it exists
+    # (the dict key dedupes the overlap). gt_counts' other input,
+    # annotations.parquet, is already covered by the PROCESSED_INPUTS sweep above.
+    if vlm_count_buckets_status == "included":
+        inputs[str(phase6b_labels_path)] = _sha256(phase6b_labels_path)
     if curation_status == "included":
         staging_dir = Path(config["curation"]["staging_dir"])
         for name in ("frame_manifest.parquet", "gt_boxes.parquet", "predictions.parquet"):
@@ -1223,6 +1256,7 @@ def run_build(config_path: Path) -> dict[str, Any]:
             "n_exemplars": len(exemplar_tokens),
             "n_weak_labels": n_weak_labels,
             "n_vlm_counts": n_vlm_counts,
+            "vlm_count_buckets": vlm_count_buckets_status,
             "curation": curation_status,
             "events": events_result["events"],
             "flagship_events": events_result["flagship_events"],

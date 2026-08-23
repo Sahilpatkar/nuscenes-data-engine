@@ -540,11 +540,37 @@ def built_demo_data(tmp_path: Path) -> Path:
     # carry a detector category_group (pedestrian/car/pedestrian) and the 4th is
     # None (ignored) -- s1's detector count is 3, matching random_pseudo_summary.
     # json's mean_gt_boxes_per_accepted_frame=3.0 below (random_accepted=["s1"]).
+    #
+    # Phase 9b (Task 7): the same table is also autolabel's gt_counts input (the
+    # recomputed crowding buckets), which reads category_name/visibility_token --
+    # both carried here, mapping through GT_COUNT_GROUPS to the same coarse classes
+    # category_group already names. "b1"/"b2" are two extra tokens whose GT counts
+    # deliberately land in ALL FOUR count buckets (b1: cars 2 -> "1-3",
+    # pedestrians 5 -> "4-9", traffic_cones 10 -> "10+", the other seven fields 0;
+    # b2: no rows at all, so all ten are 0), so the fixture package's
+    # vlm_count_buckets.parquet carries a row per bucket. They are in no arm, no
+    # candidate set and no curated frame, so every other exporter is untouched.
+    bucket_gt = (
+        [("b1", "vehicle.car", "car")] * 2
+        + [("b1", "human.pedestrian.adult", "pedestrian")] * 5
+        + [("b1", "movable_object.trafficcone", None)] * 10
+    )
     pd.DataFrame(
         {
-            "sample_token": ["s1"] * 4,
-            "sample_data_token": ["s1"] * 4,
-            "category_group": ["pedestrian", "car", "pedestrian", None],
+            "sample_token": ["s1"] * 4 + [token for token, _, _ in bucket_gt],
+            "sample_data_token": ["s1"] * 4 + [token for token, _, _ in bucket_gt],
+            "category_group": (
+                ["pedestrian", "car", "pedestrian", None]
+                + [group for _, _, group in bucket_gt]
+            ),
+            "category_name": (
+                [
+                    "human.pedestrian.adult", "vehicle.car",
+                    "human.pedestrian.adult", "movable_object.debris",
+                ]
+                + [name for _, name, _ in bucket_gt]
+            ),
+            "visibility_token": ["4"] * (4 + len(bucket_gt)),
         }
     ).to_parquet(processed / "annotations.parquet")
     pd.DataFrame(
@@ -813,6 +839,31 @@ def built_demo_data(tmp_path: Path) -> Path:
         "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
         "pedestrians": [0.0, 1.0], "traffic_cones": [0.0, 0.0], "barriers": [0.0, 0.0],
     }).to_parquet(al / "autolabel_weak" / "labels.parquet")
+    # Phase 9b (Task 7): the Phase-6b VLM label table -- the ONLY source the
+    # crowding buckets are recomputed from (the weak run's table just above is a
+    # pseudo-labelling input, not a count-accuracy eval). Written inside tmp_path
+    # and wired through paths.autolabel_dir below so this fixture can never reach
+    # for the machine's real data/autolabel/ (5,000 rows).
+    #
+    # Against b1/b2's GT above these give: "0" n=17 (b2's cars off by one, the rest
+    # exact), "1-3" n=1 MAE 1, "4-9" n=1 MAE 1, "10+" n=1 MAE 2 -- 20 = 2 ok rows x
+    # the ten count fields, the pairs invariant the exporter asserts.
+    autolabel = tmp_path / "autolabel"
+    autolabel.mkdir()
+    pd.DataFrame({
+        "sample_data_token": ["b1", "b2"],
+        "model": ["qwen2.5-vl", "qwen2.5-vl"],
+        "parse_status": ["ok", "ok"],
+        "time_of_day": ["day", "day"],
+        "weather": ["clear", "clear"],
+        "hazards": ["[]", "[]"],
+        "notable_conditions": ["[]", "[]"],
+        "label_confidence": ["high", "medium"],
+        "cars": [3.0, 1.0], "trucks": [0.0, 0.0], "buses": [0.0, 0.0],
+        "trailers": [0.0, 0.0], "construction_vehicles": [0.0, 0.0],
+        "motorcycles": [0.0, 0.0], "bicycles": [0.0, 0.0],
+        "pedestrians": [4.0, 0.0], "traffic_cones": [8.0, 0.0], "barriers": [0.0, 0.0],
+    }).to_parquet(autolabel / "labels.parquet")
 
     out = tmp_path / "demo_data"
     config = {
@@ -820,6 +871,7 @@ def built_demo_data(tmp_path: Path) -> Path:
             "processed_dir": str(processed),
             "active_learning_dir": str(al),
             "active_learning_config": str(al_config_path),
+            "autolabel_dir": str(autolabel),
             "mlruns_dir": str(tmp_path / "mlruns"),
             "lancedb_path": str(tmp_path / "lancedb"),
             "lancedb_table": "frames",
@@ -997,6 +1049,64 @@ def built_demo_data_without_chat_replay(built_demo_data: Path) -> Path:
     manifest["validation"]["chat_replay"] = "absent"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return built_demo_data
+
+
+@pytest.fixture()
+def built_demo_data_without_buckets(built_demo_data: Path) -> Path:
+    """The same package as a pre-0.8 `demo build` wrote it: no recomputed crowding
+    buckets (and the same state a machine with no ``data/autolabel/`` builds today).
+
+    Deletes the file from an otherwise-normal built package rather than rebuilding
+    without the staging, for the same reason ``built_demo_data_without_explain``
+    does: the loader's absent branch keys off the file's presence, and the
+    builder's own absent/included recording is pinned on the builder side
+    (tests/test_demo_export.py::test_build_records_vlm_count_buckets_absent_
+    without_a_phase6b_table).
+    """
+    (built_demo_data / "vlm_count_buckets.parquet").unlink()
+    manifest_path = built_demo_data / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"]["vlm_count_buckets"] = "absent"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return built_demo_data
+
+
+_VLM_COUNT_BUCKET_COLUMNS = ["model", "bucket", "n", "mae"]
+
+
+def test_load_vlm_count_buckets_reads_the_packages_table(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loader hands the page the builder's own four-column table, buckets in
+    count order -- the fixture's b1/b2 labels put a row in every bucket."""
+    pytest.importorskip("streamlit")
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data))
+    import data as demo_data  # type: ignore[import-not-found]
+
+    buckets = demo_data.load_vlm_count_buckets()
+    assert list(buckets.columns) == _VLM_COUNT_BUCKET_COLUMNS
+    assert list(buckets["bucket"]) == ["0", "1-3", "4-9", "10+"]
+    # frame x class PAIRS, not frames: two ok rows x the ten count fields
+    assert int(buckets["n"].sum()) == 20
+
+
+def test_load_vlm_count_buckets_is_empty_on_a_pre_0_8_package(
+    built_demo_data_without_buckets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older package simply has no such file -- the loader returns the empty
+    frame with the four columns (the graceful-absence shape every optional table
+    uses), so the page can draw its own absent note instead of raising."""
+    pytest.importorskip("streamlit")
+    _reset_demo_app_modules()
+    monkeypatch.syspath_prepend(str(DEMO_DIR))
+    monkeypatch.setenv("DEMO_DATA_DIR", str(built_demo_data_without_buckets))
+    import data as demo_data  # type: ignore[import-not-found]
+
+    buckets = demo_data.load_vlm_count_buckets()
+    assert buckets.empty
+    assert list(buckets.columns) == _VLM_COUNT_BUCKET_COLUMNS
 
 
 def test_overview_page_renders_from_a_built_package(
