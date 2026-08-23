@@ -3952,8 +3952,10 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     # (2) what was added -- the arm's mined-set composition vs the random comparator
     # (this fixture has no "mined" arm, so that comparator clause is skipped)
     assert any(
-        "mined 20 frames across 1 scenes, 100% at night" in text
-        and "random covered 1 scenes at 0% night" in text
+        # singular nouns: the fixture's arm covers exactly one scene, and the
+        # comparator one too -- the page must not say "1 scenes"
+        "mined 20 frames across 1 scene, 100% at night" in text
+        and "random covered 1 scene at 0% night" in text
         for text in markdowns
     )
     assert not any("similarity mining" in text for text in markdowns)

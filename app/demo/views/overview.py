@@ -178,9 +178,13 @@ def _loop_beats(results: dict[str, Any], arms: pd.DataFrame) -> list[str | None]
         if bool(pd.notna(base_n)) and bool(pd.notna(arm_n)):
             if bool(pd.notna(n_scenes)):
                 n_mined = int(arm_n) - int(base_n)
+                scenes = int(n_scenes)
+                # Number/noun agreement, as in tour._result_data_added and
+                # active_learning._strategy_triple.
                 beats[1] = (
-                    f"**Find useful data** — {n_mined:,} frames across "
-                    f"{int(n_scenes)} scenes"
+                    f"**Find useful data** — {n_mined:,} "
+                    f"frame{'' if n_mined == 1 else 's'} across "
+                    f"{scenes} scene{'' if scenes == 1 else 's'}"
                 )
             beats[2] = f"**Retrain** — {int(base_n):,} → {int(arm_n):,} training images"
 

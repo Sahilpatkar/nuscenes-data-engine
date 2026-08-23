@@ -878,9 +878,13 @@ def _result_weakness(data: _TourData) -> None:
 
 
 def _mined_comparator_clause(data: _TourData, *, name: str, label: str) -> str | None:
-    """"{label} covered {n} scenes at {p:.0%} night" for the comparator arm
+    """"{label} covered {n} scene(s) at {p:.0%} night" for the comparator arm
     ``name``, or ``None`` when this package carries no row for it (an older
-    package, or one that never ran that arm) -- omitted rather than guessed."""
+    package, or one that never ran that arm) -- omitted rather than guessed.
+
+    The noun agrees with the count, the way ``active_learning._strategy_triple``
+    does: a one-scene comparator used to read "1 scenes".
+    """
     rows = data.arms.loc[data.arms["arm"] == name]
     if rows.empty:
         return None
@@ -888,7 +892,11 @@ def _mined_comparator_clause(data: _TourData, *, name: str, label: str) -> str |
     n_scenes, night_share = row.get("n_scenes"), row.get("night_share")
     if not (bool(pd.notna(n_scenes)) and bool(pd.notna(night_share))):
         return None
-    return f"{label} covered {int(n_scenes)} scenes at {float(night_share):.0%} night"
+    scenes = int(n_scenes)
+    return (
+        f"{label} covered {scenes} scene{'' if scenes == 1 else 's'} at "
+        f"{float(night_share):.0%} night"
+    )
 
 
 def _result_data_added(data: _TourData) -> None:
@@ -914,8 +922,12 @@ def _result_data_added(data: _TourData) -> None:
         return
 
     n_mined = int(arm_n) - int(base_n)
+    scenes = int(n_scenes)
+    # Both nouns agree with their counts (the _strategy_triple rule): a one-frame,
+    # one-scene arm used to read "1 frames across 1 scenes".
     sentence = (
-        f"`{arm}` mined {n_mined:,} frames across {int(n_scenes)} scenes, "
+        f"`{arm}` mined {n_mined:,} frame{'' if n_mined == 1 else 's'} across "
+        f"{scenes} scene{'' if scenes == 1 else 's'}, "
         f"{float(night_share):.0%} at night"
     )
     clauses = [
