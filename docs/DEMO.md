@@ -290,7 +290,7 @@ uv sync --extra train --extra engine     # torch/ultralytics for inference + Sig
 uv run nuscenes-data-engine demo curate  # 250 tokens -> data/demo_curation/ (+ rsync_filelist.txt)
 rsync -a --files-from=data/demo_curation/rsync_filelist.txt \
   TRINITY:/data/ggare/datasets/nuscenes/ data/raw/demo_frames/   # ~44 MB, read-only source
-uv run nuscenes-data-engine demo infer   # 5 checkpoints over the val frames (CPU, ~1 min)
+uv run nuscenes-data-engine demo infer   # 5 checkpoints over the val frames (CPU; measured 40 s, 2026-08-23)
 uv run nuscenes-data-engine demo build   # package v0.2 with the curation group
 ```
 
@@ -366,7 +366,7 @@ non-front-camera store) and labelled as such; per-query hit counts are shown.
 
 **Phase 9b put the viewer on one screen** and gave a still frame its missing motion
 cue. The layout is: header line (scene · severity · the compact SQL/Cypher parity
-line · provenance) → the frame beside **two step curves** → **one row of six cards**
+line · provenance) → the frame beside **two step curves** → **six cards, three to a row**
 → the filmstrip → the graph panel. The curves are the real CAN bus: speed from
 v0.8's `can_speed_kmh` / `can_speed_t_*` (km/h) and longitudinal acceleration from
 `accel_long_min_mps2` / `accel_t_*` (m/s²), plotted over the five keyframe steps with
@@ -380,8 +380,8 @@ accel, a **preset-aware VRU distance** card (min cyclist distance under
 `fast_cyclists`, min pedestrian distance everywhere else — `rain_vru` keeps the
 pedestrian card because the nearer of its two VRUs is already the grid caption),
 pedestrians within 10 m, lighting/rain, and the model result (or the short
-"not curated" value with the full "not in the curated prediction set" sentence as a
-caption under the row). The filmstrip's per-step readout stays the **GT ego-pose
+"not curated" value — the full "not in the curated prediction set" sentence stays
+the viewer's caption beside the frame, rendered exactly once). The filmstrip's per-step readout stays the **GT ego-pose
 speed in m/s** and now names that source out loud (it reads "ego N.N m/s"). The two
 readings really do differ on the same keyframe — across the 126 shipped events the
 CAN reading is a median 3 % off the ego-pose one and 5 % of events are more than
@@ -553,7 +553,7 @@ docker compose up -d neo4j                    # so the agent is offered run_cyph
 # the five showcase questions (the ones whose `expect` is asserted):
 uv run nuscenes-data-engine demo chat-record --provider anthropic --limit 5
 uv run nuscenes-data-engine demo chat-record --provider anthropic   # full run
-uv run nuscenes-data-engine demo build                              # package v0.7
+uv run nuscenes-data-engine demo build                              # package v0.8
 ```
 
 The full run is ≈25 Claude answers — the graded eval cases plus the five showcase
@@ -671,11 +671,14 @@ uv pip uninstall playwright
 ```
 
 It drives the machine's installed Google Chrome (`channel="chrome"`, so no browser
-download), shoots a 1200×900 viewport per page, opens the first frame-detail panel
-where a page has one — the Guided tour, Active learning, and Weak supervision pages
-have none, so those three are captured at the top of the page (scroll position 0,
-title visible) instead — and **exits non-zero if any page rendered a Streamlit
-exception** — a broken page cannot quietly become a README screenshot. Re-run it
+download), shoots a 1200×900 viewport per page, and frames each one deliberately: the
+Guided tour, Failure Explorer and Weak Supervision are captured at the top of the
+page (their first screen leads with the content the gallery caption names — the
+Failure Explorer's detail is its auto-selected first block since Phase 9b);
+Scenario Search and Active Learning are steered to their Phase-9b sections first
+(the flagship event's one-screen viewer with the CAN curves; the
+acquisition-strategy comparison); any other page has its first frame-detail panel
+opened. It **exits non-zero if any page rendered a Streamlit exception** — a broken page cannot quietly become a README screenshot. Re-run it
 whenever a page changes visibly; any capture over 300 KB is quantized to a
 256-colour palette PNG by the script itself, no manual compression step needed.
 
@@ -695,7 +698,7 @@ deployed URL.
 | 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** — now the first block on the page, auto-selected, with the **Model** radio and the GT / Predictions / Overlay toggle beside the image | local: 2026-08-23 · live: pending |
 | 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Find more like it** (the flagship event), and the six **preset** buttons + ranked card grid | local: 2026-08-22 · live: pending |
 | 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel, whose **Reveal the matched path** slider walks Scene → Keyframe → nearest matching objects → Ego pose one step at a time (amber = revealed, hollow = still to come) | local: 2026-08-23 · live: pending |
-| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's two **CAN curves** beside the frame (speed km/h + longitudinal accel m/s² over t−2…t+2, the rule following the filmstrip slider), the **CAN speed** card in the six-card row, and the filmstrip's own ego-pose readout; Overview's **CAN speed vs ego-motion** card (r), inside the **Dataset scale & data checks** expander | local: 2026-08-23 · live: pending |
+| 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's two **CAN curves** beside the frame (speed km/h + longitudinal accel m/s² over t−2…t+2, the rule following the filmstrip slider), the **CAN speed** card in the metric grid, and the filmstrip's own ego-pose readout; Overview's **CAN speed vs ego-motion** card (r), inside the **Dataset scale & data checks** expander | local: 2026-08-23 · live: pending |
 | 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
 | 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **Retrain on what was found** / **Same kind of frame, after**, plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-22 · live: pending |
 | 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention), **One frame, three views** (what the VLM's counts kept on a train-pool frame, and what the weak-trained checkpoint vs its GT-labelled twin then did on a held-out val frame), and **What the VLM saw** accepted/rejected galleries | local: 2026-08-23 · live: pending |

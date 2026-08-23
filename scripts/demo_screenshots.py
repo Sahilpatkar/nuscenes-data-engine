@@ -25,16 +25,18 @@ Usage
 -----
        .venv/bin/python scripts/demo_screenshots.py [--base http://localhost:8599] [--out docs/img]
 
-Each page is loaded, given time to finish its first run, and -- where the page has
-a frame gallery -- has its first "View" button clicked so the detail panel is open
-in the shot rather than an empty placeholder. The four pages in `NO_CLICK` have no
-such gallery on their first screen: Scenario Search's own per-event "View" buttons
-sit below its title, breadcrumb and preset buttons, so a blind first-match click
-opens an event's detail panel and leaves the shot scrolled past all three. Those
-four pages are captured at scroll position 0 instead, so the title is visible
-rather than whatever the click would have landed on. Exits non-zero if any page
-rendered a Streamlit exception, so a broken page cannot quietly become a README
-screenshot.
+Each page is loaded and given time to finish its first run, then framed one of
+three ways. Pages in `REVEAL` are steered to the section their README gallery
+caption names (Scenario Search: the flagship event's one-screen viewer with the
+CAN curves; Active Learning: the acquisition-strategy comparison) by clicking
+the listed buttons and scrolling to a landmark. Pages in `NO_CLICK` are captured
+at scroll position 0 (title visible) because their first screen already leads
+with the content the caption names -- the Failure Explorer's auto-selected
+detail is its first block since Phase 9b, so the old blind "View" click would
+scroll the shot past the title, image and model radio. Any other page has its
+first "View" button clicked so a detail panel is open in the shot rather than an
+empty placeholder. Exits non-zero if any page rendered a Streamlit exception, so
+a broken page cannot quietly become a README screenshot.
 
 Any capture over 300 KB is quantized in place to a 256-colour palette PNG
 (Pillow, already an app dependency) so the committed screenshots stay small; the
@@ -69,11 +71,21 @@ PAGES: tuple[tuple[str, str], ...] = (
     ("chat_replay", "demo-chat-replay"),
 )
 
-# Pages with no frame gallery on their first screen: skip the "View" click and
-# capture at scroll position 0 (title visible) instead of clicking blind.
-NO_CLICK: frozenset[str] = frozenset(
-    {"tour", "scenarios", "active_learning", "weak_supervision"}
-)
+# Pages captured at scroll position 0 (title visible): their first screen already
+# leads with the content the gallery caption names, so no click and no scroll.
+NO_CLICK: frozenset[str] = frozenset({"tour", "failures", "weak_supervision"})
+
+# Pages steered to a specific section before the shot, so the gallery shows the
+# element its README caption names (Phase 9b hooks). Each entry is a sequence of
+# ("click", button text) / ("scroll_to", visible text) steps, run in order.
+REVEAL: dict[str, tuple[tuple[str, str], ...]] = {
+    "scenarios": (
+        ("click", "Hard braking near pedestrians"),
+        ("click", "View"),
+        ("scroll_to", "CAN speed"),
+    ),
+    "active_learning": (("scroll_to", "Three ways to pick"),),
+}
 
 VIEWPORT = {"width": 1200, "height": 900}
 STATUS_WIDGET = '[data-testid="stStatusWidget"]'  # Streamlit's "Running..." indicator
@@ -97,7 +109,7 @@ def _compress_if_large(target: Path) -> None:
     print(f"  compressed {target.name}: {before / 1024:.0f} KB -> {after / 1024:.0f} KB")
 
 
-def _capture(page: Page, url: str, target: Path, *, click_view: bool) -> bool:
+def _capture(page: Page, url: str, target: Path, *, slug: str) -> bool:
     """Screenshot one demo page's viewport. Returns False if the page raised."""
     page.goto(url)
     # The status widget is absent entirely on a page that finishes before it is
@@ -105,13 +117,25 @@ def _capture(page: Page, url: str, target: Path, *, click_view: bool) -> bool:
     with contextlib.suppress(Exception):
         page.wait_for_selector(STATUS_WIDGET, state="detached", timeout=FIRST_RUN_TIMEOUT_MS)
     page.wait_for_timeout(SETTLE_MS)
-    if click_view:
+    if slug in REVEAL:
+        for action, text in REVEAL[slug]:
+            if action == "click":
+                page.locator(f'button:has-text("{text}")').first.click()
+                with contextlib.suppress(Exception):
+                    page.wait_for_selector(
+                        STATUS_WIDGET, state="detached", timeout=FIRST_RUN_TIMEOUT_MS
+                    )
+                page.wait_for_timeout(SETTLE_MS)
+            else:  # "scroll_to"
+                page.get_by_text(text, exact=False).first.scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+    elif slug in NO_CLICK:
+        page.evaluate("window.scrollTo(0, 0)")
+    else:
         view = page.locator('button:has-text("View")').first
         if view.count():
             view.click()
             page.wait_for_timeout(SETTLE_MS)
-    else:
-        page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(path=str(target))
     _compress_if_large(target)
     return page.locator(EXCEPTION_MARKER).count() == 0
@@ -152,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         for url_path, stem in PAGES:
             target = out_dir / f"{stem}.png"
             clean = _capture(
-                page, f"{base}/{url_path}", target, click_view=url_path not in NO_CLICK
+                page, f"{base}/{url_path}", target, slug=url_path
             )
             size_kb = target.stat().st_size / 1024
             note = "" if clean else "   ** Streamlit exception on this page **"

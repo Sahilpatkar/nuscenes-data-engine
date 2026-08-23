@@ -110,7 +110,10 @@ of these as a visual hook. Everything stays derived from the package.
   · provenance) → `st.columns([3, 2])`: the frame | the two curves (CAN speed, CAN
   accel; rule at the slider step) → **one metric row** (CAN speed, min longitudinal
   accel, min pedestrian distance, pedestrians within 10 m, lighting/rain, model
-  result or the not-curated note) → filmstrip + `scenario_filmstrip` slider (drives
+  result or the not-curated note; amendment 2026-08-23, browser walk: the six
+  cards render three to a row — a sixth-width st.metric clipped the speed/accel/
+  model values — and the not-curated sentence stays the viewer's single caption
+  beside the frame) → filmstrip + `scenario_filmstrip` slider (drives
   the curve rule too) → graph panel (§3). The existing pinned notes
   (`_GRAPH_LEGEND`, `_GRAPH_ABSENT_NOTE`, `_GRAPH_EVENT_ABSENT_NOTE`,
   `_MODEL_GT_ONLY_NOTE`), the compact parity line and `recorded experiment output`
