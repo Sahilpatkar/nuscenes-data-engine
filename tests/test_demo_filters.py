@@ -12,6 +12,8 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from filters import (  # noqa: E402
+    _PICK_PASS_CHIPS,
+    _PICK_PASS_LABELS,
     FILMSTRIP_STEPS,
     FilmstripStep,
     PathStep,
@@ -26,6 +28,7 @@ from filters import (  # noqa: E402
     filter_frames,
     fixed_boxes,
     frame_caption,
+    frame_quota_before,
     graph_node_label,
     loss_long,
     model_label,
@@ -33,12 +36,14 @@ from filters import (  # noqa: E402
     parity_short,
     path_steps,
     rank_events,
+    reason_chips,
     replay_tool_counts,
     selection_factors,
     severity_caption,
     sort_frames,
     speed_caption,
     step_detail,
+    strategy_coverage,
     subgraph_narrative,
     tour_frame_candidates,
     verdict_line,
@@ -1179,6 +1184,256 @@ def test_model_label_distinguishes_the_two_weak_supervision_arms() -> None:
         "weak_graph_rate_night_gt (GT-labelled twin, yolov8n)"
     )
     assert model_label("some_unlabelled_model") == "some_unlabelled_model"
+
+
+# --- Phase 9b (Task 6): acquisition coverage + per-frame reason chips -------------
+
+
+def _acquisition_arms() -> pd.DataFrame:
+    """The real package's four relevant arm rows: the baseline (no mined set of its
+    own, so NA composition columns) and the three acquisition strategies."""
+    return pd.DataFrame({
+        "arm": ["baseline", "graph_rate_night", "mined", "random"],
+        "n_scenes": pd.array([None, 368, 219, 501], dtype="Int64"),
+        "night_share": [float("nan"), 0.309, 0.0, 0.127],
+        "delta_night": [0.0, 0.0101, 0.0072, -0.0048],
+        "n_train_images": pd.array([7035, 8535, 8535, 8535], dtype="Int64"),
+    })
+
+
+_ACQUISITIONS = {
+    "random": "Random sample",
+    "mined": "Similarity mining",
+    "graph_rate_night": "Graph-aware mining",
+}
+
+
+def test_strategy_coverage_keeps_the_mapping_order() -> None:
+    """One row per acquisition strategy, in the ORDER THE MAPPING gives (the page
+    reads it as a chart axis, and the arm table is sorted alphabetically) -- with
+    each arm's own mined-set composition and its night result beside it."""
+    coverage = strategy_coverage(_acquisition_arms(), strategies=_ACQUISITIONS)
+
+    assert list(coverage.columns) == [
+        "arm", "strategy", "n_scenes", "night_share", "delta_night", "n_train_images",
+    ]
+    assert list(coverage["arm"]) == ["random", "mined", "graph_rate_night"]
+    assert list(coverage["strategy"]) == [
+        "Random sample", "Similarity mining", "Graph-aware mining"
+    ]
+    assert list(coverage["n_scenes"]) == [501, 219, 368]
+    assert list(coverage["night_share"]) == pytest.approx([0.127, 0.0, 0.309])
+    assert list(coverage["delta_night"]) == pytest.approx([-0.0048, 0.0072, 0.0101])
+    assert list(coverage["n_train_images"]) == [8535, 8535, 8535]
+
+
+def test_strategy_coverage_skips_arms_this_package_never_ran() -> None:
+    """An arm the mapping names but the package has no row for is skipped, not
+    guessed at -- the fixture package (and any run that skipped an arm) simply
+    compares fewer strategies."""
+    arms = _acquisition_arms()
+
+    coverage = strategy_coverage(arms.loc[arms["arm"] != "mined"], strategies=_ACQUISITIONS)
+
+    assert list(coverage["arm"]) == ["random", "graph_rate_night"]
+    # a stale/empty arm table has no strategies at all, and raises nothing
+    assert strategy_coverage(arms.iloc[:0], strategies=_ACQUISITIONS).empty
+    assert strategy_coverage(pd.DataFrame(), strategies=_ACQUISITIONS).empty
+
+
+def test_strategy_coverage_carries_missing_composition_through_as_na() -> None:
+    """NA in, NA out: the baseline has no mined set, and this helper says so rather
+    than inventing a zero -- the page decides what to print for a missing number."""
+    coverage = strategy_coverage(_acquisition_arms(), strategies={"baseline": "No mining"})
+
+    assert list(coverage["arm"]) == ["baseline"]
+    assert pd.isna(coverage.iloc[0]["n_scenes"])
+    assert pd.isna(coverage.iloc[0]["night_share"])
+    assert coverage.iloc[0]["delta_night"] == pytest.approx(0.0)
+
+
+def _reason_row() -> dict[str, object]:
+    """A row shaped like the AppTest fixture's own "wA" selection-explain row: a
+    night frame the night pass took (floor 1) from community #0, ranked 2nd inside
+    it by similarity degree, with no failure mass routed to the frame itself."""
+    return {
+        "sample_data_token": "wA",
+        "arm": "graph_rate_night",
+        "is_night": True,
+        "scene_name": "scene-wA",
+        "community": 0,
+        "community_size": 10,
+        "community_night_members": 2,
+        "community_mass": 5.0,
+        "community_mass_rank": 1,
+        "community_quota": 2,
+        "degree": 3.0,
+        "degree_rank_in_community": 2,
+        "pick_pass": "night",
+        "n_failures_routed": 0,
+        "mass_routed": 0.0,
+    }
+
+
+def _reason_gt(*categories: str) -> pd.DataFrame:
+    """One frame's visible GT rows (what ``visible_gt`` hands the page)."""
+    return pd.DataFrame({
+        "sample_data_token": ["wA"] * len(categories),
+        "category_group": list(categories),
+    })
+
+
+def test_reason_chips_state_the_facts_the_explain_row_carries() -> None:
+    """The chip row above the factor panel, in the order the mechanism runs. Every
+    chip is a fact that EXISTS in this package (spec's honesty rule "reason chips
+    state facts that exist"): the frame's own lighting and visible pedestrian GT,
+    then its community, that community's mass rank and quota, the pass that took
+    it, and its rank inside the community."""
+    chips = reason_chips(
+        _reason_row(), _reason_gt("pedestrian", "car"), n_communities=2, night_floor=1
+    )
+
+    assert chips == [
+        "night",
+        "1 pedestrian GT box",
+        "community #0 · 10 frames",
+        "mass rank 1 of 2",
+        "quota 2",
+        "night-pass pick (floor 1)",
+        "degree rank 2 of 10",
+    ]
+
+
+def test_reason_chips_count_and_pluralise_visible_pedestrian_gt() -> None:
+    """The pedestrian chip counts the frame's VISIBLE pedestrian GT boxes (the
+    caller passes ``visible_gt``) and is omitted entirely at zero -- "0 pedestrian
+    GT boxes" is not a reason anything was selected."""
+    two = reason_chips(
+        _reason_row(), _reason_gt("pedestrian", "pedestrian"), n_communities=2, night_floor=1
+    )
+    none = reason_chips(_reason_row(), _reason_gt("car"), n_communities=2, night_floor=1)
+
+    assert "2 pedestrian GT boxes" in two
+    assert not any("pedestrian" in chip for chip in none)
+    # a package/frame with no GT rows at all is the same story, not a crash
+    assert not any("pedestrian" in chip for chip in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    ))
+
+
+def test_reason_chips_name_routed_failures_only_when_there_are_some() -> None:
+    """Routed failure mass is context, never the reason -- 1249 of the 1500 real
+    selected frames have none, so the chip exists only when the count does."""
+    row = {**_reason_row(), "n_failures_routed": 2, "mass_routed": 4.25}
+
+    chips = reason_chips(row, _reason_gt(), n_communities=2, night_floor=1)
+
+    assert chips[-1] == "2 routed failures"
+    assert not any("routed" in chip for chip in reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1
+    ))
+
+
+def test_reason_chips_omit_the_ranks_this_package_has_no_value_for() -> None:
+    """Both rank columns are nullable Int64 -- a backfill frame drawn from outside
+    every community has neither. The chips are dropped rather than rendered as
+    "rank <NA>"."""
+    row = {
+        **_reason_row(),
+        "community_mass_rank": pd.NA,
+        "degree_rank_in_community": pd.NA,
+        "pick_pass": "backfill",
+    }
+
+    chips = reason_chips(row, _reason_gt("pedestrian"), n_communities=2)
+
+    assert chips == [
+        "night",
+        "1 pedestrian GT box",
+        "community #0 · 10 frames",
+        "quota 2",
+        "seeded backfill",
+    ]
+
+
+def test_reason_chips_show_the_quota_jump_when_the_before_quota_is_known() -> None:
+    """``quota_before`` (this frame's own community's quota under the other arm)
+    turns the quota chip into the change the night floor made."""
+    chips = reason_chips(
+        _reason_row(), _reason_gt(), n_communities=2, night_floor=1, quota_before=1
+    )
+
+    assert "quota 1 → 2" in chips
+    assert "quota 2" not in chips
+
+
+def test_reason_chips_name_every_pick_pass_the_factor_panel_names() -> None:
+    """The chip vocabulary is the factor panel's: a day frame taken by the main
+    pass, and the night pass with no floor recorded in this package."""
+    day = reason_chips(
+        {**_reason_row(), "is_night": False, "pick_pass": "main"},
+        _reason_gt(), n_communities=2,
+    )
+    no_floor = reason_chips(_reason_row(), _reason_gt(), n_communities=2)
+
+    assert "night" not in day
+    assert "main-pass pick" in day
+    assert "night-pass pick" in no_floor
+    # the two label tables cover exactly the same passes, so the chip row and the
+    # factor panel can never name one of them and not the other
+    assert set(_PICK_PASS_CHIPS) == set(_PICK_PASS_LABELS)
+
+
+def test_no_reason_chip_ever_says_rate() -> None:
+    """Spec honesty rule: there is NO per-frame failure rate in the package (the
+    only per-frame facts are the explain columns and the frame's visible GT), so no
+    chip may use the word -- including via the arm name ``graph_rate_night``, which
+    is the one string on this row that contains it."""
+    cases = [
+        reason_chips(_reason_row(), _reason_gt("pedestrian"), n_communities=2, night_floor=1),
+        reason_chips(_reason_row(), _reason_gt(), n_communities=2),
+        reason_chips(
+            {**_reason_row(), "is_night": False, "pick_pass": "main",
+             "n_failures_routed": 2, "mass_routed": 4.25},
+            _reason_gt("pedestrian", "pedestrian"), n_communities=97, night_floor=375,
+            quota_before=83,
+        ),
+        reason_chips(
+            {**_reason_row(), "pick_pass": "backfill", "community_mass_rank": pd.NA,
+             "degree_rank_in_community": pd.NA},
+            _reason_gt(), n_communities=97,
+        ),
+    ]
+
+    assert all(chips for chips in cases)
+    assert all("rate" not in chip for chips in cases for chip in chips)
+
+
+def test_frame_quota_before_only_speaks_for_the_frames_own_community() -> None:
+    """The quota jump is a fact about ONE community. ``community_jump`` reports the
+    largest all-night community's -- printing that on a frame from a different
+    community would be a number this frame's community never had, so it is returned
+    only when the frame is actually in it."""
+    communities = _communities()
+    in_the_jumped_community = {**_reason_row(), "community": 10301}
+
+    assert frame_quota_before(
+        communities, in_the_jumped_community, arm="graph_rate_night"
+    ) == 83
+    assert frame_quota_before(communities, _reason_row(), arm="graph_rate_night") is None
+
+
+def test_frame_quota_before_needs_two_quota_columns_and_an_all_night_community() -> None:
+    """A package that exported one arm's quota (or has no all-night community) has
+    no "before" to show, and the chip stays a plain quota."""
+    communities = _communities()
+    row = {**_reason_row(), "community": 10301}
+
+    assert frame_quota_before(
+        communities.drop(columns=["quota_graph_rate"]), row, arm="graph_rate_night"
+    ) is None
+    assert frame_quota_before(communities, row, arm="an_arm_with_no_quota_column") is None
+    assert frame_quota_before(communities.iloc[:0], row, arm="graph_rate_night") is None
 
 
 # --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------

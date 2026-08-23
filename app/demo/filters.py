@@ -876,6 +876,13 @@ def community_jump(
 
 _PICK_PASS_LABELS = {"main": "main pass", "backfill": "seeded backfill"}
 
+# The same two passes as a CHIP: a chip is read on its own, out of the "Picked in:"
+# sentence the factor panel puts around it, so "main pass" becomes "main-pass pick"
+# while "seeded backfill" already stands alone. Same keys as _PICK_PASS_LABELS
+# (tests/test_demo_filters.py compares the two key sets), so the chip row and the
+# factor panel can never name a pass the other one doesn't.
+_PICK_PASS_CHIPS = {"main": "main-pass pick", "backfill": "seeded backfill"}
+
 
 # 11th/12th/13th (and the whole 111-119 family) break the last-digit rule, so the
 # teens are handled before this lookup is consulted.
@@ -973,6 +980,182 @@ def selection_factors(
             None,
         ),
     ]
+
+
+# --- Phase 9b (Task 6): acquisition coverage + per-frame reason chips -------------
+#
+# Two more pure helpers for the Active Learning page (and the guided tour step that
+# condenses it): how each acquisition strategy spent the SAME mining budget, and one
+# selected frame's recorded selection facts as a chip row.
+
+_STRATEGY_COVERAGE_COLUMNS = [
+    "arm",
+    "strategy",
+    "n_scenes",
+    "night_share",
+    "delta_night",
+    "n_train_images",
+]
+
+
+def strategy_coverage(
+    arms: pd.DataFrame, *, strategies: Mapping[str, str]
+) -> pd.DataFrame:
+    """``active_learning_results.parquet`` narrowed to the acquisition strategies
+    ``strategies`` names, as ``arm, strategy, n_scenes, night_share, delta_night,
+    n_train_images`` -- one row per named arm THIS package actually has, in the
+    mapping's own order.
+
+    The order is the mapping's, not the table's: the arm table is sorted
+    alphabetically, and the page reads this straight onto a chart axis where the
+    strategies should read in the order the story tells them (random, similarity,
+    graph-aware). An arm the mapping names but the package never ran is skipped
+    rather than filled in -- a run that skipped an arm compares fewer strategies,
+    it does not compare an invented one.
+
+    NA in, NA out: ``n_scenes``/``night_share`` are absent on any arm with no mined
+    set of its own (the baseline), and this helper carries that through as NA for
+    the caller to decide about, rather than reading it as a zero.
+    """
+    if arms.empty or "arm" not in arms.columns:
+        return pd.DataFrame({column: [] for column in _STRATEGY_COVERAGE_COLUMNS})
+    records: list[dict[str, Any]] = []
+    for arm, strategy in strategies.items():
+        rows = arms.loc[arms["arm"] == arm]
+        if rows.empty:
+            continue
+        row = rows.iloc[0]
+        records.append({
+            "arm": arm,
+            "strategy": strategy,
+            "n_scenes": _optional_int(row.get("n_scenes")),
+            "night_share": _numeric(row.get("night_share")),
+            "delta_night": _numeric(row.get("delta_night")),
+            "n_train_images": _optional_int(row.get("n_train_images")),
+        })
+    frame = pd.DataFrame(records, columns=_STRATEGY_COVERAGE_COLUMNS)
+    return frame.astype({
+        "n_scenes": "Int64",
+        "night_share": "float64",
+        "delta_night": "float64",
+        "n_train_images": "Int64",
+    })
+
+
+def frame_quota_before(
+    communities: pd.DataFrame, row: Mapping[str, Any], *, arm: str
+) -> int | None:
+    """The quota this frame's OWN community held under the other arm, or ``None``.
+
+    The reason chips can show a frame's community quota as the change the night
+    floor made to it ("quota 83 -> 323") -- but only when the change is this
+    community's. ``community_jump`` reports the largest ALL-NIGHT community's
+    reallocation (the one the page's caption points at), so its "before" belongs to
+    a frame only when the frame is actually in that community; on any other frame
+    it would be a number that community never had, and the chip stays a plain
+    quota instead (spec's honesty rule: reason chips state facts that exist).
+
+    ``None`` also when the table is empty, when this package exported only one
+    arm's quota (nothing to compare), or when no community is all-night.
+    """
+    if communities.empty:
+        return None
+    after = f"quota_{arm}"
+    quota_columns = sorted(c for c in communities.columns if c.startswith("quota_"))
+    if after not in quota_columns:
+        return None
+    before = next((c for c in quota_columns if c != after), None)
+    if before is None:
+        return None
+    jump = community_jump(communities, before=before, after=after)
+    if jump is None:
+        return None
+    community = _optional_int(row.get("community"))
+    return int(jump["quota_before"]) if community == jump["community"] else None
+
+
+def _pedestrian_gt_chip(gt_rows: pd.DataFrame) -> str | None:
+    """How many VISIBLE pedestrian GT boxes this frame carries (the caller passes
+    ``visible_gt``), or ``None`` at zero -- "0 pedestrian GT boxes" is not a reason
+    anything was selected."""
+    if gt_rows.empty or "category_group" not in gt_rows.columns:
+        return None
+    n_peds = int((gt_rows["category_group"] == "pedestrian").sum())
+    if n_peds == 0:
+        return None
+    return f"{n_peds} pedestrian GT box{'' if n_peds == 1 else 'es'}"
+
+
+def _pick_pass_chip(pick_pass: str, night_floor: int | None) -> str | None:
+    """The pass that took this frame, as a chip. ``None`` for a pass this app has
+    no name for -- an unnamed one would be an identifier, not a fact."""
+    if pick_pass == "night":
+        return (
+            "night-pass pick"
+            if night_floor is None
+            else f"night-pass pick (floor {night_floor})"
+        )
+    return _PICK_PASS_CHIPS.get(pick_pass)
+
+
+def reason_chips(
+    row: Mapping[str, Any],
+    gt_rows: pd.DataFrame,
+    *,
+    n_communities: int,
+    night_floor: int | None = None,
+    quota_before: int | None = None,
+) -> list[str]:
+    """One selected frame's recorded selection facts as a chip row, in the same
+    order ``selection_factors`` spells them out below it: the frame's own lighting
+    and visible pedestrian GT, then its community, that community's mass rank and
+    quota, the pass that took it, its rank inside the community, and last the
+    failure mass routed to the frame itself.
+
+    EVERY chip is a fact this package carries. The only per-frame selection facts
+    that exist are ``al_selection_explain``'s columns and the frame's visible GT
+    (``gt_rows``, which the caller passes as ``visible_gt(gt, token)``); each chip
+    is written only when its own value is there -- no pedestrian chip at zero, no
+    rank chip on a NA rank (both rank columns are nullable), no routed-failures
+    chip on the 1249-in-1500 frames that were never a routing target.
+
+    In particular there is NO per-frame failure rate in the package, so no chip
+    says "rate" -- not even by way of the arm name ``graph_rate_night``, which is
+    never written into a chip (tests/test_demo_filters.py asserts the word over
+    every chip of every branch).
+    """
+    chips: list[str] = []
+    if bool(row.get("is_night")):
+        chips.append("night")
+    pedestrians = _pedestrian_gt_chip(gt_rows)
+    if pedestrians is not None:
+        chips.append(pedestrians)
+
+    community = _optional_int(row.get("community"))
+    size = _optional_int(row.get("community_size"))
+    if community is not None and size is not None:
+        chips.append(f"community #{community} · {size} frames")
+
+    mass_rank = _optional_int(row.get("community_mass_rank"))
+    if mass_rank is not None:
+        chips.append(f"mass rank {mass_rank} of {n_communities}")
+
+    quota = _optional_int(row.get("community_quota"))
+    if quota is not None:
+        chips.append(f"quota {quota}" if quota_before is None else f"quota {quota_before} → {quota}")
+
+    pick_pass = _pick_pass_chip(str(row.get("pick_pass")), night_floor)
+    if pick_pass is not None:
+        chips.append(pick_pass)
+
+    degree_rank = _optional_int(row.get("degree_rank_in_community"))
+    if degree_rank is not None and size is not None:
+        chips.append(f"degree rank {degree_rank} of {size}")
+
+    n_routed = _optional_int(row.get("n_failures_routed")) or 0
+    if n_routed > 0:
+        chips.append(f"{n_routed} routed failure{'' if n_routed == 1 else 's'}")
+    return chips
 
 
 # --- Phase 7 (Task 5): Weak Supervision page helpers ------------------------------

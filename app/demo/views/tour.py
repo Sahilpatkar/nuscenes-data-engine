@@ -26,10 +26,12 @@ from filters import (
     failure_flags,
     filmstrip_steps,
     fixed_boxes,
+    frame_quota_before,
     gt_for_render,
     model_label,
     parity_short,
     rank_events,
+    reason_chips,
     selection_factors,
     severity_caption,
     tour_frame_candidates,
@@ -609,8 +611,21 @@ def _render_why_selected(data: _TourData) -> None:
     night_floor_value = (data.validation.get("config") or {}).get("night_floor")
     night_floor = int(night_floor_value) if night_floor_value is not None else None
     n_communities = int(data.validation.get("n_communities", len(data.communities)))
+    explain_row = explain_rows.iloc[0].to_dict()
+    # Phase 9b (Task 6): the Active Learning page's own chip row, from the same
+    # helper over the same explain row -- this step condenses that panel, so it
+    # must not summarise it into a different set of facts.
+    chip_row(
+        reason_chips(
+            explain_row,
+            gt_rows,
+            n_communities=n_communities,
+            night_floor=night_floor,
+            quota_before=frame_quota_before(data.communities, explain_row, arm=arm),
+        )
+    )
     for label, value, flag in selection_factors(
-        explain_rows.iloc[0].to_dict(), n_communities=n_communities, night_floor=night_floor
+        explain_row, n_communities=n_communities, night_floor=night_floor
     ):
         mark = "" if flag is None else (" ✓" if flag else " ✗")
         st.markdown(f"**{label}:** {value}{mark}")

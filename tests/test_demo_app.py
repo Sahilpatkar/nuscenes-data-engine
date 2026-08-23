@@ -2034,6 +2034,34 @@ def _y_titles(at: Any) -> list[str]:
     return [str(spec["layer"][0]["encoding"]["y"]["title"]) for spec in _chart_specs(at)]
 
 
+def _all_y_titles(at: Any) -> list[str]:
+    """Every y-axis title on the page, layered charts flattened -- ``bar_chart``
+    returns a plain chart when ``zero_line=False`` and a two-layer one otherwise,
+    and this reads both shapes."""
+    titles: list[str] = []
+    for spec in _chart_specs(at):
+        for layer in spec.get("layer", [spec]):
+            title = (layer.get("encoding", {}).get("y") or {}).get("title")
+            if title is not None:
+                titles.append(str(title))
+    return titles
+
+
+def _strategy_chart_frames(at: Any) -> list[Any]:
+    """The data behind every chart on the page that carries a ``strategy`` column
+    -- Streamlit hoists each altair chart's own frame into an Arrow-encoded dataset
+    beside the spec, so this reads the bars back exactly as the page drew them."""
+    from streamlit.dataframe_util import convert_arrow_bytes_to_pandas_df
+
+    frames = []
+    for chart in at.get("vega_lite_chart"):
+        for dataset in chart.proto.datasets:
+            frame = convert_arrow_bytes_to_pandas_df(dataset.data.data)
+            if "strategy" in frame.columns:
+                frames.append(frame)
+    return frames
+
+
 def _rule_steps(chart: Any) -> list[str]:
     """The step label(s) the chart's selected-step rule sits on, decoded from the
     Arrow dataset Streamlit hoisted the rule's own one-row frame into."""
@@ -2358,6 +2386,152 @@ def test_active_learning_page_with_an_empty_exemplar_list(
     assert any("no exemplar frames in this package" in str(i.value) for i in at.info)
     # the rest of the page is unaffected -- the arm chart is still there
     assert len(at.get("vega_lite_chart")) >= 1
+
+
+def test_active_learning_page_compares_the_acquisition_strategies(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec sec4: the acquisition comparison sits ABOVE the all-arms chart and
+    answers "why graph-aware mining rather than similarity mining?" from the arms'
+    own mined-set composition -- scenes covered and night share, two charts over
+    the same budget.
+
+    This fixture ran two of the three strategies (it has no ``mined`` arm), so both
+    the heading's count word and the callout are COMPUTED from what is in the
+    package: the strategies are listed side by side with no ranking claim, and the
+    "found near-duplicates" lesson is not written at all.
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    subheaders = [str(s.value) for s in at.subheader]
+    # 20 = this arm's own 120 training images minus the baseline's 100, never a
+    # literal; "Two" because two of the three strategies have a row here.
+    assert "Two ways to pick 20 frames" in subheaders
+    assert subheaders.index("Two ways to pick 20 frames") < subheaders.index(
+        "Every arm, one chart"
+    )
+
+    titles = _all_y_titles(at)
+    assert "scenes covered" in titles
+    assert "night share" in titles
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 2
+    for frame in drawn:
+        assert list(frame["strategy"]) == ["Random sample", "Graph-aware mining"]
+
+    captions = [str(caption.value) for caption in at.caption]
+    assert any(
+        caption.startswith("**Graph-aware mining** (`graph_rate_night`) —")
+        for caption in captions
+    )
+
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Random sample: 1 scenes · 0% night · +0.0100" in text
+        and "Graph-aware mining: 1 scenes · 100% night · +0.0300" in text
+        for text in learned
+    )
+    assert not any("near-duplicates" in text for text in learned)
+
+
+def _add_mined_arm(built_demo_data: Path) -> None:
+    """Give the built package the third acquisition strategy, with the real
+    package's own composition for the two arms the lesson compares (`mined` 219
+    scenes / 0% night / +0.0072; `graph_rate_night` 368 scenes / 30.9% night).
+
+    Deliberately absent from the base fixture -- which is what makes the neutral
+    branch of the strategy callout testable at all (see the test above) -- and
+    added here the same way ``_add_weak_night_twin_arm`` adds the weak twin: only
+    the columns the section reads are set, the rest come back NaN through
+    ``pd.concat``'s own column align.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    graph = arms["arm"] == "graph_rate_night"
+    arms.loc[graph, "n_scenes"] = 368
+    arms.loc[graph, "night_share"] = 0.309
+    extra = pd.DataFrame({
+        "arm": ["mined"],
+        "family": ["mined"],
+        "round_order": [int(arms["round_order"].max()) + 1],
+        "n_train_images": [118],
+        "overall_map5095": [0.215],
+        "night_map5095": [0.1072],
+        "delta_overall": [0.015],
+        "delta_night": [0.0072],
+        "n_scenes": pd.array([219], dtype="Int64"),
+        "night_share": [0.0],
+    })
+    pd.concat([arms, extra], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_active_learning_strategy_lesson_is_computed_not_asserted(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With all three strategies in the package the callout may make its comparison
+    -- and only because this package's own numbers support every clause of it: the
+    graph arm really does cover more scenes AND a higher night share than the
+    similarity arm, and really does hold the table's best night gain (spec's
+    "computed, never asserted, superlatives")."""
+    pytest.importorskip("streamlit")
+    _add_mined_arm(built_demo_data)
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    assert not at.exception
+
+    assert "Three ways to pick 20 frames" in [str(s.value) for s in at.subheader]
+    learned = [str(m.value) for m in at.markdown if "What we learned" in str(m.value)]
+    assert any(
+        "Similarity mining found near-duplicates: 219 scenes, 0% night, +0.0072 "
+        "night mAP50-95; graph-aware mining spread the same budget over 368 scenes "
+        "at 31% night and took the best night gain (+0.0300)." in text
+        for text in learned
+    )
+
+
+def test_active_learning_why_selected_panel_leads_with_reason_chips(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) Spec sec4: the per-frame panel opens with the frame's selection facts as
+    chips, above the factor lines that spell the same facts out. "wA" has no
+    visible GT and no routed failure mass, so neither chip is written -- and no
+    chip anywhere says "rate" (there is no per-frame failure rate in the package).
+    """
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    markdowns = [str(m.value) for m in at.markdown]
+    chips = next(text for text in markdowns if ":blue-badge[night]" in text)
+    assert chips == (
+        ":blue-badge[night] :blue-badge[community #0 · 10 frames] "
+        ":blue-badge[mass rank 1 of 2] :blue-badge[quota 1] "
+        ":blue-badge[night-pass pick (floor 1)] :blue-badge[degree rank 2 of 10]"
+    )
+    assert "rate" not in chips
+    factors = next(text for text in markdowns if text.startswith("**Night frame:**"))
+    assert markdowns.index(chips) < markdowns.index(factors)
+
+
+def test_active_learning_page_writes_no_reason_chips_without_the_explain_group(
+    built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No staged selection facts, no chips: the panel says exactly what is missing
+    rather than tagging the frame with reasons this package cannot support."""
+    pytest.importorskip("streamlit")
+    at = _active_learning_apptest(built_demo_data_without_explain, monkeypatch)
+    at.session_state["al_frame_token"] = "wA"
+    at.run(timeout=30)
+    assert not at.exception
+
+    assert not any(":blue-badge[" in str(m.value) for m in at.markdown)
+    assert any(
+        "per-frame community and routed mass are not included in this package" in str(i.value)
+        for i in at.info
+    )
 
 
 def test_active_learning_gallery_pages_night_frames_first(
@@ -3120,6 +3294,32 @@ def test_tour_walks_steps_2_to_5(
     )
     assert any("recomputed in this app" in text for text in captions)
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
+
+
+def test_tour_step_3_leads_with_the_same_reason_chips(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec sec4: step 3 opens with the same chip row the Active Learning page's
+    per-frame panel does, between the frame and the factor lines -- built by the
+    same ``filters.reason_chips`` from the same explain row, so the tour cannot
+    tell a different story about why a frame was picked. Its frame ("v0") does
+    carry one visible pedestrian GT box, which the chips count."""
+    pytest.importorskip("streamlit")
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 3)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    chips = next(text for text in markdowns if ":blue-badge[night]" in text)
+    assert chips == (
+        ":blue-badge[night] :blue-badge[1 pedestrian GT box] "
+        ":blue-badge[community #0 · 10 frames] :blue-badge[mass rank 1 of 2] "
+        ":blue-badge[quota 1] :blue-badge[night-pass pick (floor 1)] "
+        ":blue-badge[degree rank 1 of 10]"
+    )
+    assert "rate" not in chips
+    factors = next(text for text in markdowns if text.startswith("**Night frame:**"))
+    assert markdowns.index(chips) < markdowns.index(factors)
 
 
 def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
