@@ -17,7 +17,7 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 ## Public demo
 
-**Live demo:** _pending deploy — link added after the first Streamlit Community Cloud deployment_
+**Live demo:** [nuscenes-data-engine-sahil.streamlit.app](https://nuscenes-data-engine-sahil.streamlit.app/)
 
 A self-contained Streamlit app ([app/demo/](app/demo/)) that presents this project's
 real results from a committed 25 MB artifact package — no backend, no GPU, no
