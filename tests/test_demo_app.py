@@ -3905,12 +3905,18 @@ def test_tour_walks_steps_2_to_5(
     pytest.importorskip("streamlit")
     at = _tour_apptest(built_demo_data, monkeypatch)
 
-    # --- step 2: "Find more like it" -----------------------------------------------
+    # --- step 2: "Where else does this happen?" ------------------------------------
     _walk_to_step(at, 2)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 3 of 7 · Find more like it") for text in captions)
+    assert any(
+        text.startswith("Step 3 of 7 · Where else does this happen?") for text in captions
+    )
+    # the headline the event, its filmstrip and its curves are the evidence for
+    assert [str(head.value) for head in at.subheader] == [
+        "Is this one bad photo, or a recurring driving scenario?"
+    ]
     # the fixture's only hard_braking_near_pedestrians event: "s1", scene-X, its own
     # severity figure (accel_long_min_mps2 = -7.5) and its near-pedestrian facts
     # (f1 at 5m within 10m, f2 at 20m outside it).
@@ -3922,20 +3928,56 @@ def test_tour_walks_steps_2_to_5(
     assert any("found · SQL 1 / Graph 1 ✓" in text for text in captions)
     # the counted night line: s1 is a day event, so 0 of the 1 matching events
     assert any("0 of 1 matching events are at night" in text for text in markdowns)
+    # the one mechanism sentence: what the search matched on to find those events
+    assert any(
+        "The system searches driving context — night, braking, pedestrians near the "
+        "ego — not just similar-looking images." in text
+        for text in markdowns
+    )
+    # ... closed by the step's takeaway callout
+    assert any(
+        ":material/school:" in text
+        and "Perception failures must be analyzed in driving context." in text
+        for text in markdowns
+    )
     assert "Scenario Search" in str(at.button(key="tour_open_event").label)
 
-    # --- step 3: "Why this frame was picked" ---------------------------------------
+    # --- step 3: "What data should we add?" ----------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 4 of 7 · Why this frame was picked") for text in captions)
-    # selection_factors, rendered exactly as the Active Learning page renders them --
-    # the fixture's first candidate frame was taken by the night pass (floor 1).
+    assert any(
+        text.startswith("Step 4 of 7 · What data should we add?") for text in captions
+    )
+    assert [str(head.value) for head in at.subheader] == [
+        "Thousands of candidate training frames — which are worth labelling?"
+    ]
+    # the one-line selection path, above the fold that details it
+    assert any(
+        "**failed val frame → similarity community → representative train-pool "
+        "frames → selected for retraining**" in text
+        for text in markdowns
+    )
+    # selection_factors, rendered exactly as the Active Learning page renders them
+    # (the fixture's first candidate frame was taken by the night pass, floor 1) --
+    # folded away now: mechanism detail, not the step's headline claim.
     assert any(text.startswith("**Night frame:** yes ✓") for text in markdowns)
     assert any("**Picked in:** night pass (night floor 1)" in text for text in markdowns)
+    fold = next(block for block in at.expander if block.label == "How selection works")
+    folded = [str(block.value) for block in fold.markdown]
+    assert any(text.startswith("**Night frame:** yes ✓") for text in folded)
+    assert any("Nothing about this frame on its own selected it" in text for text in folded)
     # the selection is REPRODUCED (demo al-explain), not recomputed or recorded
     assert any("reproduced selection" in text for text in captions)
+    # the whole system path, in one grey line under the step
+    assert any(
+        text.startswith(
+            "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure "
+            "analysis → scenario search → active learning → YOLO retraining → evaluation"
+        )
+        for text in captions
+    )
     assert "Active Learning" in str(at.button(key="tour_open_al_frame").label)
 
     # --- step 4: "Retrain on what was found" ---------------------------------------

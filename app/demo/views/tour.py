@@ -127,6 +127,23 @@ _BRIDGE_TO_MINING = (
     "Finding one failure is easy — the hard part is finding the rest of the dataset "
     "where the same thing happens."
 )
+# Step 2: the one sentence that says what the scenario search matches ON. The
+# event, its filmstrip and its CAN curves above it are the evidence that the
+# failure recurs; this is the mechanism that found them.
+_MINING_MECHANISM = (
+    "The system searches driving context — night, braking, pedestrians near the ego — "
+    "not just similar-looking images."
+)
+# Step 3: the selection path in one line (the fold under it carries the seven
+# recorded factors), and the system path the whole tour walks, end to end.
+_SELECTION_PATH = (
+    "**failed val frame → similarity community → representative train-pool frames → "
+    "selected for retraining**"
+)
+_ARCHITECTURE_STRIP = (
+    "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure analysis "
+    "→ scenario search → active learning → YOLO retraining → evaluation"
+)
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
 _NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
 
@@ -534,7 +551,12 @@ def _render_event_curves(row: pd.Series) -> None:
 
 def _render_mine(data: _TourData) -> None:
     """Step 2 — the weakness as a population: the flagship scenario query's top
-    event, its own facts, and how many of the matching events are at night."""
+    event, its own facts, and how many of the matching events are at night.
+
+    Phase 10 (spec sec2 row 2) only re-frames what was already here: the headline
+    asks the question the event, its filmstrip and its CAN curves answer, one
+    sentence says what the search matched on, and the takeaway closes the step.
+    """
     if data.events is None:
         st.info(_EVENTS_ABSENT_NOTE)
         return
@@ -542,6 +564,7 @@ def _render_mine(data: _TourData) -> None:
     if ranked.empty:
         st.info(_NO_TOUR_EVENT_NOTE)
         return
+    st.subheader("Is this one bad photo, or a recurring driving scenario?")
     row = ranked.iloc[0]
     token = str(row["sample_data_token"])
 
@@ -573,6 +596,8 @@ def _render_mine(data: _TourData) -> None:
 
     n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
     st.markdown(f"{n_night} of {len(ranked)} matching events are at night.")
+    st.markdown(_MINING_MECHANISM)
+    learned("Perception failures must be analyzed in driving context.")
     provenance("recorded", "event counts computed at build against SQL and the Neo4j graph")
     provenance("recomputed", "overlay from gt_boxes.parquet")
     if st.button("Open this event in Scenario Search →", key="tour_open_event"):
@@ -607,7 +632,16 @@ def _flagship_rank(data: _TourData, token: str) -> int | None:
 
 def _render_why_selected(data: _TourData) -> None:
     """Step 3 — one mined frame and the recorded reason it was picked, reproduced
-    by ``demo al-explain`` rather than reasoned about here."""
+    by ``demo al-explain`` rather than reasoned about here.
+
+    Phase 10 (spec sec2 row 3) sets the question first, answers it in one line
+    (``_SELECTION_PATH``) and folds the seven recorded factors and the causal
+    closing sentence into "How selection works" -- the mechanism is one click
+    away, not the first thing on the screen. The chip row stays where it was,
+    between the frame and the fold: it is what the Active Learning page leads its
+    own per-frame panel with, and this step must not summarise that panel into a
+    different set of facts.
+    """
     if not al_explain_available():
         st.info(_EXPLAIN_ABSENT_NOTE)
         return
@@ -621,6 +655,7 @@ def _render_why_selected(data: _TourData) -> None:
         return
     token, scale = chosen
 
+    st.subheader("Thousands of candidate training frames — which are worth labelling?")
     frame_row = data.manifest.loc[data.manifest["sample_data_token"] == token].iloc[0]
     gt_rows = visible_gt(data.gt, token)
     image_path = crop_path(token) if scale == 0.6 else thumb_path(token)
@@ -660,11 +695,23 @@ def _render_why_selected(data: _TourData) -> None:
             quota_before=frame_quota_before(data.communities, explain_row, arm=arm),
         )
     )
-    for label, value, flag in selection_factors(
-        explain_row, n_communities=n_communities, night_floor=night_floor
-    ):
-        mark = "" if flag is None else (" ✓" if flag else " ✗")
-        st.markdown(f"**{label}:** {value}{mark}")
+    st.markdown(_SELECTION_PATH)
+    with st.expander("How selection works"):
+        for label, value, flag in selection_factors(
+            explain_row, n_communities=n_communities, night_floor=night_floor
+        ):
+            mark = "" if flag is None else (" ✓" if flag else " ✗")
+            st.markdown(f"**{label}:** {value}{mark}")
+        floor_text = (
+            "a night floor takes a minimum number of night frames first"
+            if night_floor is None
+            else f"a night floor takes {night_floor} night frames first"
+        )
+        st.markdown(
+            f"Nothing about this frame on its own selected it: its community carried "
+            f"failure mass, that mass bought the community a quota, the frame ranked "
+            f"high enough inside it by similarity — and {floor_text}."
+        )
 
     rank = _flagship_rank(data, token)
     if rank is not None:
@@ -677,22 +724,13 @@ def _render_why_selected(data: _TourData) -> None:
             "Later, the weak-supervision verifier rejected this frame as too crowded to "
             "label automatically — step 7 shows why that matters."
         )
-    floor_text = (
-        "a night floor takes a minimum number of night frames first"
-        if night_floor is None
-        else f"a night floor takes {night_floor} night frames first"
-    )
-    st.markdown(
-        f"Nothing about this frame on its own selected it: its community carried failure "
-        f"mass, that mass bought the community a quota, the frame ranked high enough "
-        f"inside it by similarity — and {floor_text}."
-    )
     n_selected = int(data.validation.get("n_selected", len(data.explain)))
     provenance(
         "reproduced",
         f"demo al-explain reproduced the run: {n_selected:,} frames, "
         f"{n_communities} communities",
     )
+    st.caption(_ARCHITECTURE_STRIP)
     if st.button("Open this frame in Active Learning →", key="tour_open_al_frame"):
         _open("active_learning", al_frame_token=token)
 
@@ -1138,14 +1176,14 @@ _STEPS: tuple[_Step, ...] = (
     ),
     _Step(
         key="mine",
-        title="Find more like it",
+        title="Where else does this happen?",
         stage="Mine",
         render=_render_mine,
         links=(("scenarios", "Scenario Search — every preset, every matching event"),),
     ),
     _Step(
         key="why_selected",
-        title="Why this frame was picked",
+        title="What data should we add?",
         stage="Mine",
         render=_render_why_selected,
         links=(("active_learning", "Active Learning — the whole mined set and its communities"),),
