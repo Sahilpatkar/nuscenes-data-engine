@@ -1,5 +1,9 @@
 """Guided tour — the demo's default 2-3 minute path through the loop (Phase 9a,
-docs/superpowers/specs/2026-08-22-demo-phase9a-design.md §1).
+docs/superpowers/specs/2026-08-22-demo-phase9a-design.md §1), retold as *problem →
+intervention → impact* by Phase 10
+(docs/superpowers/specs/2026-08-23-demo-phase10-design.md §2): the page itself
+renders as "From model failure to better training data" and its steps carry the
+story titles below, while the sidebar entry main.py registers stays "Guided tour".
 
 Seven steps, one screen each: the weakness, the frame it shows up on, mining for
 more like it, why one mined frame was picked, the retrain, the same kind of frame
@@ -23,6 +27,7 @@ import pandas as pd
 import streamlit as st
 from filters import (
     FILMSTRIP_STEPS,
+    arm_story_label,
     failure_flags,
     filmstrip_steps,
     fixed_boxes,
@@ -47,6 +52,8 @@ from render import (
     curve_caption,
     curve_charts,
     draw_overlay,
+    learned,
+    legend,
     loop_breadcrumb,
     metric_cards,
     provenance,
@@ -112,6 +119,13 @@ _OVERLAY_LEGEND = (
     "Green = ground truth, orange dashed = a GT box this model missed, white = its "
     "true positives, yellow dotted = a claim below the confidence floor, red = a "
     "false positive."
+)
+# Step 1: what the frame IS (written only where the manifest says so), and the
+# question it hands to the mining steps.
+_HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
+_BRIDGE_TO_MINING = (
+    "Finding one failure is easy — the hard part is finding the rest of the dataset "
+    "where the same thing happens."
 )
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
 _NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
@@ -222,6 +236,7 @@ def _render_weakness(data: _TourData) -> None:
         st.info(STALE_PACKAGE_NOTE)
         return
     row = rows.iloc[0]
+    st.subheader("Aggregate accuracy was hiding a night-driving blind spot.")
 
     cards = [
         ("Overall mAP50-95", f"{row['overall_map5095']:.4f}"),
@@ -231,7 +246,8 @@ def _render_weakness(data: _TourData) -> None:
     # arms move. It is absent (or NA) on a package whose eval never wrote per-class
     # night metrics, and an absent card is better than a card reading "nan".
     night_ped = row.get("night_ped_map5095")
-    if night_ped is not None and bool(pd.notna(night_ped)):
+    has_night_ped = night_ped is not None and bool(pd.notna(night_ped))
+    if has_night_ped:
         cards.append(("Night pedestrian mAP50-95", f"{float(night_ped):.4f}"))
     metric_cards(cards)
 
@@ -252,12 +268,19 @@ def _render_weakness(data: _TourData) -> None:
             f"frame counts from frame_manifest/gt_boxes/predictions ({n_val} curated "
             "val frames)"
         )
-    st.markdown(
-        f"A single overall number hides where a detector fails; the sliced evaluation "
-        f"shows it — `{data.baseline}` scores {row['overall_map5095']:.4f} mAP50-95 "
-        f"overall and {row['night_map5095']:.4f} at night. Night is the weakness this "
-        f"tour follows: it is what the next steps mine for, retrain on, and measure."
+    # One sentence off the same baseline row the cards are read from -- and the
+    # night-pedestrian clause is dropped on a package that has no such number,
+    # exactly as its card is (a sentence must not out-claim the cards above it).
+    night_ped_clause = (
+        f" — and {float(night_ped):.4f} on night pedestrians, the case that matters most"
+        if has_night_ped
+        else ""
     )
+    st.markdown(
+        f"`{data.baseline}` scores {row['overall_map5095']:.4f} mAP50-95 overall but "
+        f"{row['night_map5095']:.4f} at night{night_ped_clause}."
+    )
+    learned("Aggregate metrics hide important failure slices.")
     provenance("recorded", "mAP from active_learning_results.parquet")
     if recomputed_detail:
         provenance("recomputed", recomputed_detail)
@@ -292,8 +315,8 @@ def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str)
     conf, status = claim
     if status == "low_conf":
         return (
-            f"{conf:.3f} (low_conf — below the {_CONF_HIT_FLOOR:.2f} hit floor; the "
-            "matching rule still counts it as a hit)"
+            f"{conf:.3f} (low-confidence — below the {_CONF_HIT_FLOOR:.2f} hit floor; "
+            "the matching rule still counts it as a hit)"
         )
     return f"{conf:.3f} ({status})"
 
@@ -313,7 +336,7 @@ def _pedestrian_facts(
         if distance is not None and bool(pd.notna(distance)):
             where = f" at {float(distance):.1f} m"
         claims = " · ".join(
-            f"{model_label(model)}: "
+            f"{arm_story_label(model)}: "
             + _claim_text(
                 data.preds, token=token, model=model, annotation=str(row.annotation_token)
             )
@@ -375,10 +398,15 @@ def _render_missed_pedestrian(data: _TourData) -> None:
         st.info(_NO_HERO_CROP_NOTE)
         return
 
+    st.subheader("Here the baseline misses a pedestrian at night.")
     models = [name for name in (data.baseline, data.arm) if name is not None]
     model = (
         st.radio(
-            "Model", models, key="tour_hero_model", horizontal=True, format_func=model_label
+            "Model",
+            models,
+            key="tour_hero_model",
+            horizontal=True,
+            format_func=arm_story_label,
         )
         or models[0]
     )
@@ -396,13 +424,21 @@ def _render_missed_pedestrian(data: _TourData) -> None:
         ),
         width="stretch",
     )
+    legend()
     st.caption(HERO_CAPTION)
+    # Said only where the manifest says it: the hero is the curated val split's own
+    # frame on the shipped package, but a package that staged it as a train-pool
+    # frame must not be told it was held out.
+    hero_rows = data.manifest.loc[data.manifest["sample_data_token"].astype(str) == hero]
+    if not hero_rows.empty and str(hero_rows.iloc[0].get("split")) == "val":
+        st.caption(_HELD_OUT_CAPTION)
 
     for line in _pedestrian_facts(data, token=hero, gt_rows=gt_rows, models=models):
         st.markdown(line)
     sentence = _miss_to_hit_sentence(data, hero)
     if sentence:
         st.markdown(sentence)
+    st.markdown(f":gray[{_BRIDGE_TO_MINING}]")
     provenance("recomputed", "boxes, claims and counts from gt_boxes/predictions")
 
 
@@ -1088,14 +1124,14 @@ def _render_result(data: _TourData) -> None:
 _STEPS: tuple[_Step, ...] = (
     _Step(
         key="weakness",
-        title="The weakness: night",
+        title="We found a blind spot",
         stage="Diagnose",
         render=_render_weakness,
         links=(("failures", "Failure Explorer — the whole val split, filterable"),),
     ),
     _Step(
         key="missed_pedestrian",
-        title="One missed pedestrian",
+        title="What the failure looks like",
         stage="Diagnose",
         render=_render_missed_pedestrian,
         links=(("failures", "Failure Explorer — the same overlay on every val frame"),),
@@ -1182,7 +1218,11 @@ def _render_go_deeper(step: _Step) -> None:
 
 
 def render() -> None:
-    st.title("Guided tour")
+    st.title("From model failure to better training data")
+    st.caption(
+        "See how the data engine finds a perception weakness, mines targeted AV "
+        "scenarios, and measures whether retraining fixes it."
+    )
     data = _load()
     step = _current_step()
     st.session_state[TOUR_STEP_KEY] = step

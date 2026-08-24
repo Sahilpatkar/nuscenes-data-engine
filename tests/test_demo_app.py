@@ -3241,7 +3241,9 @@ def test_overview_cta_switches_to_the_tour(
 
     at.button(key="overview_start_tour").click().run(timeout=30)
     assert not at.exception
-    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    assert [str(title.value) for title in at.title] == [
+        "From model failure to better training data"
+    ]
     assert at.session_state["tour_step"] == 0
 
 
@@ -3727,7 +3729,7 @@ def test_chat_replay_page_on_a_pre_0_7_package(
 # cannot address it -- the initial at.run() lands there instead, which is what
 # test_navigation_sections_keep_every_page_reachable asserts first.
 _SECTIONED_PAGES = (
-    ("views/tour.py", "Guided tour"),
+    ("views/tour.py", "From model failure to better training data"),
     ("views/failures.py", "Failure Explorer"),
     ("views/scenarios.py", "Scenario Search"),
     ("views/active_learning.py", "Active Learning"),
@@ -3759,9 +3761,20 @@ def test_tour_walks_steps_0_and_1(
     at = _tour_apptest(built_demo_data, monkeypatch)
     assert not at.exception
 
-    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    assert [str(title.value) for title in at.title] == [
+        "From model failure to better training data"
+    ]
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 1 of 7 · The weakness: night") for text in captions)
+    assert any(text.startswith("Step 1 of 7 · We found a blind spot") for text in captions)
+    # the page's subtitle, written directly under the title
+    assert any(
+        text.startswith("See how the data engine finds a perception weakness")
+        for text in captions
+    )
+    # (step 0) the headline the three cards are the evidence for
+    assert [str(head.value) for head in at.subheader] == [
+        "Aggregate accuracy was hiding a night-driving blind spot."
+    ]
 
     # The nav row is drawn FIRST, and Back is dead on the first step.
     assert at.button(key="tour_back").disabled is True
@@ -3781,6 +3794,19 @@ def test_tour_walks_steps_0_and_1(
         "1 of 1 night validation frames carry at least one baseline miss" in text
         for text in markdowns
     )
+    # (step 0) the single derived sentence: all three numbers off the same baseline
+    # row the cards are read from (0.2000 / 0.1000 / ped 0.0500).
+    assert any(
+        "`baseline` scores 0.2000 mAP50-95 overall but 0.1000 at night — and 0.0500 "
+        "on night pedestrians, the case that matters most." in text
+        for text in markdowns
+    )
+    # ... closed by the takeaway callout
+    assert any(
+        ":material/school:" in text
+        and "Aggregate metrics hide important failure slices." in text
+        for text in markdowns
+    )
     # the breadcrumb lights this step's stage only
     assert any(
         ":orange-badge[Diagnose]" in text and ":gray-badge[Mine]" in text for text in markdowns
@@ -3798,23 +3824,43 @@ def test_tour_walks_steps_0_and_1(
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 2 of 7 · One missed pedestrian") for text in captions)
+    assert any(
+        text.startswith("Step 2 of 7 · What the failure looks like") for text in captions
+    )
     # Back is live in the SAME run the click landed in: the buttons move tour_step in
     # an on_click callback, which streamlit runs BEFORE the script redraws the nav row
     # (mutating it inline after the row is drawn would leave Back greyed out on the
     # step the viewer just walked into).
     assert at.button(key="tour_back").disabled is False
 
-    assert at.radio(key="tour_hero_model").options == ["baseline", "graph_rate_night"]
+    # the step's own headline, and the toggle's two arms under their story names
+    # (the widget KEY is untouched -- only how the options read).
+    assert [str(head.value) for head in at.subheader] == [
+        "Here the baseline misses a pedestrian at night."
+    ]
+    assert at.radio(key="tour_hero_model").options == [
+        "Baseline (no mined data)",
+        "Graph + night targeting",
+    ]
     assert len(at.image) == 1
     assert any("defeats all five models" in text for text in captions)
+    # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
+    assert "Held-out validation frame — never in any training set" in captions
 
     markdowns = [str(block.value) for block in at.markdown]
-    # the derived fact line: baseline never claims v0's pedestrian (a2);
-    # graph_rate_night claims it at conf 0.80 (a plain tp in this fixture).
+    # the compact badge legend, under the overlay
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    # the derived fact line, each model under its story label: baseline never claims
+    # v0's pedestrian (a2); graph_rate_night claims it at conf 0.80 (a plain tp here).
     assert any(
-        "Pedestrian" in text and "baseline: no claim" in text
-        and "graph_rate_night: 0.800" in text
+        "Pedestrian" in text and "Baseline (no mined data): no claim" in text
+        and "Graph + night targeting: 0.800" in text
+        for text in markdowns
+    )
+    # the bridge out of one frame and into the mining steps
+    assert any(
+        "Finding one failure is easy — the hard part is finding the rest of the "
+        "dataset where the same thing happens." in text
         for text in markdowns
     )
     # and the counted (never assumed) miss -> hit claim
@@ -3825,7 +3871,7 @@ def test_tour_walks_steps_0_and_1(
     at.button(key="tour_back").click().run(timeout=30)
     assert not at.exception
     assert any(
-        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        str(caption.value).startswith("Step 1 of 7 · We found a blind spot")
         for caption in at.caption
     )
 
@@ -4059,7 +4105,7 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     at.button(key="tour_restart").click().run(timeout=30)
     assert not at.exception
     assert any(
-        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        str(caption.value).startswith("Step 1 of 7 · We found a blind spot")
         for caption in at.caption
     )
 
@@ -4107,8 +4153,8 @@ def test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf(
     assert not at.exception
     markdowns = [str(block.value) for block in at.markdown]
     assert any(
-        "graph_rate_night: 0.135 (low_conf — below the 0.40 hit floor; the matching "
-        "rule still counts it as a hit)" in text
+        "Graph + night targeting: 0.135 (low-confidence — below the 0.40 hit floor; "
+        "the matching rule still counts it as a hit)" in text
         for text in markdowns
     )
 
