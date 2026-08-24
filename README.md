@@ -36,7 +36,7 @@ screen as recorded: the public app never runs a model or calls an LLM.
 
 | | |
 |---|---|
-| ![Guided tour](docs/img/demo-tour.png)<br>**Guided tour** — the 2-3 minute default path through the loop, ending in a result screen | ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame |
+| ![Guided tour](docs/img/demo-tour.png)<br>**Guided tour** — "From model failure to better training data": the 2-3 minute default path from the night blind spot to the measured result | ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame |
 | ![Failure Explorer](docs/img/demo-failures.png)<br>**Failure Explorer** — image-first detail, the model toggle beside the GT/prediction overlay | ![Scenario Search](docs/img/demo-scenarios.png)<br>**Scenario Search** — preset queries, a one-screen event viewer with the CAN speed/accel curve, and a graph panel that reveals the matched path step by step |
 | ![Active Learning](docs/img/demo-active-learning.png)<br>**Active Learning** — three acquisition strategies compared, per-frame reason chips, all 13 arms, before/after | ![Weak Supervision](docs/img/demo-weak-supervision.png)<br>**Weak Supervision** — one frame in three views, the loss split, and where the VLM's counting breaks down |
 | ![Ask the Dataset](docs/img/demo-chat-replay.png)<br>**Ask the Dataset (recorded)** — recorded agent answers with their tool calls | |
@@ -53,9 +53,9 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
 FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
-two-job CI (quality + CPU smoke-train). **Demo phases 1–9b shipped:** the guided
-tour plus six-page public demo above runs entirely off the committed `demo_data/`
-package and is deployable to Streamlit Community Cloud.
+two-job CI (quality + CPU smoke-train). **Demo phases 1–10 shipped:** a story-led
+guided tour plus the six-page public demo above runs entirely off the committed
+`demo_data/` package and is deployable to Streamlit Community Cloud.
 
 ## Architecture
 
@@ -345,7 +345,7 @@ picker after the first PR run).
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine: `graph_rate_night` **+0.0101 night mAP50-95** |
 | 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
-| Demo 1-9a ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a guided tour plus six story pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
+| Demo 1-10 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
 
 | B ✅ | Geo-spatial + CAN bus | Ego pose, all 1.17M 3D boxes, and keyframe-aligned CAN dynamics → Parquet, DuckDB, and Neo4j `EgoPose`/`ObjectObservation` nodes. *"Hard braking with a pedestrian within 10 m"* answers **30, identically in SQL and Cypher**; CAN speed cross-checks against GT pose at r = 0.999 — see [DATA.md](docs/DATA.md), [GRAPH.md](docs/GRAPH.md) |
 

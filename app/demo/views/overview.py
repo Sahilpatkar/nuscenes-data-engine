@@ -17,7 +17,7 @@ import pandas as pd
 import streamlit as st
 from filters import visible_gt
 from PIL import Image
-from render import draw_overlay, loop_breadcrumb, metric_cards, provenance
+from render import draw_overlay, legend, loop_breadcrumb, metric_cards, provenance
 
 from data import (
     crop_path,
@@ -303,6 +303,11 @@ def render() -> None:
         overlay = _hero_overlay(hero_token) if hero_token else None
         if overlay is not None:
             st.image(overlay, caption=HERO_CAPTION)
+            # Only under the LIVE overlay (Phase 10 spec sec3, review amendment):
+            # the legend describes the colours draw_overlay just drew. The fallback
+            # below is YOLO's own val-batch mosaic, drawn in YOLO's colours, and
+            # this legend would misdescribe it.
+            legend()
         else:
             st.image(str(hero_path()), caption="Validation-batch predictions (baseline yolov8n)")
         provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")

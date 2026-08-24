@@ -1462,6 +1462,13 @@ def test_failure_explorer_model_radio_sits_beside_the_image(
     at.run(timeout=30)
     assert not at.exception
     assert len(at.dataframe[0].value) == 3
+    # Phase 10 spec sec3 (review amendment): the overlay this radio drives carries
+    # the same badge legend the tour and Active Learning pages do -- "use the same
+    # colors everywhere" (brief sec22) was true of the boxes, but the page that
+    # exists to read them said nothing about what they mean.
+    assert any(
+        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+    )
     at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
     assert not at.exception
     assert len(at.dataframe[0].value) == 4
@@ -1656,6 +1663,12 @@ def test_overview_hero_renders_overlay(
     # (or a wrong caption) fails loudly instead of silently matching either path.
     hero_captions = [caption for img in at.image for caption in img.captions]
     assert any("defeats all five models" in caption for caption in hero_captions)
+    # Phase 10 spec sec3 (review amendment): the hero is a full prediction overlay,
+    # so the same badge legend renders under it -- and only under the LIVE overlay,
+    # never under the plain val-batch fallback, whose colours are YOLO's, not ours.
+    assert any(
+        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+    )
 
 
 def test_overview_hero_overlay_keeps_a_gt_box_whose_visibility_flag_is_na(
@@ -2665,6 +2678,11 @@ def test_active_learning_page_renders_story_chart_and_exemplar_table(
     assert len(tables[0]) >= 1
     assert list(tables[0]["baseline_claim"]) == ["none"]
 
+    # (e) the overlay legend under that panel is the shared badge component (Phase 10
+    # spec sec3), not this page's own prose copy of the colour rules.
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    assert not any("orange dashed = a GT box" in str(c.value) for c in at.caption)
+
 
 def test_active_learning_page_explain_absent_note(
     built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
@@ -3241,7 +3259,9 @@ def test_overview_cta_switches_to_the_tour(
 
     at.button(key="overview_start_tour").click().run(timeout=30)
     assert not at.exception
-    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    assert [str(title.value) for title in at.title] == [
+        "From model failure to better training data"
+    ]
     assert at.session_state["tour_step"] == 0
 
 
@@ -3355,6 +3375,14 @@ def test_weak_supervision_one_frame_three_views(
         "held-out val frame — neither detector saw it in training" in caption
         for caption in page_captions
     )
+    # row 2's colour key is the shared badge legend (Phase 10 spec sec3), not this
+    # page's own prose copy of it; row 1's pseudo-box legend is a different claim
+    # ("what a pseudo box IS") and stays a caption.
+    assert any(
+        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+    )
+    assert not any("orange dashed = a GT box" in caption for caption in page_captions)
+    assert any("Blue = a pseudo-label box" in caption for caption in page_captions)
     # the inference is RECORDED output of an offline run, labelled as such
     assert any(
         "demo infer, CPU, checkpoint of the training run" in caption
@@ -3727,7 +3755,7 @@ def test_chat_replay_page_on_a_pre_0_7_package(
 # cannot address it -- the initial at.run() lands there instead, which is what
 # test_navigation_sections_keep_every_page_reachable asserts first.
 _SECTIONED_PAGES = (
-    ("views/tour.py", "Guided tour"),
+    ("views/tour.py", "From model failure to better training data"),
     ("views/failures.py", "Failure Explorer"),
     ("views/scenarios.py", "Scenario Search"),
     ("views/active_learning.py", "Active Learning"),
@@ -3759,9 +3787,20 @@ def test_tour_walks_steps_0_and_1(
     at = _tour_apptest(built_demo_data, monkeypatch)
     assert not at.exception
 
-    assert [str(title.value) for title in at.title] == ["Guided tour"]
+    assert [str(title.value) for title in at.title] == [
+        "From model failure to better training data"
+    ]
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 1 of 7 · The weakness: night") for text in captions)
+    assert any(text.startswith("Step 1 of 7 · We found a blind spot") for text in captions)
+    # the page's subtitle, written directly under the title
+    assert any(
+        text.startswith("See how the data engine finds a perception weakness")
+        for text in captions
+    )
+    # (step 0) the headline the three cards are the evidence for
+    assert [str(head.value) for head in at.subheader] == [
+        "Aggregate accuracy was hiding a night-driving blind spot."
+    ]
 
     # The nav row is drawn FIRST, and Back is dead on the first step.
     assert at.button(key="tour_back").disabled is True
@@ -3781,6 +3820,19 @@ def test_tour_walks_steps_0_and_1(
         "1 of 1 night validation frames carry at least one baseline miss" in text
         for text in markdowns
     )
+    # (step 0) the single derived sentence: all three numbers off the same baseline
+    # row the cards are read from (0.2000 / 0.1000 / ped 0.0500).
+    assert any(
+        "`baseline` scores 0.2000 mAP50-95 overall but 0.1000 at night — and 0.0500 "
+        "on night pedestrians, the case that matters most." in text
+        for text in markdowns
+    )
+    # ... closed by the takeaway callout
+    assert any(
+        ":material/school:" in text
+        and "Aggregate metrics hide important failure slices." in text
+        for text in markdowns
+    )
     # the breadcrumb lights this step's stage only
     assert any(
         ":orange-badge[Diagnose]" in text and ":gray-badge[Mine]" in text for text in markdowns
@@ -3798,23 +3850,46 @@ def test_tour_walks_steps_0_and_1(
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 2 of 7 · One missed pedestrian") for text in captions)
+    assert any(
+        text.startswith("Step 2 of 7 · What the failure looks like") for text in captions
+    )
     # Back is live in the SAME run the click landed in: the buttons move tour_step in
     # an on_click callback, which streamlit runs BEFORE the script redraws the nav row
     # (mutating it inline after the row is drawn would leave Back greyed out on the
     # step the viewer just walked into).
     assert at.button(key="tour_back").disabled is False
 
-    assert at.radio(key="tour_hero_model").options == ["baseline", "graph_rate_night"]
+    # the step's own headline, and the toggle's two arms under their story names
+    # (the widget KEY is untouched -- only how the options read).
+    assert [str(head.value) for head in at.subheader] == [
+        "Here the baseline misses a pedestrian at night."
+    ]
+    assert at.radio(key="tour_hero_model").options == [
+        "Baseline (no mined data)",
+        "Graph + night targeting",
+    ]
     assert len(at.image) == 1
     assert any("defeats all five models" in text for text in captions)
+    # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
+    assert "Held-out validation frame — never in any training set" in captions
 
     markdowns = [str(block.value) for block in at.markdown]
-    # the derived fact line: baseline never claims v0's pedestrian (a2);
-    # graph_rate_night claims it at conf 0.80 (a plain tp in this fixture).
+    # the compact badge legend, under the overlay
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    # the derived fact line, each model under its story label: baseline never claims
+    # v0's pedestrian (a2); graph_rate_night claims it at conf 0.80 -- a plain `tp`
+    # in the table, written out as the words a viewer can read (review M3: the raw
+    # status code used to be printed as-is, beside a low_conf branch that spelled
+    # itself out in full).
     assert any(
-        "Pedestrian" in text and "baseline: no claim" in text
-        and "graph_rate_night: 0.800" in text
+        "Pedestrian" in text and "Baseline (no mined data): no claim" in text
+        and "Graph + night targeting: 0.800 (confident detection)" in text
+        for text in markdowns
+    )
+    # the bridge out of one frame and into the mining steps
+    assert any(
+        "Finding one failure is easy — the hard part is finding the rest of the "
+        "dataset where the same thing happens." in text
         for text in markdowns
     )
     # and the counted (never assumed) miss -> hit claim
@@ -3825,7 +3900,7 @@ def test_tour_walks_steps_0_and_1(
     at.button(key="tour_back").click().run(timeout=30)
     assert not at.exception
     assert any(
-        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        str(caption.value).startswith("Step 1 of 7 · We found a blind spot")
         for caption in at.caption
     )
 
@@ -3859,12 +3934,18 @@ def test_tour_walks_steps_2_to_5(
     pytest.importorskip("streamlit")
     at = _tour_apptest(built_demo_data, monkeypatch)
 
-    # --- step 2: "Find more like it" -----------------------------------------------
+    # --- step 2: "Where else does this happen?" ------------------------------------
     _walk_to_step(at, 2)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 3 of 7 · Find more like it") for text in captions)
+    assert any(
+        text.startswith("Step 3 of 7 · Where else does this happen?") for text in captions
+    )
+    # the headline the event, its filmstrip and its curves are the evidence for
+    assert [str(head.value) for head in at.subheader] == [
+        "Is this one bad photo, or a recurring driving scenario?"
+    ]
     # the fixture's only hard_braking_near_pedestrians event: "s1", scene-X, its own
     # severity figure (accel_long_min_mps2 = -7.5) and its near-pedestrian facts
     # (f1 at 5m within 10m, f2 at 20m outside it).
@@ -3876,27 +3957,71 @@ def test_tour_walks_steps_2_to_5(
     assert any("found · SQL 1 / Graph 1 ✓" in text for text in captions)
     # the counted night line: s1 is a day event, so 0 of the 1 matching events
     assert any("0 of 1 matching events are at night" in text for text in markdowns)
+    # the one mechanism sentence: what the search matched on to find those events
+    assert any(
+        "The system searches driving context — night, braking, pedestrians near the "
+        "ego — not just similar-looking images." in text
+        for text in markdowns
+    )
+    # ... closed by the step's takeaway callout
+    assert any(
+        ":material/school:" in text
+        and "Perception failures must be analyzed in driving context." in text
+        for text in markdowns
+    )
     assert "Scenario Search" in str(at.button(key="tour_open_event").label)
 
-    # --- step 3: "Why this frame was picked" ---------------------------------------
+    # --- step 3: "What data should we add?" ----------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 4 of 7 · Why this frame was picked") for text in captions)
-    # selection_factors, rendered exactly as the Active Learning page renders them --
-    # the fixture's first candidate frame was taken by the night pass (floor 1).
+    assert any(
+        text.startswith("Step 4 of 7 · What data should we add?") for text in captions
+    )
+    assert [str(head.value) for head in at.subheader] == [
+        "Thousands of candidate training frames — which are worth labelling?"
+    ]
+    # the one-line selection path, above the fold that details it
+    assert any(
+        "**failed val frame → similarity community → representative train-pool "
+        "frames → selected for retraining**" in text
+        for text in markdowns
+    )
+    # selection_factors, rendered exactly as the Active Learning page renders them
+    # (the fixture's first candidate frame was taken by the night pass, floor 1) --
+    # folded away now: mechanism detail, not the step's headline claim.
     assert any(text.startswith("**Night frame:** yes ✓") for text in markdowns)
     assert any("**Picked in:** night pass (night floor 1)" in text for text in markdowns)
+    fold = next(block for block in at.expander if block.label == "How selection works")
+    folded = [str(block.value) for block in fold.markdown]
+    assert any(text.startswith("**Night frame:** yes ✓") for text in folded)
+    assert any("Nothing about this frame on its own selected it" in text for text in folded)
     # the selection is REPRODUCED (demo al-explain), not recomputed or recorded
     assert any("reproduced selection" in text for text in captions)
+    # the whole system path, in one grey line under the step
+    assert any(
+        text.startswith(
+            "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure "
+            "analysis → scenario search → active learning → YOLO retraining → evaluation"
+        )
+        for text in captions
+    )
     assert "Active Learning" in str(at.button(key="tour_open_al_frame").label)
 
-    # --- step 4: "Retrain on what was found" ---------------------------------------
+    # --- step 4: "We changed the training data" ------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 5 of 7 · Retrain on what was found") for text in captions)
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        text.startswith("Step 5 of 7 · We changed the training data") for text in captions
+    )
+    # the intervention headline -- a claim the composition line under the cards
+    # then supports with this package's own night shares
+    assert [str(head.value) for head in at.subheader] == [
+        "We did not just add data — we changed what the model trains on."
+    ]
     # the fixture arm table: baseline 100 -> graph_rate_night 120 train images, and
     # the arm's own mined-set composition (1 scene, all-night).
     assert [str(metric.label) for metric in at.metric] == [
@@ -3908,28 +4033,268 @@ def test_tour_walks_steps_2_to_5(
     # (Phase 9a final review), so the mined total moves to the delta instead.
     assert [str(metric.value) for metric in at.metric] == ["20", "1", "100%", "120"]
     assert str(at.metric[3].delta) == "+20 mined frames"
+    # WHAT changed, from the arms table's own night shares (arm 1.0, random 0.0) --
+    # and no similarity clause, because this package never ran `mined`. Every arm on
+    # this screen is named by its story label and nothing else (review M6: the line
+    # used to call the tour's arm "Targeted mining" while the chart beside it called
+    # the same arm "Graph + night targeting" and the caption under that called it
+    # `graph_rate_night`).
+    assert (
+        "Graph + night targeting: **100% night** · Random sample — control: "
+        "**0% night**" in markdowns
+    )
+    assert not any("Targeted mining" in text for text in markdowns)
+    assert not any("Similarity mining:" in text for text in markdowns)
+    # ONE chart, and it is the five-strategy story chart (story labels on the axis),
+    # not the deep page's 13-arm chart: the fixture carries three of the strategies.
     assert len(at.get("vega_lite_chart")) == 1
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 1
+    assert list(drawn[0]["strategy"]) == [
+        "Baseline (no mined data)",
+        "Random sample — control",
+        "Graph + night targeting",
+    ]
+    assert "Δ night mAP50-95" in _all_y_titles(at)
+    # ... tilted like the deep page's arm charts (review M5): five story labels
+    # ("Random sample — control" is 23 characters) collide when drawn flat.
+    assert _chart_specs(at)[0]["layer"][0]["encoding"]["x"]["axis"]["labelAngle"] == -45
+    # the raw ids stay on screen, in small text under the chart
+    assert any(
+        "Baseline (no mined data) (`baseline`) · Random sample — control (`random`) · "
+        "Graph + night targeting (`graph_rate_night`)" in text
+        for text in captions
+    )
+    # the fairness statement. The fixture's charted arms do NOT share a budget
+    # (random 115 vs graph_rate_night 120 train images), so no frame count is
+    # claimed -- test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran
+    # pins the other branch.
+    assert (
+        "Same detector · same budget · same training configuration · scored on the "
+        "same held-out split — Random sample is the control." in markdowns
+    )
+    # the winner is computed over the WHOLE arm table, not asserted
+    assert (
+        "Best intervention for the diagnosed night weakness: **Graph + night "
+        "targeting** (`graph_rate_night`, +0.0300 night)." in markdowns
+    )
+    # the mined set's spread, with the noun agreeing: one scene here, so the
+    # "not near-duplicates" clause (true only of a many-scene set) is not written
+    assert "The 20 frames came from 1 scene." in markdowns
+    assert not any("near-duplicates" in text for text in markdowns)
+    # ... and no similarity explanation: there is no `mined` arm to say it about
+    assert not any("Visual similarity alone" in text for text in captions)
     assert any("recorded experiment output" in text for text in captions)
 
-    # --- step 5: "Same kind of frame, after" ---------------------------------------
+    # --- step 5: "Did it fix the failure?" ------------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 6 of 7 · Same kind of frame, after") for text in captions)
-    assert at.radio(key="tour_exemplar_model").options == ["baseline", "graph_rate_night"]
-    assert len(at.image) == 1
-    # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
-    # graph_rate_night claims it at 0.80.
-    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
-    assert len(tables) == 1
+    assert any(text.startswith("Step 6 of 7 · Did it fix the failure?") for text in captions)
+    assert [str(head.value) for head in at.subheader] == [
+        "Did the targeted retraining fix the kind of failure we started with?"
+    ]
+    # The model radio retires here (Phase 10 spec sec2 row 5): a before/after is two
+    # pictures, not one picture and a control the viewer has to work. The deep page
+    # keeps its own radio, and "Open this exemplar in Active Learning" is the way in.
+    assert "tour_exemplar_model" not in [radio.key for radio in at.radio]
+    assert len(at.image) == 2
+    # Each caption carries the story label AND the raw arm id (review I1): step 5
+    # was the one screen fronting an arm by a readable name with the identifier it
+    # stands for nowhere on it.
+    assert "Baseline (no mined data) (`baseline`)" in captions
+    assert "Graph + night targeting (`graph_rate_night`)" in captions
+    # the derived before/after callout, read verbatim off the frame's own claim
+    # strings: baseline never claims v0's pedestrian (a2), the arm claims it at 0.80.
+    assert [str(metric.label) for metric in at.metric] == [
+        "Before — Baseline (no mined data)",
+        "After — Graph + night targeting",
+    ]
+    assert [str(metric.value) for metric in at.metric] == [
+        "pedestrian: none",
+        "pedestrian: 0.80",
+    ]
+    # the compact badge legend, under the two overlays
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    # the slice the tour diagnosed, stated absolute AND relative (fixture night
+    # pedestrian mAP 0.05 -> 0.09) -- computed by filters.gain_text, never asserted
+    assert any(
+        "Night pedestrian mAP50-95 0.0500 → 0.0900 (+0.0400 absolute, +80.0% relative)"
+        in text
+        for text in markdowns
+    )
     # the result is the arm, not the frame: fixture baseline night 0.10 -> arm 0.13.
     assert any(
         "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
         for text in markdowns
     )
+    # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
+    assert "Held-out validation frame — never in any training set" in captions
+    # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
+    # graph_rate_night claims it at 0.80 -- now folded behind the technical detail
+    # (AppTest walks into expanders, so the table is still reachable here).
+    assert "Technical details — per-box claims" in [
+        str(exp.label) for exp in at.get("expander")
+    ]
+    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
+    assert len(tables) == 1
     assert any("recomputed in this app" in text for text in captions)
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
+
+
+def _add_mined_arm_at_the_shared_budget(built_demo_data: Path) -> None:
+    """Give the built package the similarity-mining arm, at the SAME training-set
+    size as every other charted arm.
+
+    Two things the base fixture cannot show on the retrain step, in one package:
+    the real package's `mined` composition (219 scenes, 0 % night, +0.0072 night --
+    the numbers the §37 explanation is about), and a set of charted arms that all
+    spent the same budget, which is what lets the fairness statement name a frame
+    count at all. Injected the way ``_add_mined_arm`` / ``_add_weak_night_twin_arm``
+    inject theirs: only the columns the step reads are set, the rest come back NaN
+    through ``pd.concat``'s own column align.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "random", "n_train_images"] = 120
+    extra = pd.DataFrame({
+        "arm": ["mined"],
+        "family": ["mined"],
+        "round_order": [int(arms["round_order"].max()) + 1],
+        "n_train_images": [120],
+        "overall_map5095": [0.215],
+        "night_map5095": [0.1072],
+        "delta_overall": [0.015],
+        "delta_night": [0.0072],
+        "n_scenes": pd.array([219], dtype="Int64"),
+        "night_share": [0.0],
+    })
+    pd.concat([arms, extra], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a `mined` row in the package the retrain step gains the fourth bar, its
+    night-share clause, the §37 explanation of what visual similarity alone bought
+    -- and, because every charted arm now shares a training-set size, the fairness
+    statement names the budget instead of just claiming one.
+
+    ``test_tour_walks_steps_2_to_5`` pins the other side of all four branches on the
+    base fixture (no `mined` row, unequal budgets).
+    """
+    pytest.importorskip("streamlit")
+    _add_mined_arm_at_the_shared_budget(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 4)
+    assert not at.exception
+
+    captions = [str(caption.value) for caption in at.caption]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert (
+        "Graph + night targeting: **100% night** · Random sample — control: "
+        "**0% night** · Similarity mining: **0% night**" in markdowns
+    )
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 1
+    assert list(drawn[0]["strategy"]) == [
+        "Baseline (no mined data)",
+        "Random sample — control",
+        "Similarity mining",
+        "Graph + night targeting",
+    ]
+    assert any("Similarity mining (`mined`)" in text for text in captions)
+    # §37: the similarity arm's 0 % night, explained where it is charted
+    assert any(
+        "Visual similarity alone concentrated on daytime appearance (0% night); the "
+        "graph + night-floor arm explicitly preserved night coverage." in text
+        for text in captions
+    )
+    # every charted non-baseline arm is at 120 training images, so the budget is named
+    assert (
+        "Same detector · same 120-frame budget · same training configuration · scored "
+        "on the same held-out split — Random sample is the control." in markdowns
+    )
+    # the winner is still computed: `mined` (+0.0072) does not beat the tour's arm
+    assert (
+        "Best intervention for the diagnosed night weakness: **Graph + night "
+        "targeting** (`graph_rate_night`, +0.0300 night)." in markdowns
+    )
+
+
+def test_tour_retrain_winner_names_whichever_arm_actually_won(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M7a: the winner sentence is COMPUTED over the whole arm table, so an
+    arm the tour never follows must be able to win it.
+
+    Same package as the similarity-mining variant above, with `mined` pushed past
+    the tour's own arm (+0.0500 vs +0.0300 night): the sentence names `mined`, by
+    its story label and its id, and stops naming the arm the tour walks -- which a
+    hard-coded "the arm we followed won" sentence could never do.
+    """
+    pytest.importorskip("streamlit")
+    _add_mined_arm_at_the_shared_budget(built_demo_data)
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "mined", "delta_night"] = 0.05
+    arms.to_parquet(path, index=False)
+
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 4)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    assert (
+        "Best intervention for the diagnosed night weakness: **Similarity mining** "
+        "(`mined`, +0.0500 night)." in markdowns
+    )
+    assert not any("(`graph_rate_night`, +0.0300 night)" in text for text in markdowns)
+
+
+def _make_every_intervention_regress(built_demo_data: Path) -> None:
+    """Rewrite the package so every arm BUT the baseline lost night mAP, the tour's
+    own arm least of all (-0.0100 against `random`'s and the weak arms' -0.0300).
+
+    The baseline's own ``delta_night`` is +0.0000 by construction (it is the
+    comparator), so on a package like this it holds the table's highest night delta
+    -- which is exactly the shape that used to crown it "best intervention".
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] != "baseline", "delta_night"] = -0.03
+    arms.loc[arms["arm"] == "graph_rate_night", "delta_night"] = -0.01
+    arms.to_parquet(path, index=False)
+
+
+def test_tour_retrain_winner_never_crowns_the_baseline(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M2: the baseline is what the interventions are measured AGAINST, not
+    one of them -- it is excluded from the ranking before the winner is picked.
+
+    On a package where every intervention regressed, the baseline's +0.0000 is the
+    table's best night delta, and the old ``idxmax`` over the whole table named it
+    the "best intervention for the diagnosed night weakness" -- a package where
+    nothing worked reading as a package where doing nothing worked. The sentence
+    now names the least-bad MINING arm, and says plainly that none of them beat the
+    baseline.
+    """
+    pytest.importorskip("streamlit")
+    _make_every_intervention_regress(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 4)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    assert (
+        "No intervention beat the baseline on the diagnosed night weakness — the "
+        "closest was **Graph + night targeting** (`graph_rate_night`, -0.0100 "
+        "night)." in markdowns
+    )
+    assert not any("Best intervention" in text for text in markdowns)
+    assert not any("(`baseline`," in text for text in markdowns)
 
 
 def test_tour_step_3_leads_with_the_same_reason_chips(
@@ -3970,10 +4335,28 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     assert not at.exception
 
     captions = [str(caption.value) for caption in at.caption]
-    assert any(
-        text.startswith("Step 7 of 7 · What we found, added, gained") for text in captions
-    )
+    assert any(text.startswith("Step 7 of 7 · Closed the loop") for text in captions)
     assert at.button(key="tour_next").disabled is True
+
+    # The headline is itself a claim about this package: the fixture's arm really
+    # did gain night mAP (delta_night +0.0300 > 0), so the screen may say
+    # "measurable improvement" -- the other branch has its own test below.
+    assert [str(head.value) for head in at.subheader] == [
+        "Closed the loop: weakness → targeted data → measurable improvement"
+    ]
+    # The three hero numbers, each derived from the arm table: 120 - 100 training
+    # images, the arm's own night share against the random control's, and the
+    # diagnosed slice (0.0500 → 0.0900) stated relative with its absolute pair.
+    assert [(str(metric.label), str(metric.value)) for metric in at.metric] == [
+        ("Targeted frames added", "20"),
+        ("Night share of mined data", "100%"),
+        ("Night-pedestrian mAP50-95", "+80.0% relative"),
+    ]
+    assert str(at.metric[1].delta) == "vs 0% random control"
+    # the delta states the absolute gain alone (review M5): the full
+    # "0.0500 → 0.0900" arrow is already in answer 3's own sentence below, and the
+    # doubled figure overflowed a 1-of-3 st.metric delta line.
+    assert str(at.metric[2].delta) == "+0.0400 absolute"
 
     markdowns = [str(block.value) for block in at.markdown]
     for heading in (
@@ -4007,6 +4390,10 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
         for text in markdowns
     )
     assert not any("similarity mining" in text for text in markdowns)
+    # ... and with no `mined` row there is nothing for the sec37 explanation to be
+    # about either (test_tour_result_screen_explains_the_daytime_similarity_arm
+    # pins the branch that writes it).
+    assert not any("Visual similarity alone" in text for text in markdowns)
 
     # (3) did it improve -- the same night-mAP sentence step 5 shows, the night
     # pedestrian slice, and the overall delta (the fixture's best-overall arm IS
@@ -4015,7 +4402,11 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
         "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
         for text in markdowns
     )
-    assert any("Night pedestrian mAP50-95 0.0500 → 0.0900." in text for text in markdowns)
+    assert any(
+        "Night pedestrian mAP50-95 0.0500 → 0.0900 (+0.0400 absolute, +80.0% relative)"
+        in text
+        for text in markdowns
+    )
     assert any("Overall mAP50-95 +0.0300 against baseline." in text for text in markdowns)
     assert not any("best overall arm" in text for text in markdowns)
 
@@ -4051,16 +4442,177 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     assert "recorded experiment output" in provenance_captions
     assert "recomputed in this app" in provenance_captions
 
+    # the one sentence the whole tour is evidence for, under the four answers
+    assert any(
+        "**The system demonstrated a repeatable way to turn model failures into "
+        "data decisions.**" in text
+        for text in markdowns
+    )
+
     # "Go deeper" -> every page but the tour itself
     links = [str(link.proto.label) for link in at.get("page_link")]
     assert len(links) >= 6
+    # Every label is a story sentence behind its page name, and none of them
+    # hard-codes a count: a static label cannot be re-derived when the package
+    # changes, so a number in one would be the only unchecked figure in the tour.
+    assert all(" — " in label for label in links)
+    assert not any(character.isdigit() for label in links for character in label)
 
     # --- Restart -> step 0 ------------------------------------------------------
     at.button(key="tour_restart").click().run(timeout=30)
     assert not at.exception
     assert any(
-        str(caption.value).startswith("Step 1 of 7 · The weakness: night")
+        str(caption.value).startswith("Step 1 of 7 · We found a blind spot")
         for caption in at.caption
+    )
+
+
+def _make_the_tour_arm_lose_night(built_demo_data: Path) -> None:
+    """Rewrite the fixture's own arm row into a night REGRESSION (night mAP 0.13 →
+    0.09, delta_night -0.0100), leaving its night-pedestrian slice alone.
+
+    The same ``active_learning_results.parquet`` rewrite
+    ``_add_mined_arm_at_the_shared_budget`` does, one row over: it gives the result
+    screen a package whose headline may not claim an improvement while its hero
+    cards still have real numbers to state.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    row = arms["arm"] == "graph_rate_night"
+    arms.loc[row, "night_map5095"] = 0.09
+    arms.loc[row, "delta_night"] = -0.0100
+    arms.to_parquet(path, index=False)
+
+
+def test_tour_result_screen_says_measured_result_when_the_night_delta_is_not_a_gain(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guarded headline's other branch: an arm that lost night mAP gets
+    "measured result", never "measurable improvement".
+
+    The hero cards still render, and still say what this package recorded -- the
+    night-pedestrian slice was not rewritten, so it is still a gain, and the screen
+    reports that rather than being talked down by the headline.
+    """
+    pytest.importorskip("streamlit")
+    _make_the_tour_arm_lose_night(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    assert [str(head.value) for head in at.subheader] == [
+        "Closed the loop: weakness → targeted data → measured result"
+    ]
+    assert [(str(metric.label), str(metric.value)) for metric in at.metric] == [
+        ("Targeted frames added", "20"),
+        ("Night share of mined data", "100%"),
+        ("Night-pedestrian mAP50-95", "+80.0% relative"),
+    ]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "Night mAP50-95 0.1000 → 0.0900 (-0.0100) on the held-out split" in text
+        for text in markdowns
+    )
+
+
+def test_tour_result_screen_writes_no_headline_when_the_night_delta_is_absent(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M7b: the headline's third branch -- a package that recorded no night
+    delta for its own arm earns neither "measurable improvement" nor "measured
+    result", so the screen opens on its hero numbers with no subheader at all.
+
+    The rest of the screen is unaffected: the night sentence falls back to the
+    difference of the two figures it is already showing (+0.0300), and the hero
+    cards still state what this package did record.
+    """
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "graph_rate_night", "delta_night"] = float("nan")
+    arms.to_parquet(path, index=False)
+
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    assert [str(head.value) for head in at.subheader] == []
+    assert [str(metric.label) for metric in at.metric] == [
+        "Targeted frames added",
+        "Night share of mined data",
+        "Night-pedestrian mAP50-95",
+    ]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
+        for text in markdowns
+    )
+    assert not any("Closed the loop" in text for text in markdowns)
+
+
+def test_tour_result_hero_card_states_the_absolute_gain_when_there_is_no_ratio(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M7c: the night-pedestrian hero card's other branch. With the baseline
+    scoring 0.0000 on the diagnosed slice there is no honest ratio to divide by
+    (``filters.relative_gain`` returns None -- "infinitely better than zero" is not
+    a result), so the card's VALUE falls back to the absolute gain and it carries
+    no delta line at all.
+
+    ``test_tour_result_screen`` pins the relative branch on the base fixture.
+    """
+    pytest.importorskip("streamlit")
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "baseline", "night_ped_map5095"] = 0.0
+    arms.to_parquet(path, index=False)
+
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    assert [(str(metric.label), str(metric.value)) for metric in at.metric] == [
+        ("Targeted frames added", "20"),
+        ("Night share of mined data", "100%"),
+        ("Night-pedestrian mAP50-95", "+0.0900 absolute"),
+    ]
+    assert not str(at.metric[2].delta)
+    # ... and the sentence under the cards drops its relative clause for the same
+    # reason, from the same helper
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        "Night pedestrian mAP50-95 0.0000 → 0.0900 (+0.0900 absolute)" in text
+        for text in markdowns
+    )
+    assert not any("relative)" in text for text in markdowns)
+
+
+def test_tour_result_screen_explains_the_daytime_similarity_arm(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sec37 on the result screen: with a `mined` row whose night share really is
+    0 %, answer 2 says what visual similarity alone bought -- the same sentence the
+    retrain step writes, from the same helper.
+
+    ``test_tour_result_screen`` pins the absence on the base fixture (no `mined`
+    row at all), so both sides of the condition are covered.
+    """
+    pytest.importorskip("streamlit")
+    _add_mined_arm_at_the_shared_budget(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 6)
+    assert not at.exception
+
+    markdowns = [str(block.value) for block in at.markdown]
+    # the comparator clause names that arm's own composition ...
+    assert any(
+        "similarity mining covered 219 scenes at 0% night" in text for text in markdowns
+    )
+    # ... and the sentence after it says why that composition matters here
+    assert any(
+        "Visual similarity alone concentrated on daytime appearance (0% night); the "
+        "graph + night-floor arm explicitly preserved night coverage." in text
+        for text in markdowns
     )
 
 
@@ -4107,8 +4659,8 @@ def test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf(
     assert not at.exception
     markdowns = [str(block.value) for block in at.markdown]
     assert any(
-        "graph_rate_night: 0.135 (low_conf — below the 0.40 hit floor; the matching "
-        "rule still counts it as a hit)" in text
+        "Graph + night targeting: 0.135 (low-confidence — below the 0.40 hit floor; "
+        "the matching rule still counts it as a hit)" in text
         for text in markdowns
     )
 
@@ -4254,16 +4806,10 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
     tour = importlib.import_module("views.tour")
     scenarios = importlib.import_module("views.scenarios")
     active_learning = importlib.import_module("views.active_learning")
-    weak_supervision = importlib.import_module("views.weak_supervision")
     filters = importlib.import_module("filters")
     try:
         # (a) the strings the pages DO name -- compared attribute to attribute
         assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
-        # The overlay legend is now written on THREE pages (the Weak Supervision
-        # page's held-out result row copies it too) -- item M5, Phase 9b
-        # consolidated review: two of the three were compared, so a reword of the
-        # weak page's copy could have drifted away unnoticed.
-        assert tour._OVERLAY_LEGEND == weak_supervision._OVERLAY_LEGEND
         assert tour._EXPLAIN_ABSENT_NOTE == active_learning._EXPLAIN_ABSENT_NOTE
         assert tour._EXPLAIN_FRAME_ABSENT_NOTE == active_learning._EXPLAIN_FRAME_ABSENT_NOTE
         assert tour._TRAIN_POOL_NOTE == active_learning._TRAIN_POOL_NOTE
@@ -4274,9 +4820,24 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
         scenario_strings = _string_literals(DEMO_DIR / "views" / "scenarios.py")
         al_strings = _string_literals(DEMO_DIR / "views" / "active_learning.py")
         assert tour._EVENTS_ABSENT_NOTE in scenario_strings
-        assert tour._OVERLAY_LEGEND in al_strings
         assert tour._NO_EXEMPLAR_NOTE in al_strings
         assert tour._NO_UPGRADED_BOXES_NOTE in al_strings
+
+        # (b2) the overlay legend is no longer copied at all: Phase 10 spec sec3
+        # replaced the three prose copies with ONE component (render.legend), so the
+        # check that kept them equal becomes a check that none of them came back.
+        # "orange dashed" is the wording unique to that prose legend; the Weak
+        # Supervision page's pseudo-box legend says what a pseudo box IS, which is a
+        # different claim, and stays.
+        ws_strings = _string_literals(DEMO_DIR / "views" / "weak_supervision.py")
+        tour_strings = _string_literals(DEMO_DIR / "views" / "tour.py")
+        for module_strings in (tour_strings, al_strings, ws_strings):
+            assert not any("orange dashed" in text for text in module_strings)
+            assert not any(text.startswith("Green = ground truth,") for text in module_strings)
+        assert any(
+            text.startswith("Green = ground truth. Blue = a pseudo-label box")
+            for text in ws_strings
+        )
 
         # (c) the filmstrip's own step columns and labels, in strip order: the
         # Scenario page splits them either side of the current frame, which the

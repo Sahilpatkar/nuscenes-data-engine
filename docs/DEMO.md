@@ -14,39 +14,76 @@ uv run streamlit run app/demo/main.py
 The app reads only `demo_data/`. If the package is missing, the app says so and
 points at the builder.
 
-## Guided tour (Phase 9a)
+## Guided tour (Phase 9a, restructured in Phase 10)
 
 The demo's default path. `views/tour.py` (`url_path="tour"`) is a seven-screen walk
-through the whole model-improvement loop — one weakness, one frame, one mining pass,
-one selection reason, one retrain, one after-shot, one result — reachable from the
-Overview page's `st.button("Explore a model failure →", key="overview_start_tour")`
-CTA, or directly from the "Start here" nav section. It is built for a 2-3 minute
-pace: each step is one visual, at most a few sentences, and a provenance line, inside
-a bordered container; `st.session_state["tour_step"]` is the page's only state, moved
-by the `tour_back` / `tour_next` buttons (mutated *before* the step renders, never via
-`st.rerun()`), with `tour_restart` returning to step 1 from the result screen.
+through the whole model-improvement loop, told as *problem → intervention → impact*:
+the page itself renders as **"From model failure to better training data"** (with the
+subtitle caption "See how the data engine finds a perception weakness, mines targeted
+AV scenarios, and measures whether retraining fixes it."), while the sidebar entry
+`main.py` registers stays **"Guided tour"**. It is reachable from the Overview page's
+`st.button("Explore a model failure →", key="overview_start_tour")` CTA, or directly
+from the "Start here" nav section. It is built for a 2-3 minute pace: each step leads
+with a headline, shows one visual, states its numbers in a few sentences and names
+where they came from (`render.provenance`), inside a bordered container; steps 1 and 3
+carry a "what we learned" takeaway (`render.learned`), and mechanism detail folds
+into expanders instead of filling the screen. `st.session_state["tour_step"]` is the
+page's only state, moved by the `tour_back` / `tour_next` buttons (mutated *before*
+the step renders, never via `st.rerun()`), with `tour_restart` returning to step 1
+from the result screen.
 
 | # | Step | Stage | What it shows | Deep-links to |
 |---|---|---|---|---|
-| 1 | The weakness: night | Diagnose | baseline overall / night / night-pedestrian mAP50-95, and how many night val frames carry a baseline miss | Failure Explorer |
-| 2 | One missed pedestrian | Diagnose | the hero crop, a baseline/arm model toggle (`tour_hero_model`), and what each model claimed about the pedestrian baseline missed | Failure Explorer |
-| 3 | Find more like it | Mine | the flagship scenario preset's top-ranked event, its severity facts, filmstrip, and how many matching events are at night | Scenario Search |
-| 4 | Why this frame was picked | Mine | one AL-selected frame's `selection_factors` — community mass → quota, pick pass, degree rank — reproduced by `demo al-explain` | Active Learning |
-| 5 | Retrain on what was found | Train | what the mining bought the training set (frames, scenes, night share) and every arm's night Δ, this arm highlighted | Active Learning |
-| 6 | Same kind of frame, after | Evaluate | a hand-approved before/after exemplar, a model toggle (`tour_exemplar_model`), the upgraded-boxes table, and the night mAP result | Active Learning |
-| 7 | What we found, added, gained — and what failed | Evaluate (all four stages lit) | four bordered answers restating steps 1-6's numbers, and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
+| 1 | We found a blind spot | Diagnose | headline "Aggregate accuracy was hiding a night-driving blind spot.", the baseline's overall / night / night-pedestrian mAP50-95 cards, the bold count of night val frames carrying a miss, one derived sentence, and the takeaway "Aggregate metrics hide important failure slices." | Failure Explorer |
+| 2 | What the failure looks like | Diagnose | headline "Here the baseline misses a pedestrian at night.", the hero crop with the badge legend under it, the model radio (`tour_hero_model`, story labels), what each model claimed about the missed pedestrian, and the bridge into mining ("Finding one failure is easy — the hard part is finding the rest of the dataset where the same thing happens.") | Failure Explorer |
+| 3 | Where else does this happen? | Mine | headline "Is this one bad photo, or a recurring driving scenario?", the flagship scenario preset's top-ranked event (severity facts, chips, filmstrip, CAN curves), how many matching events are at night, one sentence on what the search matches on — driving context, not similar-looking images — and the takeaway "Perception failures must be analyzed in driving context." | Scenario Search |
+| 4 | What data should we add? | Mine | headline "Thousands of candidate training frames — which are worth labelling?", one AL-selected frame, its `reason_chips` row and the one-line selection path (failed val frame → similarity community → representative train-pool frames → selected for retraining), with the seven `selection_factors` and the causal closing sentence folded into **How selection works**; the flagship-rank / weak-rejected sentences, the `demo al-explain` provenance and the system-path caption stay outside the fold | Active Learning |
+| 5 | We changed the training data | Train | headline "We did not just add data — we changed what the model trains on.", the mined-set cards (frames mined, scenes covered, night share, training images), the night-share comparison against the comparator arms this package ran, and the tour's five-strategy **Night mAP50-95 vs baseline, by acquisition strategy** chart (baseline, the random control, similarity mining, the best score-based arm and the arm the tour follows — an id this package has no row for is dropped) with story labels on the axis, the charted arms' raw ids captioned under it, a fairness statement, the computed best-intervention sentence and the scene-spread sentence | Active Learning |
+| 6 | Did it fix the failure? | Evaluate | headline "Did the targeted retraining fix the kind of failure we started with?", the derived before/after callout cards, the hand-approved exemplar drawn twice side by side (baseline vs arm, each captioned with its story label *and* its raw id) with one badge legend under the pair, the `gain_text` night-pedestrian sentence and the night mAP result, and the upgraded-boxes table folded into **Technical details — per-box claims** | Active Learning |
+| 7 | Closed the loop | all four stages lit | the guarded headline ("Closed the loop: weakness → targeted data → measurable improvement" only when the arm's recorded night Δ is a gain, else "… measured result"), three hero cards (targeted frames added / night share of the mined data vs the random control / night-pedestrian mAP50-95 gain), the four bordered answers restating steps 1-6's numbers, the closing thesis, and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
+
+Phase 10's shared vocabulary lives in `filters.py` / `render.py`, so no step writes a
+name or a number by hand:
+
+- **Story labels** (`filters.arm_story_label`) give the tour readable experiment names
+  — `graph_rate_night` → "Graph + night targeting", `random` → "Random sample —
+  control", `mined` → "Similarity mining" — falling back to `model_label` for anything
+  unmapped (the weak checkpoints keep their technical labels). The raw arm id stays
+  visible wherever a story label fronts one: the strategy chart's id caption, step 6's
+  two overlay captions, and the backticked ids inside the precise claims themselves.
+  Readable names are tour-scope only — the deep pages keep `model_label`, raw ids, the
+  full 13-arm chart and the per-arm table.
+- **`render.legend()`** is the app's one overlay legend: five badge chips ("green —
+  ground truth", "orange dashed — GT box the model missed", "white — true positive",
+  "yellow dotted — low-confidence claim (below the hit floor)", "red — false
+  positive"), rendered wherever a full prediction overlay is drawn — tour steps 2 and
+  6, the Failure Explorer detail, the Overview hero overlay, the Active Learning
+  before/after panel, and Weak Supervision's held-out row. The three prose legend
+  captions those pages used to carry are gone, and the copy-contract test now checks
+  that none of them comes back (Weak Supervision keeps its separate sentence saying
+  what a *pseudo* box is, which is a different claim). GT-only frames — tour steps 3
+  and 4 — get no legend, since it would name prediction colours those images never
+  draw.
+- **`filters.gain_text`** states a before/after with its absolute and relative gain
+  together — "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345 absolute, +41.8%
+  relative)" on package v0.8 — and drops the relative clause when there is no honest
+  base to divide by (`relative_gain` returns `None` at `before <= 0`).
+- **"Go deeper" links** read as story sentences rather than page names (e.g. "Failure
+  Explorer — see every night frame the baseline missed"), and none of them names a
+  count: a static label is the one string on the screen nothing recomputes.
 
 Honesty notes (verified against package v0.8, restated from the design spec):
 
 - The hero frame (`5994f34b836043b3b5be191bceba2e3e`) is the only night val frame
   where a pedestrian goes miss → hit, and the hit is a **low-confidence claim (conf
-  0.135)** that the matching rule counts as a hit — the tour says so at steps 2 and 7
-  and never calls it an exemplar (`fixed_boxes` returns no row for it; the hand-
+  0.135)** that the matching rule counts as a hit — the tour says so at steps 2, 6 and
+  7 and never calls it an exemplar (`fixed_boxes` returns no row for it; the hand-
   approved exemplars at step 6 are the confident recoveries).
 - No per-frame "failure rate" exists for pool frames (1,249 of the arm's 1,500
-  selected frames received no routed failure mass) — step 4's selection facts are
-  `selection_factors` only: night, community size / night members / mass rank /
-  quota, pick pass, and degree rank within the community.
+  selected frames received no routed failure mass) — step 4's selection facts, inside
+  the **How selection works** fold, are `selection_factors` only: night, community
+  size / night members / mass rank / quota, pick pass, and degree rank within the
+  community.
 - Every number on every step is read from the package, the same tables the deep
   pages read; nothing is computed only for the tour.
 - The tour degrades honestly when an optional group is missing: without
@@ -57,8 +94,11 @@ Honesty notes (verified against package v0.8, restated from the design spec):
 
 Widget/state keys, for contributors extending the tour: `tour_step` (session state,
 the current step index) and buttons `tour_back` / `tour_next` / `tour_restart` /
-`tour_hero_model` (step 2's model radio) / `tour_exemplar_model` (step 6's model
-radio) / `tour_open_event` / `tour_open_al_frame` / `tour_open_exemplar`.
+`tour_hero_model` (step 2's model radio) / `tour_open_event` / `tour_open_al_frame` /
+`tour_open_exemplar`. Phase 10 retired `tour_exemplar_model`: step 6 draws the
+baseline and the arm side by side instead of toggling between them, and
+`tour_open_exemplar` is how a viewer gets to the Active Learning page's own radio for
+model-by-model inspection.
 
 Three buttons pre-select an item on the page they open, rather than just linking to
 it (unlike the "Go deeper" `st.page_link` row, which carries no state):
@@ -694,16 +734,16 @@ deployed URL.
 
 | # | Question (DEMO_PLAN.md) | Page | Section / element that answers it | Status |
 |---|---|---|---|---|
-| 1 | What problem does the project solve? | Overview + Guided tour | the loop strip ("Detect weakness → Find useful data → Retrain → Measure impact") and tour step 1, **The weakness: night** | local: 2026-08-22 · live: pending |
-| 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **One missed pedestrian** (the hero frame, per-model claims), and Failure Explorer's **Detail** — now the first block on the page, auto-selected, with the **Model** radio and the GT / Predictions / Overlay toggle beside the image | local: 2026-08-23 · live: pending |
-| 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Find more like it** (the flagship event), and the six **preset** buttons + ranked card grid | local: 2026-08-22 · live: pending |
+| 1 | What problem does the project solve? | Overview + Guided tour | the loop strip ("Detect weakness → Find useful data → Retrain → Measure impact") and tour step 1, **We found a blind spot** | local: 2026-08-23 · live: pending |
+| 2 | Where does the baseline perception model fail? | Guided tour + Failure Explorer | tour step 2, **What the failure looks like** (the hero frame, per-model claims, badge legend), and Failure Explorer's **Detail** — now the first block on the page, auto-selected, with the **Model** radio and the GT / Predictions / Overlay toggle beside the image | local: 2026-08-23 · live: pending |
+| 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Where else does this happen?** (the flagship event, and the sentence saying the search matches driving context — not similar-looking images), and the six **preset** buttons + ranked card grid | local: 2026-08-23 · live: pending |
 | 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel, whose **Reveal the matched path** slider walks Scene → Keyframe → nearest matching objects → Ego pose one step at a time (amber = revealed, hollow = still to come) | local: 2026-08-23 · live: pending |
 | 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's two **CAN curves** beside the frame (speed km/h + longitudinal accel m/s² over t−2…t+2, the rule following the filmstrip slider), the **CAN speed** card in the metric grid, and the filmstrip's own ego-pose readout; Overview's **CAN speed vs ego-motion** card (r), inside the **Dataset scale & data checks** expander | local: 2026-08-23 · live: pending |
-| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **Why this frame was picked** (the `selection_factors` panel), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
-| 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **Retrain on what was found** / **Same kind of frame, after**, plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-22 · live: pending |
+| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **What data should we add?** (the reason chips and the one-line selection path, with the `selection_factors` lines inside the **How selection works** fold), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
+| 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **We changed the training data** (the five-strategy night-Δ chart, its fairness statement and the computed best-intervention sentence) / **Did it fix the failure?** (the side-by-side before/after exemplar and the night-pedestrian gain), plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-23 · live: pending |
 | 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention), **One frame, three views** (what the VLM's counts kept on a train-pool frame, and what the weak-trained checkpoint vs its GT-labelled twin then did on a held-out val frame), and **What the VLM saw** accepted/rejected galleries | local: 2026-08-23 · live: pending |
 | 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost), **Where the VLM's counting breaks down** (count MAE per crowding bucket) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-23 · live: pending |
-| 10 | How does the project form a closed model-improvement loop? | Guided tour + Active Learning + Weak Supervision | tour step 7, **What we found, added, gained — and what failed**, closed by the persistent loop breadcrumb on every page | local: 2026-08-22 · live: pending |
+| 10 | How does the project form a closed model-improvement loop? | Guided tour + Active Learning + Weak Supervision | tour step 7, **Closed the loop** — its guarded headline and the three hero cards (frames added / night share vs the random control / night-pedestrian mAP50-95 gain) over the four bordered answers — closed by the persistent loop breadcrumb on every page | local: 2026-08-23 · live: pending |
 
 ## Dataset attribution & license
 
@@ -731,3 +771,4 @@ is **not** redistributed by this repository.
 | 8 | recorded chat replay, deployment scaffolding, README + screenshots | **shipped** |
 | 9a | guided tour, outcome-first Overview, loop breadcrumb + provenance + lessons | **shipped** |
 | 9b | Failure Explorer hook, one-screen Scenario Search (CAN curve, progressive graph path), acquisition-strategy chart + reason chips, Weak Supervision three views + crowding trend, package 0.8 | **shipped** |
+| 10 | storytelling rework of the guided tour (story titles, folds, 5-strategy chart, side-by-side, hero numbers, legend component) | **shipped** |

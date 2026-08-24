@@ -20,7 +20,7 @@ from filters import (
     visible_gt_boxes,
 )
 from PIL import Image
-from render import draw_overlay, loop_breadcrumb, provenance
+from render import draw_overlay, legend, loop_breadcrumb, provenance
 
 from data import crop_path, load_frame_manifest, load_gt_boxes, load_predictions, thumb_path
 
@@ -164,6 +164,11 @@ def _render_detail(
                 scale=0.6,
             )
             image_slot.image(image)
+            # Under the image and its view-mode radio, beside the provenance line
+            # (Phase 10 spec sec3, review amendment): this page draws the same full
+            # prediction overlay the tour and Active Learning pages do, and said
+            # nothing about what its colours mean.
+            legend()
             provenance("recomputed", "overlay drawn from gt_boxes.parquet and predictions.parquet")
 
     with facts_col:
