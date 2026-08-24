@@ -17,6 +17,7 @@ from filters import (  # noqa: E402
     FILMSTRIP_STEPS,
     FilmstripStep,
     PathStep,
+    arm_story_label,
     braking_caption,
     community_jump,
     confidence_caption,
@@ -29,6 +30,7 @@ from filters import (  # noqa: E402
     fixed_boxes,
     frame_caption,
     frame_quota_before,
+    gain_text,
     graph_node_label,
     loss_long,
     model_label,
@@ -38,6 +40,7 @@ from filters import (  # noqa: E402
     quota_column_pair,
     rank_events,
     reason_chips,
+    relative_gain,
     replay_tool_counts,
     selection_factors,
     severity_caption,
@@ -47,6 +50,8 @@ from filters import (  # noqa: E402
     strategy_coverage,
     subgraph_narrative,
     tour_frame_candidates,
+    tour_strategies,
+    upgrade_callout,
     verdict_line,
     weak_frame_summary,
     weak_result_token,
@@ -2182,3 +2187,179 @@ def test_weak_result_token_is_none_when_no_val_frame_shows_a_difference() -> Non
     assert weak_result_token(
         train_pool_only, fixed_gt, fixed_preds, weak_arm=_WEAK_ARM, gt_arm=_GT_ARM
     ) is None
+
+
+# --- Phase 10 (Task 1): tour story vocabulary ------------------------------------
+#
+# Spec docs/superpowers/specs/2026-08-23-demo-phase10-design.md sec1. The guided
+# tour tells the arm comparison as a story; these helpers are the only place the
+# story's words and its two derived numbers are written down.
+
+
+def _story_arms() -> pd.DataFrame:
+    """The nine mining arms as the shipped package ranks them, with the score-based
+    trio's real ordering: ``rate_strat`` (+0.0069) edges out ``rate`` (+0.0057), and
+    ``strat`` actually costs night mAP (-0.0086)."""
+    return pd.DataFrame({
+        "arm": [
+            "baseline", "graph", "graph_rate", "graph_rate_night", "mined",
+            "random", "rate", "rate_strat", "strat",
+        ],
+        "delta_night": [
+            0.0, 0.0040, 0.0083, 0.0101, 0.0072, -0.0048, 0.0057, 0.0069, -0.0086,
+        ],
+    })
+
+
+def test_arm_story_label_says_what_each_mining_arm_did() -> None:
+    """Tour scope only (spec sec1 / brief sec15+sec32): the tour fronts each arm with
+    what it DID while the deep pages keep the raw ids. Anything the map does not name
+    -- the weak-supervision checkpoints, an arm from a newer run -- falls through to
+    ``model_label``, so a story label is never invented for an arm nobody wrote one
+    for."""
+    assert arm_story_label("baseline") == "Baseline (no mined data)"
+    assert arm_story_label("random") == "Random sample — control"
+    assert arm_story_label("mined") == "Similarity mining"
+    assert arm_story_label("rate") == "Failure-rate mining"
+    assert arm_story_label("strat") == "Stratified mining"
+    assert arm_story_label("rate_strat") == "Rate + stratified mining"
+    assert arm_story_label("graph") == "Graph mining"
+    assert arm_story_label("graph_rate") == "Graph + rate scoring"
+    assert arm_story_label("graph_rate_night") == "Graph + night targeting"
+
+    assert arm_story_label("weak_graph_rate_night") == model_label("weak_graph_rate_night")
+    assert arm_story_label("weak_graph_rate_night") == (
+        "weak_graph_rate_night (pseudo labels, yolov8n)"
+    )
+    assert arm_story_label("some_arm_from_a_newer_run") == "some_arm_from_a_newer_run"
+
+
+def test_tour_strategies_orders_the_comparison_as_the_story_tells_it() -> None:
+    """Five bars, in narrative order: where we started, the control, the obvious
+    idea, the best scoring heuristic, and the arm the tour follows -- and the result
+    drops straight onto the existing ``strategy_coverage`` chart helper."""
+    strategies = tour_strategies(_story_arms(), baseline="baseline", arm="graph_rate_night")
+
+    assert list(strategies) == [
+        "baseline", "random", "mined", "rate_strat", "graph_rate_night"
+    ]
+    assert list(strategies.values()) == [
+        "Baseline (no mined data)",
+        "Random sample — control",
+        "Similarity mining",
+        "Rate + stratified mining",
+        "Graph + night targeting",
+    ]
+    coverage = strategy_coverage(_story_arms(), strategies=strategies)
+    assert list(coverage["arm"]) == list(strategies)
+    assert list(coverage["strategy"]) == list(strategies.values())
+
+
+def test_tour_strategies_skips_arms_this_package_never_ran() -> None:
+    """The AppTest fixture package ran three of the nine, so the tour compares three
+    strategies rather than five with two invented -- the same rule
+    ``strategy_coverage`` already applies one layer down."""
+    arms = _story_arms()
+    fixture_like = arms.loc[arms["arm"].isin(["baseline", "random", "graph_rate_night"])]
+
+    assert list(tour_strategies(fixture_like, baseline="baseline", arm="graph_rate_night")) == [
+        "baseline", "random", "graph_rate_night"
+    ]
+    assert tour_strategies(arms.iloc[:0], baseline="baseline", arm="graph_rate_night") == {}
+    assert tour_strategies(pd.DataFrame(), baseline="baseline", arm="graph_rate_night") == {}
+
+
+def test_tour_strategies_collapses_an_arm_that_is_already_in_the_story() -> None:
+    """A tour pointed at ``mined`` (or at the best score-based arm) must not draw the
+    same bar twice: the id keeps its story position and appears once."""
+    assert list(tour_strategies(_story_arms(), baseline="baseline", arm="mined")) == [
+        "baseline", "random", "mined", "rate_strat"
+    ]
+    assert list(tour_strategies(_story_arms(), baseline="baseline", arm="rate_strat")) == [
+        "baseline", "random", "mined", "rate_strat"
+    ]
+
+
+def test_tour_strategies_computes_the_best_score_based_arm() -> None:
+    """The fourth bar is whichever of rate / rate_strat / strat actually has the best
+    night result in THIS package -- computed, never asserted -- and an arm with no
+    night result recorded cannot win a comparison it did not enter."""
+    arms = _story_arms()
+    blanked = arms.assign(delta_night=arms["delta_night"].mask(arms["arm"] == "rate_strat"))
+
+    assert list(tour_strategies(blanked, baseline="baseline", arm="graph_rate_night")) == [
+        "baseline", "random", "mined", "rate", "graph_rate_night"
+    ]
+
+    unscored = arms.assign(
+        delta_night=arms["delta_night"].mask(arms["arm"].isin(("rate", "rate_strat", "strat")))
+    )
+    assert list(tour_strategies(unscored, baseline="baseline", arm="graph_rate_night")) == [
+        "baseline", "random", "mined", "graph_rate_night"
+    ]
+    # a package whose arm table predates the delta_night column: same answer, no raise
+    assert list(
+        tour_strategies(
+            arms.drop(columns=["delta_night"]), baseline="baseline", arm="graph_rate_night"
+        )
+    ) == ["baseline", "random", "mined", "graph_rate_night"]
+
+
+def test_relative_gain_refuses_a_ratio_without_an_honest_base() -> None:
+    """+41.8 % is computed from the package's own two numbers. A base of zero (or
+    below) has no honest ratio -- "infinitely better" is not a result -- and a
+    missing number is not a gain of any size."""
+    assert relative_gain(0.0826, 0.1171) == pytest.approx(0.41767, rel=1e-4)
+    assert relative_gain(0.1, 0.05) == pytest.approx(-0.5)
+    assert relative_gain(0.0, 0.1) is None
+    assert relative_gain(-0.02, 0.1) is None
+    assert relative_gain(float("nan"), 0.1) is None
+    assert relative_gain(0.1, float("nan")) is None
+
+
+def test_gain_text_states_the_absolute_and_the_relative_gain_together() -> None:
+    """The brief's hero sentence (sec19): the absolute delta is the honest one, the
+    relative one is what a reader feels. Both, or -- when the base is zero -- only
+    the absolute one."""
+    assert gain_text("Night pedestrian mAP50-95", 0.0826, 0.1171) == (
+        "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345 absolute, +41.8% relative)"
+    )
+    assert gain_text("Night pedestrian mAP50-95", 0.0, 0.1171) == (
+        "Night pedestrian mAP50-95 0.0000 → 0.1171 (+0.1171 absolute)"
+    )
+    # a regression is stated as one, in both clauses -- no hard-coded plus sign
+    assert gain_text("Night pedestrian mAP50-95", 0.1171, 0.0826) == (
+        "Night pedestrian mAP50-95 0.1171 → 0.0826 (-0.0345 absolute, -29.5% relative)"
+    )
+
+
+def _upgrades() -> pd.DataFrame:
+    """A ``fixed_boxes`` output frame: the boxes the arm upgraded on one frame,
+    nearest first, with that helper's own claim strings."""
+    return pd.DataFrame({
+        "annotation_token": ["a0", "a1", "a2"],
+        "category_group": ["car", "pedestrian", "pedestrian"],
+        "distance_to_ego_m": [6.0, 11.0, 19.0],
+        "baseline_claim": ["low-conf 0.22", "none", "low-conf 0.30"],
+        "arm_claim": ["0.71", "0.47", "0.55"],
+    })
+
+
+def test_upgrade_callout_leads_with_the_pedestrian_the_tour_is_about() -> None:
+    """The before/after cards name ONE box. The tour's failure is a pedestrian, so a
+    pedestrian row wins over a nearer car; without one, the nearest upgraded box
+    stands. The claim strings pass through verbatim -- they are already the display
+    strings ``fixed_boxes`` wrote."""
+    assert upgrade_callout(_upgrades()) == ("pedestrian", "none", "0.47")
+
+    cars_only = _upgrades().loc[_upgrades()["category_group"] == "car"]
+    assert upgrade_callout(cars_only) == ("car", "low-conf 0.22", "0.71")
+
+    assert upgrade_callout(_upgrades().iloc[2:]) == ("pedestrian", "low-conf 0.30", "0.55")
+
+
+def test_upgrade_callout_is_none_when_the_arm_upgraded_nothing() -> None:
+    """No upgraded boxes on the frame is not a before/after, and the step says so
+    rather than showing empty cards (the tour's existing empty-table branch)."""
+    assert upgrade_callout(_upgrades().iloc[:0]) is None
+    assert upgrade_callout(pd.DataFrame()) is None

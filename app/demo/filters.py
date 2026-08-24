@@ -762,6 +762,34 @@ def model_label(model: str) -> str:
     return _MODEL_LABELS.get(model, model)
 
 
+# The guided tour names each mining arm by WHAT IT DID rather than by its raw id
+# (Phase 10 spec sec1, brief sec15). Tour scope only: the deep pages keep `model_label`,
+# the raw ids, the full 13-arm chart and the per-arm table (brief sec32), and any pinned
+# experimental claim keeps the backticked id it has always carried.
+_ARM_STORY_LABELS: dict[str, str] = {
+    "baseline": "Baseline (no mined data)",
+    "random": "Random sample — control",
+    "mined": "Similarity mining",
+    "rate": "Failure-rate mining",
+    "strat": "Stratified mining",
+    "rate_strat": "Rate + stratified mining",
+    "graph": "Graph mining",
+    "graph_rate": "Graph + rate scoring",
+    "graph_rate_night": "Graph + night targeting",
+}
+
+
+def arm_story_label(model: str) -> str:
+    """``model``'s readable tour name, falling back to ``model_label``.
+
+    The fallback is the honest half: the weak-supervision checkpoints keep their
+    technical labels (what they were trained on IS the distinction the page draws),
+    and an arm from a newer run passes through raw rather than being handed a
+    description nobody wrote for it.
+    """
+    return _ARM_STORY_LABELS.get(model, model_label(model))
+
+
 def _claims(preds: pd.DataFrame, model: str) -> dict[str, tuple[str, float]]:
     """``{annotation_token: (status, conf)}`` for one model's GT-matched predictions,
     keeping the highest-confidence claim when several rows match the same box."""
@@ -872,6 +900,27 @@ def fixed_boxes(
     # na_position="last": a box whose annotation didn't join onto annotations_3d has
     # no distance, and belongs after the ones that can be placed in the scene.
     return frame.sort_values("distance_to_ego_m", na_position="last").reset_index(drop=True)
+
+
+def upgrade_callout(fixed: pd.DataFrame) -> tuple[str, str, str] | None:
+    """The ONE upgraded box a before/after callout names, as
+    ``(category_group, baseline_claim, arm_claim)`` -- or None when the arm upgraded
+    nothing on the frame.
+
+    ``fixed`` is a ``fixed_boxes`` frame. The first pedestrian row wins over a nearer
+    box of another class (the tour's failure is a pedestrian, and the callout has to
+    be about the same box the reader was just shown); with no pedestrian on the
+    frame, the nearest upgraded box stands.
+
+    The two claim strings pass through VERBATIM -- they are already the display
+    strings ``fixed_boxes`` wrote ("none", "low-conf 0.30", "0.47"), and reformatting
+    them here would be a second, drifting rendering of the same claim.
+    """
+    if fixed.empty:
+        return None
+    pedestrians = fixed.loc[fixed["category_group"] == "pedestrian"]
+    row = (fixed if pedestrians.empty else pedestrians).iloc[0]
+    return str(row["category_group"]), str(row["baseline_claim"]), str(row["arm_claim"])
 
 
 def community_jump(
@@ -1076,6 +1125,88 @@ def strategy_coverage(
         "delta_night": "float64",
         "n_train_images": "Int64",
     })
+
+
+# --- Phase 10 (Task 1): the tour's five-strategy story + its two derived numbers ---
+#
+# Spec docs/superpowers/specs/2026-08-23-demo-phase10-design.md sec1.
+
+# The three arms that score the mining pool with a heuristic rather than a graph.
+# The tour charts ONE of them -- whichever actually did best on night in this
+# package -- so the comparison stays five bars wide without hiding that the family
+# was tried.
+_SCORE_BASED_ARMS: tuple[str, ...] = ("rate", "rate_strat", "strat")
+
+
+def _best_score_based_arm(arms: pd.DataFrame) -> str | None:
+    """Whichever of ``_SCORE_BASED_ARMS`` this package ran with the best
+    ``delta_night`` -- computed from the arm table, never asserted.
+
+    An arm with no night result recorded (NA, or a package whose table predates the
+    column) cannot win a comparison it did not enter; ties keep the first arm in
+    ``_SCORE_BASED_ARMS`` order, so the choice is deterministic.
+    """
+    best: tuple[str, float] | None = None
+    for candidate in _SCORE_BASED_ARMS:
+        rows = arms.loc[arms["arm"] == candidate]
+        if rows.empty:
+            continue
+        delta = _numeric(rows.iloc[0].get("delta_night"))
+        if delta is None:
+            continue
+        if best is None or delta > best[1]:
+            best = (candidate, delta)
+    return None if best is None else best[0]
+
+
+def tour_strategies(arms: pd.DataFrame, *, baseline: str, arm: str) -> dict[str, str]:
+    """The tour's ordered {arm id: story label} comparison, for ``strategy_coverage``.
+
+    Narrative order, not table order: where we started (``baseline``), the control
+    (``random``), the obvious idea (``mined``), the best score-based arm, and the arm
+    the tour follows. Ids this package has no row for are omitted rather than
+    charted empty (the same rule ``strategy_coverage`` applies one layer down), and
+    an id that appears twice -- a tour pointed at ``mined``, say -- keeps its first
+    story position and is charted once.
+    """
+    if arms.empty or "arm" not in arms.columns:
+        return {}
+    present = {str(value) for value in arms["arm"]}
+    best = _best_score_based_arm(arms)
+    story = [baseline, "random", "mined", *([] if best is None else [best]), arm]
+    return {name: arm_story_label(name) for name in story if name in present}
+
+
+def relative_gain(before: float, after: float) -> float | None:
+    """``(after - before) / before``, or None when there is no honest ratio.
+
+    None when ``before <= 0`` -- "infinitely better than zero" is not a result -- and
+    None when either number is missing, since a missing number is not a gain of any
+    size. Callers drop the relative clause rather than printing a placeholder.
+    """
+    if pd.isna(before) or pd.isna(after):
+        return None
+    if before <= 0:
+        return None
+    return (after - before) / before
+
+
+def gain_text(metric: str, before: float, after: float) -> str:
+    """One sentence stating a metric's before/after with BOTH its absolute delta and
+    its relative one, e.g. "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345
+    absolute, +41.8% relative)".
+
+    Both, because either alone misleads: the absolute delta is the honest one and the
+    relative one is what a reader feels. The relative clause is dropped entirely when
+    ``relative_gain`` has no honest base, and a regression states its own sign in
+    both clauses -- this helper never assumes the change is an improvement.
+    """
+    delta = after - before
+    sentence = f"{metric} {before:.4f} → {after:.4f} ({delta:+.4f} absolute"
+    relative = relative_gain(before, after)
+    if relative is None:
+        return f"{sentence})"
+    return f"{sentence}, {relative:+.1%} relative)"
 
 
 def quota_column_pair(

@@ -16,8 +16,10 @@ APP_DEMO = Path(__file__).resolve().parents[1] / "app" / "demo"
 sys.path.insert(0, str(APP_DEMO))
 
 from render import (  # noqa: E402
+    LEGEND_ITEMS,
     LOOP_STAGES,
     PROVENANCE,
+    PSEUDO_LEGEND_ITEM,
     STYLE_FN,
     STYLE_FP,
     STYLE_GT,
@@ -28,6 +30,7 @@ from render import (  # noqa: E402
     _draw_rect,
     chip_row_text,
     draw_overlay,
+    legend_text,
     loop_breadcrumb_text,
     metric_cards,
     provenance_text,
@@ -718,3 +721,64 @@ def test_curve_charts_draws_no_rule_without_a_selected_step() -> None:
 
     with pytest.raises(ValueError, match="unknown selected step"):
         curve_charts(_filmstrip_curve(), selected="t+2")
+
+
+# --- Phase 10 (Task 1): the overlay legend as a component -------------------------
+
+
+def test_legend_text_is_one_badge_chip_per_legend_item() -> None:
+    """One markdown line of colour chips replaces the prose sentence three pages used
+    to repeat. The badge colour is only a hint -- the wording carries the on-image
+    description ("white", "dashed"), because Streamlit has no white badge and the
+    dashes are drawn, not coloured."""
+    text = legend_text()
+
+    assert "\n" not in text
+    assert text.count("-badge[") == len(LEGEND_ITEMS)
+    for color, wording in LEGEND_ITEMS:
+        assert f":{color}-badge[{wording}]" in text
+    assert text.startswith(":green-badge[green — ground truth]")
+    assert "white — true positive" in text and ":gray-badge[" in text
+
+    assert PSEUDO_LEGEND_ITEM[1] not in text
+    pseudo_color, pseudo_wording = PSEUDO_LEGEND_ITEM
+    assert legend_text(pseudo=True) == f"{text} :{pseudo_color}-badge[{pseudo_wording}]"
+
+
+# Each legend entry, by its wording, and the NAME of the overlay style it describes.
+# The guard below reads this as a two-way contract with render.py's own style table.
+_LEGEND_STYLE_NAMES = {
+    "green — ground truth": "STYLE_GT",
+    "orange dashed — GT box the model missed": "STYLE_FN",
+    "white — true positive": "STYLE_TP",
+    "yellow dotted — low-confidence claim (below the hit floor)": "STYLE_LOW_CONF",
+    "red — false positive": "STYLE_FP",
+}
+
+
+def test_legend_covers_every_style_the_overlay_can_draw() -> None:
+    """Drift guard: a new prediction status (a new ``_PRED_STYLES`` entry) or a new
+    box style cannot ship without a legend entry describing it, and a legend entry
+    cannot describe a colour the renderer never draws. The pseudo box is the one
+    opt-in style -- it is not a prediction status, and only the Weak Supervision
+    page draws it -- so it has its own item behind ``pseudo=True``.
+
+    Every style is read out of ``legend_text.__globals__`` -- the module namespace
+    this file's own top-level import bound -- for the reason spelled out above at
+    ``_draw_label``: tests/test_demo_app.py drops app/demo's modules from
+    sys.modules between AppTest runs, so a plain ``import render`` here can yield a
+    DIFFERENT module object whose ``BoxStyle`` instances are a different class and
+    therefore compare unequal to these (a real full-suite failure, seen once).
+    """
+    module = legend_text.__globals__
+
+    wordings = [wording for _, wording in LEGEND_ITEMS]
+    assert len(wordings) == len(set(wordings)) == len(LEGEND_ITEMS)
+    assert set(wordings) == set(_LEGEND_STYLE_NAMES)
+
+    described = {module[_LEGEND_STYLE_NAMES[wording]] for wording in wordings}
+    assert described == set(module["_PRED_STYLES"].values()) | {STYLE_GT, STYLE_FN}
+    assert STYLE_PSEUDO not in described
+
+    assert PSEUDO_LEGEND_ITEM == ("blue", "blue — pseudo-label box")
+    assert STYLE_PSEUDO not in module["_PRED_STYLES"].values()

@@ -47,7 +47,8 @@ def recorded_banner(text: str) -> None:
 # Fixed visual language, shared by the Overview hero and the Failure Explorer detail
 # view: GT boxes are solid green (dashed orange when unmatched -> a false negative),
 # predictions are colored by status (true positive / false positive / low-confidence).
-# Pure PIL: no Streamlit calls in this section, so it is testable without a runtime.
+# Pure PIL: the drawing helpers make no Streamlit calls, so they are testable
+# without a runtime (``legend()`` below is this section's one Streamlit call).
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,40 @@ STYLE_LOW_CONF = BoxStyle(color=(255, 220, 0), width=2, dash=2)     # yellow dot
 STYLE_PSEUDO = BoxStyle(color=(0, 116, 217), width=2, dash=None)    # blue solid
 
 _PRED_STYLES: dict[str, BoxStyle] = {"tp": STYLE_TP, "fp": STYLE_FP, "low_conf": STYLE_LOW_CONF}
+
+# The same visual language as one line of text, beside the styles it describes so a
+# new style cannot ship without a legend entry (the drift guard in
+# tests/test_demo_render.py holds the two together). Phase 10 spec sec1: this replaces
+# the prose sentence three pages each kept their own copy of.
+#
+# The badge COLOUR is only a hint -- Streamlit has no white badge, and "dashed" is not
+# a colour at all -- so the WORDING carries the on-image description in every item.
+LEGEND_ITEMS: tuple[tuple[str, str], ...] = (
+    ("green", "green — ground truth"),
+    ("orange", "orange dashed — GT box the model missed"),
+    ("gray", "white — true positive"),
+    ("yellow", "yellow dotted — low-confidence claim (below the hit floor)"),
+    ("red", "red — false positive"),
+)
+# Opt-in: a pseudo box is not a prediction status, and only the Weak Supervision page
+# draws one -- claiming the colour on a page that never draws it would be a lie.
+PSEUDO_LEGEND_ITEM: tuple[str, str] = ("blue", "blue — pseudo-label box")
+
+
+def legend_text(*, pseudo: bool = False) -> str:
+    """The overlay legend as one markdown line of ``:{colour}-badge[...]`` chips.
+
+    The badge colour is a hint only; the words carry the on-image description
+    ("white", "dashed", "dotted"). ``pseudo=True`` appends the pseudo-label item.
+    """
+    items = (*LEGEND_ITEMS, PSEUDO_LEGEND_ITEM) if pseudo else LEGEND_ITEMS
+    return " ".join(f":{color}-badge[{wording}]" for color, wording in items)
+
+
+def legend(*, pseudo: bool = False) -> None:
+    st.markdown(legend_text(pseudo=pseudo))
+
+
 _VALID_MODES = ("gt", "pred", "overlay")
 
 # A box narrower than this, once scaled onto the display image, is too small for a
