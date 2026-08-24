@@ -37,6 +37,7 @@ from filters import (
     parity_short,
     rank_events,
     reason_chips,
+    relative_gain,
     selection_factors,
     severity_caption,
     strategy_coverage,
@@ -174,6 +175,19 @@ _NO_TOUR_FRAME_NOTE = "no curated frame selected by the arm is in this package"
 _HERO_HONESTY_LINE = (
     "The hero frame's pedestrian recovery (step 2) is a low-confidence claim and does "
     "not pass this table's confident-detection rule; the hand-approved exemplars do."
+)
+
+# Step 6: the result screen's headline and its closing thesis. The headline is
+# itself a CLAIM about this package's numbers -- "measurable improvement" is true
+# only where the arm's recorded night delta really is a gain -- so which of the two
+# is written is computed in _result_headline, never decided here. The thesis under
+# the four answers is a claim about the METHOD, which those answers are the
+# evidence for; it states no figure, so it needs no guard.
+_CLOSED_LOOP_IMPROVED = "Closed the loop: weakness → targeted data → measurable improvement"
+_CLOSED_LOOP_MEASURED = "Closed the loop: weakness → targeted data → measured result"
+_CLOSING_THESIS = (
+    "**The system demonstrated a repeatable way to turn model failures into data "
+    "decisions.**"
 )
 
 # scenario_events' t-2..t+2 neighbour columns in strip order, with the event itself
@@ -847,11 +861,18 @@ def _best_night_arm_sentence(arms: pd.DataFrame) -> str | None:
     )
 
 
-def _similarity_caption(coverage: pd.DataFrame) -> str | None:
-    """Why the similarity arm's bar is where it is (brief sec37) -- written only
-    when this package charted that arm AND its mined set really is a daytime one
-    (``_NIGHT_ABSENT_SHARE``)."""
-    rows = coverage.loc[coverage["arm"] == "mined"]
+def _similarity_sentence(arms: pd.DataFrame) -> str | None:
+    """Why the similarity arm's night result is where it is (brief sec37) -- written
+    only when this package ran that arm AND its mined set really is a daytime one
+    (``_NIGHT_ABSENT_SHARE``).
+
+    Takes any frame carrying ``arm``/``night_share``, because the two screens that
+    say this say it about the same row and must say it the same way: step 4 asks it
+    of the charted strategies (so the caption appears only under a chart that
+    actually drew that bar) and step 6's second answer asks it of the whole arm
+    table, next to the comparator clause about the very same set.
+    """
+    rows = arms.loc[arms["arm"] == "mined"]
     if rows.empty:
         return None
     share = rows.iloc[0]["night_share"]
@@ -965,7 +986,7 @@ def _render_retrain(data: _TourData) -> None:
     winner = _best_night_arm_sentence(data.arms)
     if winner is not None:
         st.markdown(winner)
-    similarity = _similarity_caption(coverage)
+    similarity = _similarity_sentence(coverage)
     if similarity is not None:
         st.caption(similarity)
     spread = _scene_diversity_sentence(base_row, arm_row)
@@ -1237,6 +1258,13 @@ def _result_data_added(data: _TourData) -> None:
     if clauses:
         sentence += " — " + "; ".join(clauses)
     st.markdown(sentence + ".")
+    # What the comparator clause above leaves unexplained: WHY the similarity arm's
+    # set looks like that. Written from the same helper step 4 captions, so the two
+    # screens cannot drift apart on it, and only when that arm's set really is a
+    # daytime one.
+    similarity = _similarity_sentence(data.arms)
+    if similarity is not None:
+        st.markdown(similarity)
     provenance(
         "recorded",
         "n_train_images, n_scenes, night_share from active_learning_results.parquet",
@@ -1257,15 +1285,15 @@ def _result_improved(data: _TourData) -> None:
     if sentence:
         st.markdown(sentence)
 
-    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    # The diagnosed slice, in the phrasing the tour states it in everywhere else
+    # (step 5 writes this same sentence from this same helper): absolute AND
+    # relative, both computed by ``gain_text`` rather than written here.
+    ped_sentence = _night_ped_sentence(data, arm)
+    if ped_sentence:
+        st.markdown(ped_sentence)
+
     arm_rows = data.arms.loc[data.arms["arm"] == arm]
-    if not base_rows.empty and not arm_rows.empty:
-        base_ped = base_rows.iloc[0].get("night_ped_map5095")
-        arm_ped = arm_rows.iloc[0].get("night_ped_map5095")
-        if bool(pd.notna(base_ped)) and bool(pd.notna(arm_ped)):
-            st.markdown(
-                f"Night pedestrian mAP50-95 {float(base_ped):.4f} → {float(arm_ped):.4f}."
-            )
+    if not arm_rows.empty:
         delta_overall = arm_rows.iloc[0].get("delta_overall")
         if bool(pd.notna(delta_overall)):
             st.markdown(f"Overall mAP50-95 {float(delta_overall):+.4f} against baseline.")
@@ -1362,11 +1390,89 @@ def _result_failures(data: _TourData) -> None:
         st.info(STALE_PACKAGE_NOTE)
 
 
+def _result_headline(arm_row: pd.Series) -> str | None:
+    """Which of the two closing headlines this package has earned, or ``None`` when
+    it recorded no night delta at all.
+
+    The headline is a claim like any other sentence on the screen: "measurable
+    improvement" is written only where the arm's own recorded ``delta_night`` is a
+    gain, a regression (or a dead-flat result) gets "measured result" instead, and
+    a package that never recorded the delta gets no headline rather than one its
+    tables cannot support. The loop closed either way -- that is what the four
+    answers below show -- so the honest branch still says so.
+    """
+    delta = arm_row.get("delta_night")
+    if not bool(pd.notna(delta)):
+        return None
+    return _CLOSED_LOOP_IMPROVED if float(delta) > 0 else _CLOSED_LOOP_MEASURED
+
+
+def _result_hero_cards(
+    data: _TourData, *, base_row: pd.Series, arm_row: pd.Series
+) -> list[tuple[str, str] | tuple[str, str, str]]:
+    """The three numbers the whole tour was for: how much data was added, what made
+    it targeted, and what that bought on the diagnosed slice.
+
+    A card whose source is NA is omitted rather than rendered as "nan" (the step-4
+    rule); the night-share delta clause is written only where this package really
+    ran the random control; and the night-pedestrian card states its absolute delta
+    alone when ``relative_gain`` finds no honest base to divide by. Values stay
+    short -- st.metric renders them in a narrow column and truncates a long one
+    mid-word (Phase 9a review 5a) -- so the fuller figures ride in the deltas.
+    """
+    cards: list[tuple[str, str] | tuple[str, str, str]] = []
+    base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
+    if bool(pd.notna(base_n)) and bool(pd.notna(arm_n)):
+        cards.append(("Targeted frames added", f"{int(arm_n) - int(base_n):,}"))
+
+    night_share = arm_row.get("night_share")
+    if bool(pd.notna(night_share)):
+        share = f"{float(night_share):.0%}"
+        control_rows = data.arms.loc[data.arms["arm"] == "random"]
+        control = control_rows.iloc[0].get("night_share") if not control_rows.empty else None
+        if control is not None and bool(pd.notna(control)):
+            cards.append((
+                "Night share of mined data",
+                share,
+                f"vs {float(control):.0%} random control",
+            ))
+        else:
+            cards.append(("Night share of mined data", share))
+
+    before, after = base_row.get("night_ped_map5095"), arm_row.get("night_ped_map5095")
+    if bool(pd.notna(before)) and bool(pd.notna(after)):
+        delta = float(after) - float(before)
+        relative = relative_gain(float(before), float(after))
+        if relative is None:
+            cards.append(("Night-pedestrian mAP50-95", f"{delta:+.4f} abs"))
+        else:
+            cards.append((
+                "Night-pedestrian mAP50-95",
+                f"{relative:+.1%} relative",
+                f"{delta:+.4f} abs ({float(before):.4f} → {float(after):.4f})",
+            ))
+    return cards
+
+
 def _render_result(data: _TourData) -> None:
-    """Step 6 — the result screen (spec §2): four bordered answers, every number
-    read from the same package tables every earlier step reads. The loop
-    breadcrumb lights all four stages here (see ``_STEPS`` below) -- by this
-    screen the tour has walked the whole loop, not one stage of it."""
+    """Step 6 — the result screen (spec §2 row 6): the computed headline and the
+    three hero numbers, then the four bordered answers, then the one sentence they
+    are the evidence for. Every number is read from the same package tables every
+    earlier step reads. The loop breadcrumb lights all four stages here (see
+    ``_STEPS`` below) -- by this screen the tour has walked the whole loop, not one
+    stage of it."""
+    arm = data.arm
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm] if arm is not None else data.arms.iloc[:0]
+    if not base_rows.empty and not arm_rows.empty:
+        base_row, arm_row = base_rows.iloc[0], arm_rows.iloc[0]
+        headline = _result_headline(arm_row)
+        if headline is not None:
+            st.subheader(headline)
+        cards = _result_hero_cards(data, base_row=base_row, arm_row=arm_row)
+        if cards:
+            metric_cards(cards)
+
     with st.container(border=True):
         _result_weakness(data)
     with st.container(border=True):
@@ -1375,6 +1481,7 @@ def _render_result(data: _TourData) -> None:
         _result_improved(data)
     with st.container(border=True):
         _result_failures(data)
+    st.markdown(_CLOSING_THESIS)
 
 
 # Step numbering: 0-based in this module (the ``tour_step`` session key, ``_STEPS``
@@ -1387,35 +1494,37 @@ _STEPS: tuple[_Step, ...] = (
         title="We found a blind spot",
         stage="Diagnose",
         render=_render_weakness,
-        links=(("failures", "Failure Explorer — the whole val split, filterable"),),
+        links=(("failures", "Failure Explorer — see every night frame the baseline missed"),),
     ),
     _Step(
         key="missed_pedestrian",
         title="What the failure looks like",
         stage="Diagnose",
         render=_render_missed_pedestrian,
-        links=(("failures", "Failure Explorer — the same overlay on every val frame"),),
+        links=(("failures", "Failure Explorer — inspect this failure on every val frame"),),
     ),
     _Step(
         key="mine",
         title="Where else does this happen?",
         stage="Mine",
         render=_render_mine,
-        links=(("scenarios", "Scenario Search — every preset, every matching event"),),
+        links=(("scenarios", "Scenario Search — find every braking-near-pedestrian event"),),
     ),
     _Step(
         key="why_selected",
         title="What data should we add?",
         stage="Mine",
         render=_render_why_selected,
-        links=(("active_learning", "Active Learning — the whole mined set and its communities"),),
+        links=(
+            ("active_learning", "Active Learning — inspect the full mined set and its communities"),
+        ),
     ),
     _Step(
         key="retrain",
         title="We changed the training data",
         stage="Train",
         render=_render_retrain,
-        links=(("active_learning", "Active Learning — every arm, its quotas and its table"),),
+        links=(("active_learning", "Active Learning — every arm, its quotas and the full table"),),
     ),
     _Step(
         key="after",
@@ -1426,16 +1535,19 @@ _STEPS: tuple[_Step, ...] = (
     ),
     _Step(
         key="result",
-        title="What we found, added, gained — and what failed",
+        title="Closed the loop",
         # All four stages, lit together: this screen doesn't add a stage of its
         # own, it closes the loop the first six screens walked one stage at a time.
         stage=LOOP_STAGES,
         render=_render_result,
+        # Story sentences, not page descriptions -- and none of them names a
+        # count: a static label is the one string on the screen nothing recomputes,
+        # so a number in one would be the only unchecked figure in the tour.
         links=(
-            ("overview", "Overview — the whole loop and the flagship numbers"),
-            ("failures", "Failure Explorer — the whole val split, filterable"),
+            ("overview", "Overview — the headline results in one screen"),
+            ("failures", "Failure Explorer — every miss, filterable by condition"),
             ("scenarios", "Scenario Search — every preset, every matching event"),
-            ("active_learning", "Active Learning — the whole mined set and its communities"),
+            ("active_learning", "Active Learning — the full experiment, all arms"),
             ("weak_supervision", "Weak Supervision — where the rest of the gain went"),
             ("chat_replay", "Ask the Dataset — recorded chat replays"),
         ),
@@ -1458,9 +1570,10 @@ def _current_step() -> int:
 
 # At most three "Go deeper" links per row: the result screen carries six, and six
 # st.columns across the content width left each page_link ~150 px for a label like
-# "Active Learning — the whole mined set and its communities", which wrapped to four
-# lines of two words (Phase 9a review 5a). Rows of three give every label the width
-# of two of the old columns; a step with one or two links still gets a single row.
+# "Active Learning — inspect the full mined set and its communities", which wrapped
+# to four lines of two words (Phase 9a review 5a). Rows of three give every label
+# the width of two of the old columns; a step with one or two links still gets a
+# single row.
 _GO_DEEPER_PER_ROW = 3
 
 
