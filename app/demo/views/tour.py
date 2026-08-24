@@ -39,7 +39,9 @@ from filters import (
     reason_chips,
     selection_factors,
     severity_caption,
+    strategy_coverage,
     tour_frame_candidates,
+    tour_strategies,
     visible_gt,
     visible_gt_boxes,
 )
@@ -144,6 +146,21 @@ _ARCHITECTURE_STRIP = (
     "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure analysis "
     "→ scenario search → active learning → YOLO retraining → evaluation"
 )
+# Step 4: the intervention screen (Phase 10 spec sec2 row 4). The headline is a
+# claim about COMPOSITION -- the line under the cards has to support it out of this
+# package's own night shares, or the headline would be the one sentence on the step
+# nothing computed.
+_RETRAIN_HEADLINE = "We did not just add data — we changed what the model trains on."
+_STRATEGY_CHART_TITLE = "Night mAP50-95 vs baseline, by acquisition strategy"
+# What the fairness statement promises, minus the budget clause (which is written
+# only when the charted arms really did share a training-set size) and minus the
+# control clause (only when the control arm is one of them).
+_FAIRNESS_TAIL = "same training configuration · scored on the same held-out split"
+# A mined set whose night share rounds to 0 % at the shares' own precision. The
+# similarity explanation (brief sec37) is written only below this, so a set with any
+# real night coverage is never described as a daytime one.
+_NIGHT_ABSENT_SHARE = 0.005
+
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
 _NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
 
@@ -735,16 +752,148 @@ def _render_why_selected(data: _TourData) -> None:
         _open("active_learning", al_frame_token=token)
 
 
+def _night_share_line(data: _TourData, *, arm: str, arm_row: pd.Series) -> str | None:
+    """What the mining CHANGED, in one bold line: the arm's own night share against
+    the comparator arms this package actually ran.
+
+    Nothing is guessed and nothing is filled in: a comparator with no row (or a row
+    whose share was never written) loses its clause, and an arm with no share of its
+    own has no line at all -- the sentence exists to compare shares, and a
+    comparison missing its own subject is not one. A tour pointed AT a comparator
+    (an ``arm`` of "mined", say) drops that clause too, rather than comparing an arm
+    with itself.
+    """
+    share = arm_row.get("night_share")
+    if not bool(pd.notna(share)):
+        return None
+    clauses = [f"Targeted mining: **{float(share):.0%} night**"]
+    for name, label in (("random", "random control"), ("mined", "similarity mining")):
+        if name == arm:
+            continue
+        rows = data.arms.loc[data.arms["arm"] == name]
+        if rows.empty:
+            continue
+        value = rows.iloc[0].get("night_share")
+        if not bool(pd.notna(value)):
+            continue
+        clauses.append(f"{label}: **{float(value):.0%} night**")
+    return " · ".join(clauses)
+
+
+def _charted_ids_caption(coverage: pd.DataFrame) -> str:
+    """The charted strategies' raw arm ids, in small text under the chart: the tour
+    fronts each arm with a story label, and this is where the identifier it stands
+    for stays visible (spec's honesty rules -- readable names are tour-scope, they
+    never replace the id)."""
+    return " · ".join(
+        f"{record.strategy} (`{record.arm}`)" for record in coverage.itertuples(index=False)
+    )
+
+
+def _fairness_statement(coverage: pd.DataFrame, *, baseline: str) -> str:
+    """What was held constant across the charted arms -- the sentence that makes the
+    chart a comparison rather than a leaderboard.
+
+    The budget clause names a frame count only when every charted non-baseline arm
+    really was trained on the same number of images (computed from the arm table,
+    NA counting as "not known to be equal"); otherwise the sentence still promises
+    the same budget, without claiming a figure this package cannot show. The control
+    clause is written only when the control arm is one of the charted ones.
+    """
+    others = coverage.loc[coverage["arm"] != baseline]
+    sizes = others["n_train_images"]
+    known = sizes.dropna()
+    shared = {int(value) for value in known}
+    budget = (
+        f"same {shared.pop():,}-frame budget"
+        if not others.empty and len(known) == len(sizes) and len(shared) == 1
+        else "same budget"
+    )
+    sentence = f"Same detector · {budget} · {_FAIRNESS_TAIL}"
+    if "random" in {str(name) for name in coverage["arm"]}:
+        # "Random sample", not the chart's own "Random sample — control" label: the
+        # clause would otherwise read "... — control is the control".
+        sentence += " — Random sample is the control"
+    return sentence + "."
+
+
+def _best_night_arm_sentence(arms: pd.DataFrame) -> str | None:
+    """Which arm actually answered the diagnosed weakness best -- computed over the
+    WHOLE arm table (not just the charted five, and not assumed to be the arm the
+    tour follows), or ``None`` when no arm in this package has a night delta to
+    rank."""
+    if "delta_night" not in arms.columns:
+        return None
+    ranked = arms.dropna(subset=["delta_night"])
+    if ranked.empty:
+        return None
+    best = ranked.loc[ranked["delta_night"].idxmax()]
+    name = str(best["arm"])
+    return (
+        f"Best intervention for the diagnosed night weakness: "
+        f"**{arm_story_label(name)}** (`{name}`, {float(best['delta_night']):+.4f} night)."
+    )
+
+
+def _similarity_caption(coverage: pd.DataFrame) -> str | None:
+    """Why the similarity arm's bar is where it is (brief sec37) -- written only
+    when this package charted that arm AND its mined set really is a daytime one
+    (``_NIGHT_ABSENT_SHARE``)."""
+    rows = coverage.loc[coverage["arm"] == "mined"]
+    if rows.empty:
+        return None
+    share = rows.iloc[0]["night_share"]
+    if not bool(pd.notna(share)) or float(share) >= _NIGHT_ABSENT_SHARE:
+        return None
+    return (
+        f"Visual similarity alone concentrated on daytime appearance "
+        f"({float(share):.0%} night); the graph + night-floor arm explicitly preserved "
+        "night coverage."
+    )
+
+
+def _scene_diversity_sentence(base_row: pd.Series, arm_row: pd.Series) -> str | None:
+    """How widely the mined frames are spread -- ``None`` when this package never
+    recorded the arm's scene count.
+
+    The "not near-duplicates" clause is a claim about the spread, so it is written
+    only when the set really does span more than one scene; both nouns agree with
+    their counts, the way ``active_learning._strategy_triple`` makes them.
+    """
+    n_scenes = arm_row.get("n_scenes")
+    if not bool(pd.notna(n_scenes)):
+        return None
+    scenes = int(n_scenes)
+    base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
+    if bool(pd.notna(base_n)) and bool(pd.notna(arm_n)):
+        mined = int(arm_n) - int(base_n)
+        subject = f"The {mined:,} frame{'' if mined == 1 else 's'}"
+    else:
+        subject = "The mined frames"
+    sentence = f"{subject} came from {scenes:,} scene{'' if scenes == 1 else 's'}"
+    if scenes > 1:
+        sentence += " — targeted, but not near-duplicates of one scene"
+    return sentence + "."
+
+
 def _render_retrain(data: _TourData) -> None:
-    """Step 4 — what the mining bought the training set, and where this arm lands
-    among every arm the experiment ran."""
+    """Step 4 — the intervention: what the mining changed about the training set,
+    and how that choice compares with the other ways of spending the same budget.
+
+    Phase 10 (spec sec2 row 4) narrows the deep page's 13-arm chart to the tour's
+    five-strategy story (``tour_strategies`` + ``strategy_coverage``, the same pair
+    the Active Learning page's own strategy section charts) and surrounds it with
+    the three sentences that make it readable as an experiment: what changed, what
+    was held constant, and which arm actually won. The four cards are untouched.
+    """
     arm = data.arm
     base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
     arm_rows = data.arms.loc[data.arms["arm"] == arm] if arm is not None else data.arms.iloc[:0]
-    if base_rows.empty or arm_rows.empty:
+    if arm is None or base_rows.empty or arm_rows.empty:
         st.info(STALE_PACKAGE_NOTE)
         return
     base_row, arm_row = base_rows.iloc[0], arm_rows.iloc[0]
+    st.subheader(_RETRAIN_HEADLINE)
 
     # A card whose value is NA is omitted, never rendered as "nan": n_scenes/
     # night_share come from the arm's own mined-set composition, which an older
@@ -774,29 +923,42 @@ def _render_retrain(data: _TourData) -> None:
         ))
     metric_cards(cards)
 
-    ordered = (
-        data.arms.sort_values("round_order").reset_index(drop=True)
-        if "round_order" in data.arms.columns
-        else data.arms
+    line = _night_share_line(data, arm=arm, arm_row=arm_row)
+    if line is not None:
+        st.markdown(line)
+
+    # The tour's five bars, not the deep page's thirteen: where we started, the
+    # control, the obvious idea, the best score-based arm and this arm -- each read
+    # off the same table, in the order the story tells them (the full 13-arm chart
+    # stays on the Active Learning page).
+    coverage = strategy_coverage(
+        data.arms,
+        strategies=tour_strategies(data.arms, baseline=data.baseline, arm=arm),
     )
     st.altair_chart(
         bar_chart(
-            ordered,
-            x="arm",
+            coverage,
+            x="strategy",
             y="delta_night",
-            highlight=arm,
-            # round_order's own order: the arms read as the experiment ran them.
-            sort=[str(name) for name in ordered["arm"]],
-            label_angle=-45,
-            title="Night mAP50-95 vs baseline, all arms",
+            highlight=arm_story_label(arm),
+            sort=[str(label) for label in coverage["strategy"]],
+            zero_line=True,
+            title=_STRATEGY_CHART_TITLE,
             y_title="Δ night mAP50-95",
         ),
         width="stretch",
     )
-    st.markdown(
-        "Every arm retrains the same detector with the same budget and is scored on the "
-        "same held-out split; `random` is the control."
-    )
+    st.caption(_charted_ids_caption(coverage))
+    st.markdown(_fairness_statement(coverage, baseline=data.baseline))
+    winner = _best_night_arm_sentence(data.arms)
+    if winner is not None:
+        st.markdown(winner)
+    similarity = _similarity_caption(coverage)
+    if similarity is not None:
+        st.caption(similarity)
+    spread = _scene_diversity_sentence(base_row, arm_row)
+    if spread is not None:
+        st.markdown(spread)
     provenance("recorded", "active_learning_results.parquet")
 
 
@@ -1190,7 +1352,7 @@ _STEPS: tuple[_Step, ...] = (
     ),
     _Step(
         key="retrain",
-        title="Retrain on what was found",
+        title="We changed the training data",
         stage="Train",
         render=_render_retrain,
         links=(("active_learning", "Active Learning — every arm, its quotas and its table"),),

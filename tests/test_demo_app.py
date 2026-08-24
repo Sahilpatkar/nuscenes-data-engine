@@ -3980,11 +3980,19 @@ def test_tour_walks_steps_2_to_5(
     )
     assert "Active Learning" in str(at.button(key="tour_open_al_frame").label)
 
-    # --- step 4: "Retrain on what was found" ---------------------------------------
+    # --- step 4: "We changed the training data" ------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
-    assert any(text.startswith("Step 5 of 7 · Retrain on what was found") for text in captions)
+    markdowns = [str(block.value) for block in at.markdown]
+    assert any(
+        text.startswith("Step 5 of 7 · We changed the training data") for text in captions
+    )
+    # the intervention headline -- a claim the composition line under the cards
+    # then supports with this package's own night shares
+    assert [str(head.value) for head in at.subheader] == [
+        "We did not just add data — we changed what the model trains on."
+    ]
     # the fixture arm table: baseline 100 -> graph_rate_night 120 train images, and
     # the arm's own mined-set composition (1 scene, all-night).
     assert [str(metric.label) for metric in at.metric] == [
@@ -3996,7 +4004,48 @@ def test_tour_walks_steps_2_to_5(
     # (Phase 9a final review), so the mined total moves to the delta instead.
     assert [str(metric.value) for metric in at.metric] == ["20", "1", "100%", "120"]
     assert str(at.metric[3].delta) == "+20 mined frames"
+    # WHAT changed, from the arms table's own night shares (arm 1.0, random 0.0) --
+    # and no similarity clause, because this package never ran `mined`.
+    assert (
+        "Targeted mining: **100% night** · random control: **0% night**" in markdowns
+    )
+    assert not any("similarity mining:" in text for text in markdowns)
+    # ONE chart, and it is the five-strategy story chart (story labels on the axis),
+    # not the deep page's 13-arm chart: the fixture carries three of the strategies.
     assert len(at.get("vega_lite_chart")) == 1
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 1
+    assert list(drawn[0]["strategy"]) == [
+        "Baseline (no mined data)",
+        "Random sample — control",
+        "Graph + night targeting",
+    ]
+    assert "Δ night mAP50-95" in _all_y_titles(at)
+    # the raw ids stay on screen, in small text under the chart
+    assert any(
+        "Baseline (no mined data) (`baseline`) · Random sample — control (`random`) · "
+        "Graph + night targeting (`graph_rate_night`)" in text
+        for text in captions
+    )
+    # the fairness statement. The fixture's charted arms do NOT share a budget
+    # (random 115 vs graph_rate_night 120 train images), so no frame count is
+    # claimed -- test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran
+    # pins the other branch.
+    assert (
+        "Same detector · same budget · same training configuration · scored on the "
+        "same held-out split — Random sample is the control." in markdowns
+    )
+    # the winner is computed over the WHOLE arm table, not asserted
+    assert (
+        "Best intervention for the diagnosed night weakness: **Graph + night "
+        "targeting** (`graph_rate_night`, +0.0300 night)." in markdowns
+    )
+    # the mined set's spread, with the noun agreeing: one scene here, so the
+    # "not near-duplicates" clause (true only of a many-scene set) is not written
+    assert "The 20 frames came from 1 scene." in markdowns
+    assert not any("near-duplicates" in text for text in markdowns)
+    # ... and no similarity explanation: there is no `mined` arm to say it about
+    assert not any("Visual similarity alone" in text for text in captions)
     assert any("recorded experiment output" in text for text in captions)
 
     # --- step 5: "Same kind of frame, after" ---------------------------------------
@@ -4018,6 +4067,86 @@ def test_tour_walks_steps_2_to_5(
     )
     assert any("recomputed in this app" in text for text in captions)
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
+
+
+def _add_mined_arm_at_the_shared_budget(built_demo_data: Path) -> None:
+    """Give the built package the similarity-mining arm, at the SAME training-set
+    size as every other charted arm.
+
+    Two things the base fixture cannot show on the retrain step, in one package:
+    the real package's `mined` composition (219 scenes, 0 % night, +0.0072 night --
+    the numbers the §37 explanation is about), and a set of charted arms that all
+    spent the same budget, which is what lets the fairness statement name a frame
+    count at all. Injected the way ``_add_mined_arm`` / ``_add_weak_night_twin_arm``
+    inject theirs: only the columns the step reads are set, the rest come back NaN
+    through ``pd.concat``'s own column align.
+    """
+    path = built_demo_data / "active_learning_results.parquet"
+    arms = pd.read_parquet(path)
+    arms.loc[arms["arm"] == "random", "n_train_images"] = 120
+    extra = pd.DataFrame({
+        "arm": ["mined"],
+        "family": ["mined"],
+        "round_order": [int(arms["round_order"].max()) + 1],
+        "n_train_images": [120],
+        "overall_map5095": [0.215],
+        "night_map5095": [0.1072],
+        "delta_overall": [0.015],
+        "delta_night": [0.0072],
+        "n_scenes": pd.array([219], dtype="Int64"),
+        "night_share": [0.0],
+    })
+    pd.concat([arms, extra], ignore_index=True).to_parquet(path, index=False)
+
+
+def test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran(
+    built_demo_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a `mined` row in the package the retrain step gains the fourth bar, its
+    night-share clause, the §37 explanation of what visual similarity alone bought
+    -- and, because every charted arm now shares a training-set size, the fairness
+    statement names the budget instead of just claiming one.
+
+    ``test_tour_walks_steps_2_to_5`` pins the other side of all four branches on the
+    base fixture (no `mined` row, unequal budgets).
+    """
+    pytest.importorskip("streamlit")
+    _add_mined_arm_at_the_shared_budget(built_demo_data)
+    at = _tour_apptest(built_demo_data, monkeypatch)
+    _walk_to_step(at, 4)
+    assert not at.exception
+
+    captions = [str(caption.value) for caption in at.caption]
+    markdowns = [str(block.value) for block in at.markdown]
+    assert (
+        "Targeted mining: **100% night** · random control: **0% night** · "
+        "similarity mining: **0% night**" in markdowns
+    )
+    drawn = _strategy_chart_frames(at)
+    assert len(drawn) == 1
+    assert list(drawn[0]["strategy"]) == [
+        "Baseline (no mined data)",
+        "Random sample — control",
+        "Similarity mining",
+        "Graph + night targeting",
+    ]
+    assert any("Similarity mining (`mined`)" in text for text in captions)
+    # §37: the similarity arm's 0 % night, explained where it is charted
+    assert any(
+        "Visual similarity alone concentrated on daytime appearance (0% night); the "
+        "graph + night-floor arm explicitly preserved night coverage." in text
+        for text in captions
+    )
+    # every charted non-baseline arm is at 120 training images, so the budget is named
+    assert (
+        "Same detector · same 120-frame budget · same training configuration · scored "
+        "on the same held-out split — Random sample is the control." in markdowns
+    )
+    # the winner is still computed: `mined` (+0.0072) does not beat the tour's arm
+    assert (
+        "Best intervention for the diagnosed night weakness: **Graph + night "
+        "targeting** (`graph_rate_night`, +0.0300 night)." in markdowns
+    )
 
 
 def test_tour_step_3_leads_with_the_same_reason_chips(
