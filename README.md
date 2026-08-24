@@ -19,7 +19,7 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 ## Public demo
 
-**Live demo:** _pending deploy — link added after the first Streamlit Community Cloud deployment_
+**Live demo:** [nuscenes-data-engine-sahil.streamlit.app](https://nuscenes-data-engine-sahil.streamlit.app/)
 
 **Story site:** [sahilpatkar.github.io/nuscenes-data-engine](https://sahilpatkar.github.io/nuscenes-data-engine/) — the report edition of the loop story (`web/`, the site's main edition), deployed to GitHub Pages on merge; the original scroll-through edition stays at [/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/)
 
