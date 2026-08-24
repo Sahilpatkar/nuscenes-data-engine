@@ -17,7 +17,7 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 ## Public demo
 
-**Live demo:** _pending deploy — link added after the first Streamlit Community Cloud deployment_
+**Live demo:** [nuscenes-data-engine-sahil.streamlit.app](https://nuscenes-data-engine-sahil.streamlit.app/)
 
 **Story site:** _pending first deploy — a designed scroll-through telling of the loop
 story (`web/`), deployed to GitHub Pages on merge_
