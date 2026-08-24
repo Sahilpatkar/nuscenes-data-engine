@@ -87,23 +87,24 @@ LEGEND_ITEMS: tuple[tuple[str, str], ...] = (
     ("yellow", "yellow dotted — low-confidence claim (below the hit floor)"),
     ("red", "red — false positive"),
 )
-# Opt-in: a pseudo box is not a prediction status, and only the Weak Supervision page
-# draws one -- claiming the colour on a page that never draws it would be a lie.
-PSEUDO_LEGEND_ITEM: tuple[str, str] = ("blue", "blue — pseudo-label box")
+# STYLE_PSEUDO deliberately has NO entry here (consolidated review M4): a pseudo box
+# is not a prediction status, and the one page that draws them -- Weak Supervision --
+# explains in its own prose what a pseudo box IS, which is a different claim. The
+# opt-in chip this component shipped with had no caller, and on that page's GT +
+# pseudo image it would have claimed prediction colours the image never carries.
 
 
-def legend_text(*, pseudo: bool = False) -> str:
+def legend_text() -> str:
     """The overlay legend as one markdown line of ``:{colour}-badge[...]`` chips.
 
     The badge colour is a hint only; the words carry the on-image description
-    ("white", "dashed", "dotted"). ``pseudo=True`` appends the pseudo-label item.
+    ("white", "dashed", "dotted").
     """
-    items = (*LEGEND_ITEMS, PSEUDO_LEGEND_ITEM) if pseudo else LEGEND_ITEMS
-    return " ".join(f":{color}-badge[{wording}]" for color, wording in items)
+    return " ".join(f":{color}-badge[{wording}]" for color, wording in LEGEND_ITEMS)
 
 
-def legend(*, pseudo: bool = False) -> None:
-    st.markdown(legend_text(pseudo=pseudo))
+def legend() -> None:
+    st.markdown(legend_text())
 
 
 _VALID_MODES = ("gt", "pred", "overlay")

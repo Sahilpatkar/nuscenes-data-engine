@@ -356,9 +356,16 @@ def _claim(
 
 
 def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str) -> str:
-    """What ``model`` claimed about one GT box: its confidence and status, or "no
-    claim" when it never matched the box at all (an honest absence -- a model that
-    said nothing is not a model that said something weak)."""
+    """What ``model`` claimed about one GT box: its confidence and what kind of claim
+    it is, or "no claim" when it never matched the box at all (an honest absence --
+    a model that said nothing is not a model that said something weak).
+
+    Both branches read as English (consolidated review M3): the low-confidence one
+    always spelled itself out, while the confident one printed the table's raw
+    ``status`` code beside it, so the same line said "0.135 (low-confidence — ...)"
+    and "0.800 (tp)". A status this app has no word for falls back to its own id
+    with the underscores spaced, rather than being handed a meaning nobody wrote.
+    """
     claim = _claim(preds, token=token, model=model, annotation=annotation)
     if claim is None:
         return "no claim"
@@ -368,7 +375,9 @@ def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str)
             f"{conf:.3f} (low-confidence — below the {_CONF_HIT_FLOOR:.2f} hit floor; "
             "the matching rule still counts it as a hit)"
         )
-    return f"{conf:.3f} ({status})"
+    if status == "tp":
+        return f"{conf:.3f} (confident detection)"
+    return f"{conf:.3f} ({status.replace('_', ' ')})"
 
 
 def _pedestrian_facts(
@@ -788,12 +797,18 @@ def _night_share_line(data: _TourData, *, arm: str, arm_row: pd.Series) -> str |
     comparison missing its own subject is not one. A tour pointed AT a comparator
     (an ``arm`` of "mined", say) drops that clause too, rather than comparing an arm
     with itself.
+
+    Every arm is named by its STORY LABEL -- the same name the chart's axis, the
+    cards and step 5's captions use (consolidated review M6). This line used to
+    invent a third name for each of them ("Targeted mining", "random control"), so
+    one screen called the same arm three things and the viewer had to work out that
+    they were one arm.
     """
     share = arm_row.get("night_share")
     if not bool(pd.notna(share)):
         return None
-    clauses = [f"Targeted mining: **{float(share):.0%} night**"]
-    for name, label in (("random", "random control"), ("mined", "similarity mining")):
+    clauses = [f"{arm_story_label(arm)}: **{float(share):.0%} night**"]
+    for name in ("random", "mined"):
         if name == arm:
             continue
         rows = data.arms.loc[data.arms["arm"] == name]
@@ -802,7 +817,7 @@ def _night_share_line(data: _TourData, *, arm: str, arm_row: pd.Series) -> str |
         value = rows.iloc[0].get("night_share")
         if not bool(pd.notna(value)):
             continue
-        clauses.append(f"{label}: **{float(value):.0%} night**")
+        clauses.append(f"{arm_story_label(name)}: **{float(value):.0%} night**")
     return " · ".join(clauses)
 
 
@@ -843,21 +858,38 @@ def _fairness_statement(coverage: pd.DataFrame, *, baseline: str) -> str:
     return sentence + "."
 
 
-def _best_night_arm_sentence(arms: pd.DataFrame) -> str | None:
-    """Which arm actually answered the diagnosed weakness best -- computed over the
-    WHOLE arm table (not just the charted five, and not assumed to be the arm the
-    tour follows), or ``None`` when no arm in this package has a night delta to
-    rank."""
+def _best_night_arm_sentence(arms: pd.DataFrame, *, baseline: str) -> str | None:
+    """Which INTERVENTION actually answered the diagnosed weakness best -- computed
+    over the whole arm table (not just the charted five, and not assumed to be the
+    arm the tour follows), or ``None`` when this package ran no intervention with a
+    night delta to rank.
+
+    The baseline is dropped before the ranking (consolidated review M2): its
+    ``delta_night`` is +0.0000 by construction, since it is the comparator every
+    other delta is measured against, so on a package where every arm regressed it
+    held the highest night delta and was crowned "best intervention" -- a run where
+    nothing worked reading as a run where doing nothing worked.
+
+    And a ranking whose top arm still lost night mAP is not a win, so it is not
+    written as one: the sentence then says no intervention beat the baseline and
+    names the closest, which is the same fact without the promotion.
+    """
     if "delta_night" not in arms.columns:
         return None
     ranked = arms.dropna(subset=["delta_night"])
+    ranked = ranked.loc[ranked["arm"] != baseline]
     if ranked.empty:
         return None
     best = ranked.loc[ranked["delta_night"].idxmax()]
-    name = str(best["arm"])
+    name, delta = str(best["arm"]), float(best["delta_night"])
+    if delta <= 0:
+        return (
+            f"No intervention beat the baseline on the diagnosed night weakness — "
+            f"the closest was **{arm_story_label(name)}** (`{name}`, {delta:+.4f} night)."
+        )
     return (
         f"Best intervention for the diagnosed night weakness: "
-        f"**{arm_story_label(name)}** (`{name}`, {float(best['delta_night']):+.4f} night)."
+        f"**{arm_story_label(name)}** (`{name}`, {delta:+.4f} night)."
     )
 
 
@@ -978,12 +1010,17 @@ def _render_retrain(data: _TourData) -> None:
             zero_line=True,
             title=_STRATEGY_CHART_TITLE,
             y_title="Δ night mAP50-95",
+            # The same tilt the deep page's arm charts use (consolidated review
+            # M5): five story labels ("Random sample — control" is 23 characters)
+            # crowd a chart this narrow, and `bar_chart` never drops or truncates a
+            # label -- so drawn flat they would overlap instead.
+            label_angle=-45,
         ),
         width="stretch",
     )
     st.caption(_charted_ids_caption(coverage))
     st.markdown(_fairness_statement(coverage, baseline=data.baseline))
-    winner = _best_night_arm_sentence(data.arms)
+    winner = _best_night_arm_sentence(data.arms, baseline=data.baseline)
     if winner is not None:
         st.markdown(winner)
     similarity = _similarity_sentence(coverage)
@@ -1111,7 +1148,10 @@ def _render_after(data: _TourData) -> None:
                     ),
                     width="stretch",
                 )
-                st.caption(arm_story_label(model))
+                # Story label AND raw id (the spec's honesty rule, consolidated
+                # review I1): this was the one screen naming an arm readably with
+                # the identifier it stands for nowhere on it.
+                st.caption(f"{arm_story_label(model)} (`{model}`)")
         # Under the pair, not above it: the legend describes colours this step just
         # drew, so it is written only where an overlay was actually rendered.
         legend()
@@ -1415,10 +1455,15 @@ def _result_hero_cards(
 
     A card whose source is NA is omitted rather than rendered as "nan" (the step-4
     rule); the night-share delta clause is written only where this package really
-    ran the random control; and the night-pedestrian card states its absolute delta
+    ran the random control; and the night-pedestrian card states its absolute gain
     alone when ``relative_gain`` finds no honest base to divide by. Values stay
     short -- st.metric renders them in a narrow column and truncates a long one
     mid-word (Phase 9a review 5a) -- so the fuller figures ride in the deltas.
+
+    The night-pedestrian delta is the absolute gain and nothing else (consolidated
+    review M5): it used to carry the "0.0826 → 0.1171" arrow as well, which is a
+    second copy of the arrow answer 3's own ``gain_text`` sentence writes a few
+    lines below, in a delta line narrower than the sentence.
     """
     cards: list[tuple[str, str] | tuple[str, str, str]] = []
     base_n, arm_n = base_row.get("n_train_images"), arm_row.get("n_train_images")
@@ -1444,12 +1489,12 @@ def _result_hero_cards(
         delta = float(after) - float(before)
         relative = relative_gain(float(before), float(after))
         if relative is None:
-            cards.append(("Night-pedestrian mAP50-95", f"{delta:+.4f} abs"))
+            cards.append(("Night-pedestrian mAP50-95", f"{delta:+.4f} absolute"))
         else:
             cards.append((
                 "Night-pedestrian mAP50-95",
                 f"{relative:+.1%} relative",
-                f"{delta:+.4f} abs ({float(before):.4f} → {float(after):.4f})",
+                f"{delta:+.4f} absolute",
             ))
     return cards
 

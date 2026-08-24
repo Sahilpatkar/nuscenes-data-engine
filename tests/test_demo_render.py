@@ -19,7 +19,6 @@ from render import (  # noqa: E402
     LEGEND_ITEMS,
     LOOP_STAGES,
     PROVENANCE,
-    PSEUDO_LEGEND_ITEM,
     STYLE_FN,
     STYLE_FP,
     STYLE_GT,
@@ -740,9 +739,12 @@ def test_legend_text_is_one_badge_chip_per_legend_item() -> None:
     assert text.startswith(":green-badge[green — ground truth]")
     assert "white — true positive" in text and ":gray-badge[" in text
 
-    assert PSEUDO_LEGEND_ITEM[1] not in text
-    pseudo_color, pseudo_wording = PSEUDO_LEGEND_ITEM
-    assert legend_text(pseudo=True) == f"{text} :{pseudo_color}-badge[{pseudo_wording}]"
+    # The legend describes what the OVERLAY draws, and nothing else: a pseudo-label
+    # box is not a prediction status (review M4 -- the opt-in pseudo chip this
+    # component shipped with had no caller, and on the one page that draws pseudo
+    # boxes it would have claimed prediction colours that image never carries).
+    assert "pseudo" not in text
+    assert "pseudo" not in inspect.signature(legend_text).parameters
 
 
 # Each legend entry, by its wording, and the NAME of the overlay style it describes.
@@ -759,9 +761,10 @@ _LEGEND_STYLE_NAMES = {
 def test_legend_covers_every_style_the_overlay_can_draw() -> None:
     """Drift guard: a new prediction status (a new ``_PRED_STYLES`` entry) or a new
     box style cannot ship without a legend entry describing it, and a legend entry
-    cannot describe a colour the renderer never draws. The pseudo box is the one
-    opt-in style -- it is not a prediction status, and only the Weak Supervision
-    page draws it -- so it has its own item behind ``pseudo=True``.
+    cannot describe a colour the renderer never draws. ``STYLE_PSEUDO`` is the one
+    style deliberately outside the contract: a pseudo box is not a prediction
+    status, and the one page that draws them explains in prose what a pseudo box IS
+    (review M4).
 
     Every style is read out of ``legend_text.__globals__`` -- the module namespace
     this file's own top-level import bound -- for the reason spelled out above at
@@ -779,6 +782,4 @@ def test_legend_covers_every_style_the_overlay_can_draw() -> None:
     described = {module[_LEGEND_STYLE_NAMES[wording]] for wording in wordings}
     assert described == set(module["_PRED_STYLES"].values()) | {STYLE_GT, STYLE_FN}
     assert STYLE_PSEUDO not in described
-
-    assert PSEUDO_LEGEND_ITEM == ("blue", "blue — pseudo-label box")
     assert STYLE_PSEUDO not in module["_PRED_STYLES"].values()

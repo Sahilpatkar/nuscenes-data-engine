@@ -66,6 +66,11 @@ and hierarchy only.
   pseudo-label box), defined beside the `STYLE_*` constants, with a drift-guard
   unit test tying entries to `_PRED_STYLES` + `STYLE_GT`/`STYLE_FN`/`STYLE_PSEUDO`.
   The badge colour is a hint; the words carry the on-image description.
+  (amendment 2026-08-23, review: `PSEUDO_LEGEND_ITEM` and the `pseudo=` parameter
+  are removed — no page ever called them, and a pseudo chip on Weak Supervision's
+  GT + pseudo image would claim prediction colours that image never draws. The
+  signatures are `legend_text()` / `legend()`; the drift guard keeps
+  `STYLE_PSEUDO` outside the legend contract.)
 
 ## 2. The tour, step by step (`views/tour.py`; keys, step count and degradation branches unchanged)
 
@@ -85,6 +90,12 @@ Takeaways use `render.learned()`.
 | 5 | Did it fix the failure? | derived before/after callout (two metric cards from `upgrade_callout`); two-column baseline-vs-arm overlays with `arm_story_label` captions; the `tour_exemplar_model` radio retires (the AL page keeps its radio; `tour_open_exemplar` serves inspection); `render.legend()`; `gain_text` abs+rel sentence; night-mAP sentence, `_HERO_HONESTY_LINE`, held-out caption, provenance, deep link kept; the `fixed_boxes` dataframe in `st.expander("Technical details — per-box claims")`; empty-table branch byte-identical |
 | 6 | Closed the loop | guarded subheader ("… measurable improvement" iff `delta_night > 0`, else "… measured result"); three hero metric cards (frames added / night share vs control / night-ped relative gain — short values, each omitted on NA); the four bordered answers stay (answer 3 uses `gain_text`; answer 2 gains the §37 clause when its condition holds; answer 4 untouched); closing thesis "The system demonstrated a repeatable way to turn model failures into data decisions." |
 
+(amendment 2026-08-23, review: step 4's bold comparison names every arm by its
+story label, so one screen has one name per arm — "Graph + night targeting: **31%
+night** · Random sample — control: **13% night**"; step 5's two overlay captions
+carry the raw arm id beside the label; step 6's night-pedestrian card states its
+absolute gain alone, the arrow staying in answer 3's `gain_text` sentence.)
+
 Go-deeper labels become story sentences keeping the "PageName — clause" shape (no
 numerals in static labels), e.g. "Failure Explorer — see every night frame the
 baseline missed", "Scenario Search — find every braking-near-pedestrian event",
@@ -99,6 +110,8 @@ a source check that no view defines its own prose legend. Weak Supervision's
 pseudo-box prose legend stays (it defines what a pseudo box *is*). GT-only frames
 (tour steps 2–3) get no legend — it would claim prediction colours that are not
 drawn.
+
+(amendment 2026-08-23, review: the legend also renders on the Failure Explorer detail and the Overview hero — every full prediction overlay in the app now carries it.)
 
 ## 4. Out of scope / already satisfied
 
