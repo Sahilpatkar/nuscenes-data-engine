@@ -6,9 +6,9 @@ renders as "From model failure to better training data" and its steps carry the
 story titles below, while the sidebar entry main.py registers stays "Guided tour".
 
 Seven steps, one screen each: the weakness, the frame it shows up on, mining for
-more like it, why one mined frame was picked, the retrain, the same kind of frame
-after, and the result screen. The step index is the page's only state
-(``st.session_state["tour_step"]``); Back/Next move it.
+more like it, why one mined frame was picked, the retrain, the before/after pair on
+one hand-approved frame, and the result screen. The step index is the page's only
+state (``st.session_state["tour_step"]``); Back/Next move it.
 
 This module writes prose, never figures: every number on a step is derived here
 from the same package tables the deep pages read, each step says where its numbers

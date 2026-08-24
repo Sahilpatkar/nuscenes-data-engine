@@ -36,7 +36,7 @@ screen as recorded: the public app never runs a model or calls an LLM.
 
 | | |
 |---|---|
-| ![Guided tour](docs/img/demo-tour.png)<br>**Guided tour** — the 2-3 minute default path through the loop, ending in a result screen | ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame |
+| ![Guided tour](docs/img/demo-tour.png)<br>**Guided tour** — "From model failure to better training data": the 2-3 minute default path from the night blind spot to the measured result | ![Overview](docs/img/demo-overview.png)<br>**Overview** — scale, headline results, and the model at work on a night frame |
 | ![Failure Explorer](docs/img/demo-failures.png)<br>**Failure Explorer** — image-first detail, the model toggle beside the GT/prediction overlay | ![Scenario Search](docs/img/demo-scenarios.png)<br>**Scenario Search** — preset queries, a one-screen event viewer with the CAN speed/accel curve, and a graph panel that reveals the matched path step by step |
 | ![Active Learning](docs/img/demo-active-learning.png)<br>**Active Learning** — three acquisition strategies compared, per-frame reason chips, all 13 arms, before/after | ![Weak Supervision](docs/img/demo-weak-supervision.png)<br>**Weak Supervision** — one frame in three views, the loss split, and where the VLM's counting breaks down |
 | ![Ask the Dataset](docs/img/demo-chat-replay.png)<br>**Ask the Dataset (recorded)** — recorded agent answers with their tool calls | |
@@ -53,9 +53,9 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
 FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
-two-job CI (quality + CPU smoke-train). **Demo phases 1–9b shipped:** the guided
-tour plus six-page public demo above runs entirely off the committed `demo_data/`
-package and is deployable to Streamlit Community Cloud.
+two-job CI (quality + CPU smoke-train). **Demo phases 1–10 shipped:** a story-led
+guided tour plus the six-page public demo above runs entirely off the committed
+`demo_data/` package and is deployable to Streamlit Community Cloud.
 
 ## Architecture
 
