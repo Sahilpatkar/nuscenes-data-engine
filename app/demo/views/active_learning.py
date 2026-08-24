@@ -759,7 +759,9 @@ def _render_before_after(
             )
         )
         provenance("recomputed", "per-box claims from predictions.parquet")
-    legend()
+        # The legend describes colours this panel just drew, so it renders only
+        # where the overlay actually did (final review, Phase 10).
+        legend()
 
     upgraded = fixed_boxes(gt_rows, frame_preds, baseline=baseline, arm=arm)
     st.markdown(f"**Boxes `{arm}` upgraded over `{baseline}`**")

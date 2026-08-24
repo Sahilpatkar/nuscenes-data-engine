@@ -1530,9 +1530,10 @@ def _render_result(data: _TourData) -> None:
 
 
 # Step numbering: 0-based in this module (the ``tour_step`` session key, ``_STEPS``
-# indices, ``_walk_to_step``) and 1-based in everything the viewer reads ("Step 4 of
-# 7", and the prose cross-references inside the steps themselves). "Step 4" in a
-# docstring or a rendered sentence therefore means ``_STEPS[3]``.
+# indices, and the docstrings' "step N" references) and 1-based in everything the
+# viewer reads ("Step 4 of 7", and the prose cross-references inside the steps
+# themselves). "Step 4" in a rendered sentence therefore means ``_STEPS[3]``; in a
+# docstring it means ``_STEPS[4]``.
 _STEPS: tuple[_Step, ...] = (
     _Step(
         key="weakness",
