@@ -345,7 +345,7 @@ picker after the first PR run).
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine: `graph_rate_night` **+0.0101 night mAP50-95** |
 | 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
-| Demo 1-9a ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a guided tour plus six story pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
+| Demo 1-10 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
 
 | B ✅ | Geo-spatial + CAN bus | Ego pose, all 1.17M 3D boxes, and keyframe-aligned CAN dynamics → Parquet, DuckDB, and Neo4j `EgoPose`/`ObjectObservation` nodes. *"Hard braking with a pedestrian within 10 m"* answers **30, identically in SQL and Cypher**; CAN speed cross-checks against GT pose at r = 0.999 — see [DATA.md](docs/DATA.md), [GRAPH.md](docs/GRAPH.md) |
 
