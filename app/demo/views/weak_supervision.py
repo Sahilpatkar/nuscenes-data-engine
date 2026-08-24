@@ -49,6 +49,7 @@ from render import (
     bar_chart,
     draw_overlay,
     learned,
+    legend,
     loop_breadcrumb,
     metric_cards,
     provenance,
@@ -105,16 +106,6 @@ _LEGEND = (
     "(conf ≥ 0.5) kept because the VLM's per-class counts agreed within ±1 — the VLM "
     "emits counts, never boxes, so the number on the label is the detector's "
     "confidence. Train-pool frames carry no model predictions."
-)
-
-# The overlay legend the Active Learning page and the guided tour already show for a
-# per-model overlay, verbatim: row 2 below draws exactly that picture (GT plus one
-# model's own boxes), and a second wording for the same colours would read as a
-# second rule.
-_OVERLAY_LEGEND = (
-    "Green = ground truth, orange dashed = a GT box this model missed, white = its "
-    "true positives, yellow dotted = a claim below the confidence floor, red = a "
-    "false positive."
 )
 
 # --- Phase 9b (Task 8): one frame, three views ------------------------------------
@@ -426,7 +417,7 @@ def _render_result_row(
         for column, (caption, rendered) in zip(st.columns(3), views, strict=True):
             with column:
                 st.image(rendered, caption=caption)
-        st.caption(_OVERLAY_LEGEND)
+        legend()
     st.caption(
         f"`{token}` ({row.get('scene_name')}) is a held-out val frame — neither "
         "detector saw it in training."

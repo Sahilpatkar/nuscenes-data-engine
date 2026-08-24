@@ -45,6 +45,7 @@ from render import (
     chip_row,
     draw_overlay,
     learned,
+    legend,
     loop_breadcrumb,
     metric_cards,
     provenance,
@@ -758,11 +759,7 @@ def _render_before_after(
             )
         )
         provenance("recomputed", "per-box claims from predictions.parquet")
-    st.caption(
-        "Green = ground truth, orange dashed = a GT box this model missed, white = its "
-        "true positives, yellow dotted = a claim below the confidence floor, red = a "
-        "false positive."
-    )
+    legend()
 
     upgraded = fixed_boxes(gt_rows, frame_preds, baseline=baseline, arm=arm)
     st.markdown(f"**Boxes `{arm}` upgraded over `{baseline}`**")

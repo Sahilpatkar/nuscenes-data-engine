@@ -32,8 +32,8 @@ from filters import (
     filmstrip_steps,
     fixed_boxes,
     frame_quota_before,
+    gain_text,
     gt_for_render,
-    model_label,
     parity_short,
     rank_events,
     reason_chips,
@@ -42,6 +42,7 @@ from filters import (
     strategy_coverage,
     tour_frame_candidates,
     tour_strategies,
+    upgrade_callout,
     visible_gt,
     visible_gt_boxes,
 )
@@ -117,11 +118,6 @@ _EXPLAIN_FRAME_ABSENT_NOTE = (
     "this frame is not in the staged selection facts — re-run `demo al-explain`"
 )
 _TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
-_OVERLAY_LEGEND = (
-    "Green = ground truth, orange dashed = a GT box this model missed, white = its "
-    "true positives, yellow dotted = a claim below the confidence floor, red = a "
-    "false positive."
-)
 # Step 1: what the frame IS (written only where the manifest says so), and the
 # question it hands to the mining steps.
 _HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
@@ -160,6 +156,12 @@ _FAIRNESS_TAIL = "same training configuration · scored on the same held-out spl
 # similarity explanation (brief sec37) is written only below this, so a set with any
 # real night coverage is never described as a daytime one.
 _NIGHT_ABSENT_SHARE = 0.005
+
+# Step 5: the question the whole tour has been walking towards, asked above the two
+# pictures that answer it -- and the fold the per-box evidence sits in, so the screen
+# reads as an answer rather than as a table.
+_AFTER_HEADLINE = "Did the targeted retraining fix the kind of failure we started with?"
+_PER_BOX_FOLD = "Technical details — per-box claims"
 
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
 _NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
@@ -423,6 +425,21 @@ def _miss_to_hit_sentence(data: _TourData, hero: str) -> str | None:
     )
 
 
+def _held_out_caption(data: _TourData, token: str) -> None:
+    """Write "never in any training set" for ``token`` -- but only where the manifest
+    says so.
+
+    Both the hero (step 1) and the hand-approved exemplar (step 5) are curated val
+    frames on the shipped package, and the claim is the whole point of showing them.
+    A package that staged either as a train-pool frame must not be told it was held
+    out, so the split is read per frame rather than assumed, and the two steps share
+    one gate rather than two that could drift.
+    """
+    rows = data.manifest.loc[data.manifest["sample_data_token"].astype(str) == token]
+    if not rows.empty and str(rows.iloc[0].get("split")) == "val":
+        st.caption(_HELD_OUT_CAPTION)
+
+
 def _render_missed_pedestrian(data: _TourData) -> None:
     """Step 1 — the weakness on one frame: what each model claimed about the
     pedestrian the baseline missed."""
@@ -460,12 +477,7 @@ def _render_missed_pedestrian(data: _TourData) -> None:
     )
     legend()
     st.caption(HERO_CAPTION)
-    # Said only where the manifest says it: the hero is the curated val split's own
-    # frame on the shipped package, but a package that staged it as a train-pool
-    # frame must not be told it was held out.
-    hero_rows = data.manifest.loc[data.manifest["sample_data_token"].astype(str) == hero]
-    if not hero_rows.empty and str(hero_rows.iloc[0].get("split")) == "val":
-        st.caption(_HELD_OUT_CAPTION)
+    _held_out_caption(data, hero)
 
     for line in _pedestrian_facts(data, token=hero, gt_rows=gt_rows, models=models):
         st.markdown(line)
@@ -1006,50 +1018,98 @@ def _hero_recovery_is_low_conf(data: _TourData) -> bool:
     return bool(upgraded.empty)
 
 
+def _night_ped_sentence(data: _TourData, arm: str) -> str | None:
+    """The DIAGNOSED slice's own before/after -- night pedestrian mAP50-95, stated
+    absolute and relative -- or ``None`` when this package's arm table carries no
+    night-pedestrian figure for one of the two models.
+
+    The same two numbers the result screen's "Did the model improve?" answer reads,
+    from the same two rows; ``gain_text`` is what turns them into a sentence (and
+    drops the relative clause when the base leaves no honest ratio), so neither the
+    percentage nor its sign is ever written here by hand.
+    """
+    base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
+    arm_rows = data.arms.loc[data.arms["arm"] == arm]
+    if base_rows.empty or arm_rows.empty:
+        return None
+    before = base_rows.iloc[0].get("night_ped_map5095")
+    after = arm_rows.iloc[0].get("night_ped_map5095")
+    if not (bool(pd.notna(before)) and bool(pd.notna(after))):
+        return None
+    return gain_text("Night pedestrian mAP50-95", float(before), float(after))
+
+
 def _render_after(data: _TourData) -> None:
-    """Step 5 — a hand-approved before/after frame, and the arm-level number that
-    is the actual result."""
+    """Step 5 — did the retraining fix the KIND of failure step 1 opened on?
+
+    A before/after is two pictures (Phase 10 spec sec2 row 5), so the hand-approved
+    exemplar is drawn twice, side by side, under the one box that actually changed
+    hands — the model radio this step used to carry retires, and full inspection is
+    the Active Learning deep link's job. The frame stays an illustration: the two
+    sentences under it are arm-level results on the held-out split, which is what
+    "did it work?" is answered with.
+    """
     arm = data.arm
     tokens = [str(token) for token in (data.exemplars.get("tokens") or [])]
     if not tokens or arm is None:
         st.info(_NO_EXEMPLAR_NOTE)
         return
     token = tokens[0]
-    models = [data.baseline, arm]
-    model = (
-        st.radio(
-            "Model", models, key="tour_exemplar_model", horizontal=True, format_func=model_label
-        )
-        or models[0]
-    )
+
+    st.subheader(_AFTER_HEADLINE)
 
     gt_rows = visible_gt(data.gt, token)
     frame_preds = data.preds.loc[data.preds["sample_data_token"] == token]
+    upgraded = fixed_boxes(gt_rows, frame_preds, baseline=data.baseline, arm=arm)
+
+    # The callout names ONE box, in the claim strings the table itself writes -- a
+    # second rendering of the same claim here would be a second thing to keep true.
+    callout = upgrade_callout(upgraded)
+    if callout is not None:
+        category, before, after = callout
+        metric_cards(
+            [
+                (f"Before — {arm_story_label(data.baseline)}", f"{category}: {before}"),
+                (f"After — {arm_story_label(arm)}", f"{category}: {after}"),
+            ],
+            per_row=2,
+        )
+
     crop = crop_path(token)
     if crop.is_file():
-        st.image(
-            draw_overlay(
-                Image.open(crop),
-                gt_for_render(gt_rows, model),
-                frame_preds.loc[frame_preds["model"] == model],
-                mode="overlay",
-                scale=0.6,
-            ),
-            width="stretch",
-        )
-    st.caption(_OVERLAY_LEGEND)
+        image = Image.open(crop)
+        for column, model in zip(st.columns(2), (data.baseline, arm), strict=True):
+            with column:
+                st.image(
+                    draw_overlay(
+                        image,
+                        gt_for_render(gt_rows, model),
+                        frame_preds.loc[frame_preds["model"] == model],
+                        mode="overlay",
+                        scale=0.6,
+                    ),
+                    width="stretch",
+                )
+                st.caption(arm_story_label(model))
+        # Under the pair, not above it: the legend describes colours this step just
+        # drew, so it is written only where an overlay was actually rendered.
+        legend()
 
-    upgraded = fixed_boxes(gt_rows, frame_preds, baseline=data.baseline, arm=arm)
-    if upgraded.empty:
-        st.caption(_NO_UPGRADED_BOXES_NOTE)
-    else:
-        st.dataframe(upgraded, hide_index=True)
-
+    ped_sentence = _night_ped_sentence(data, arm)
+    if ped_sentence:
+        st.markdown(ped_sentence)
     sentence = _night_map_sentence(data, arm)
     if sentence:
         st.markdown(sentence)
     if _hero_recovery_is_low_conf(data):
         st.markdown(_HERO_HONESTY_LINE)
+    _held_out_caption(data, token)
+
+    if upgraded.empty:
+        st.caption(_NO_UPGRADED_BOXES_NOTE)
+    else:
+        with st.expander(_PER_BOX_FOLD):
+            st.dataframe(upgraded, hide_index=True)
     provenance("recomputed", "per-box claims from predictions.parquet")
     if st.button("Open this exemplar in Active Learning →", key="tour_open_exemplar"):
         _open("active_learning", al_exemplar=token)
@@ -1359,7 +1419,7 @@ _STEPS: tuple[_Step, ...] = (
     ),
     _Step(
         key="after",
-        title="Same kind of frame, after",
+        title="Did it fix the failure?",
         stage="Evaluate",
         render=_render_after,
         links=(("active_learning", "Active Learning — every hand-approved before/after frame"),),

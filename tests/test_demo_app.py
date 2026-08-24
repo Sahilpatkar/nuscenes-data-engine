@@ -2665,6 +2665,11 @@ def test_active_learning_page_renders_story_chart_and_exemplar_table(
     assert len(tables[0]) >= 1
     assert list(tables[0]["baseline_claim"]) == ["none"]
 
+    # (e) the overlay legend under that panel is the shared badge component (Phase 10
+    # spec sec3), not this page's own prose copy of the colour rules.
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    assert not any("orange dashed = a GT box" in str(c.value) for c in at.caption)
+
 
 def test_active_learning_page_explain_absent_note(
     built_demo_data_without_explain: Path, monkeypatch: pytest.MonkeyPatch
@@ -3357,6 +3362,14 @@ def test_weak_supervision_one_frame_three_views(
         "held-out val frame — neither detector saw it in training" in caption
         for caption in page_captions
     )
+    # row 2's colour key is the shared badge legend (Phase 10 spec sec3), not this
+    # page's own prose copy of it; row 1's pseudo-box legend is a different claim
+    # ("what a pseudo box IS") and stays a caption.
+    assert any(
+        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+    )
+    assert not any("orange dashed = a GT box" in caption for caption in page_captions)
+    assert any("Blue = a pseudo-label box" in caption for caption in page_captions)
     # the inference is RECORDED output of an offline run, labelled as such
     assert any(
         "demo infer, CPU, checkpoint of the training run" in caption
@@ -4048,23 +4061,56 @@ def test_tour_walks_steps_2_to_5(
     assert not any("Visual similarity alone" in text for text in captions)
     assert any("recorded experiment output" in text for text in captions)
 
-    # --- step 5: "Same kind of frame, after" ---------------------------------------
+    # --- step 5: "Did it fix the failure?" ------------------------------------------
     at.button(key="tour_next").click().run(timeout=30)
     assert not at.exception
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
-    assert any(text.startswith("Step 6 of 7 · Same kind of frame, after") for text in captions)
-    assert at.radio(key="tour_exemplar_model").options == ["baseline", "graph_rate_night"]
-    assert len(at.image) == 1
-    # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
-    # graph_rate_night claims it at 0.80.
-    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
-    assert len(tables) == 1
+    assert any(text.startswith("Step 6 of 7 · Did it fix the failure?") for text in captions)
+    assert [str(head.value) for head in at.subheader] == [
+        "Did the targeted retraining fix the kind of failure we started with?"
+    ]
+    # The model radio retires here (Phase 10 spec sec2 row 5): a before/after is two
+    # pictures, not one picture and a control the viewer has to work. The deep page
+    # keeps its own radio, and "Open this exemplar in Active Learning" is the way in.
+    assert "tour_exemplar_model" not in [radio.key for radio in at.radio]
+    assert len(at.image) == 2
+    assert "Baseline (no mined data)" in captions
+    assert "Graph + night targeting" in captions
+    # the derived before/after callout, read verbatim off the frame's own claim
+    # strings: baseline never claims v0's pedestrian (a2), the arm claims it at 0.80.
+    assert [str(metric.label) for metric in at.metric] == [
+        "Before — Baseline (no mined data)",
+        "After — Graph + night targeting",
+    ]
+    assert [str(metric.value) for metric in at.metric] == [
+        "pedestrian: none",
+        "pedestrian: 0.80",
+    ]
+    # the compact badge legend, under the two overlays
+    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    # the slice the tour diagnosed, stated absolute AND relative (fixture night
+    # pedestrian mAP 0.05 -> 0.09) -- computed by filters.gain_text, never asserted
+    assert any(
+        "Night pedestrian mAP50-95 0.0500 → 0.0900 (+0.0400 absolute, +80.0% relative)"
+        in text
+        for text in markdowns
+    )
     # the result is the arm, not the frame: fixture baseline night 0.10 -> arm 0.13.
     assert any(
         "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
         for text in markdowns
     )
+    # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
+    assert "Held-out validation frame — never in any training set" in captions
+    # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
+    # graph_rate_night claims it at 0.80 -- now folded behind the technical detail
+    # (AppTest walks into expanders, so the table is still reachable here).
+    assert "Technical details — per-box claims" in [
+        str(exp.label) for exp in at.get("expander")
+    ]
+    tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
+    assert len(tables) == 1
     assert any("recomputed in this app" in text for text in captions)
     assert "Active Learning" in str(at.button(key="tour_open_exemplar").label)
 
@@ -4471,16 +4517,10 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
     tour = importlib.import_module("views.tour")
     scenarios = importlib.import_module("views.scenarios")
     active_learning = importlib.import_module("views.active_learning")
-    weak_supervision = importlib.import_module("views.weak_supervision")
     filters = importlib.import_module("filters")
     try:
         # (a) the strings the pages DO name -- compared attribute to attribute
         assert tour._NOT_CURATED_CAPTION == scenarios._NOT_CURATED_CAPTION
-        # The overlay legend is now written on THREE pages (the Weak Supervision
-        # page's held-out result row copies it too) -- item M5, Phase 9b
-        # consolidated review: two of the three were compared, so a reword of the
-        # weak page's copy could have drifted away unnoticed.
-        assert tour._OVERLAY_LEGEND == weak_supervision._OVERLAY_LEGEND
         assert tour._EXPLAIN_ABSENT_NOTE == active_learning._EXPLAIN_ABSENT_NOTE
         assert tour._EXPLAIN_FRAME_ABSENT_NOTE == active_learning._EXPLAIN_FRAME_ABSENT_NOTE
         assert tour._TRAIN_POOL_NOTE == active_learning._TRAIN_POOL_NOTE
@@ -4491,9 +4531,24 @@ def test_tour_copies_deep_page_wording_verbatim(monkeypatch: pytest.MonkeyPatch)
         scenario_strings = _string_literals(DEMO_DIR / "views" / "scenarios.py")
         al_strings = _string_literals(DEMO_DIR / "views" / "active_learning.py")
         assert tour._EVENTS_ABSENT_NOTE in scenario_strings
-        assert tour._OVERLAY_LEGEND in al_strings
         assert tour._NO_EXEMPLAR_NOTE in al_strings
         assert tour._NO_UPGRADED_BOXES_NOTE in al_strings
+
+        # (b2) the overlay legend is no longer copied at all: Phase 10 spec sec3
+        # replaced the three prose copies with ONE component (render.legend), so the
+        # check that kept them equal becomes a check that none of them came back.
+        # "orange dashed" is the wording unique to that prose legend; the Weak
+        # Supervision page's pseudo-box legend says what a pseudo box IS, which is a
+        # different claim, and stays.
+        ws_strings = _string_literals(DEMO_DIR / "views" / "weak_supervision.py")
+        tour_strings = _string_literals(DEMO_DIR / "views" / "tour.py")
+        for module_strings in (tour_strings, al_strings, ws_strings):
+            assert not any("orange dashed" in text for text in module_strings)
+            assert not any(text.startswith("Green = ground truth,") for text in module_strings)
+        assert any(
+            text.startswith("Green = ground truth. Blue = a pseudo-label box")
+            for text in ws_strings
+        )
 
         # (c) the filmstrip's own step columns and labels, in strip order: the
         # Scenario page splits them either side of the current frame, which the
