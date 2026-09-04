@@ -102,8 +102,12 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src/nuscenes_data_engine", "app/demo"]
-mypy_path = "src"
+files = ["src/nuscenes_data_engine", "app/demo", "web"]
+# app/demo is on the path for web/build_data.py's sys.path-import of filters/render
+# (the demo app's own modules import each other flat, so mypy needs the same root).
+mypy_path = "src:app/demo"
+# web/ is a Node tree as well as the exporter's home; only the exporter is Python.
+exclude = "^web/(node_modules|dist)/"
 
 # FastAPI route decorators resolve to Any until the `serve` extra is installed,
 # which trips strict `disallow_untyped_decorators` on the serving stub.

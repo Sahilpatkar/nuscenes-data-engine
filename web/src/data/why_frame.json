@@ -1,0 +1,76 @@
+{
+  "architecture_strip": "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure analysis → scenario search → active learning → YOLO retraining → evaluation",
+  "chips": [
+    "night",
+    "1 pedestrian GT box",
+    "community #10301 · 916 frames",
+    "mass rank 3 of 97",
+    "quota 83 → 323",
+    "night-pass pick (floor 375)",
+    "degree rank 1 of 916"
+  ],
+  "factors": [
+    {
+      "flag": true,
+      "label": "Night frame",
+      "value": "yes"
+    },
+    {
+      "flag": null,
+      "label": "Community",
+      "value": "#10301 · 916 frames · 916 at night"
+    },
+    {
+      "flag": null,
+      "label": "Community failure mass",
+      "value": "395.19 (rank 3 of 97)"
+    },
+    {
+      "flag": null,
+      "label": "Community quota",
+      "value": "323 frames"
+    },
+    {
+      "flag": null,
+      "label": "Picked in",
+      "value": "night pass (night floor 375)"
+    },
+    {
+      "flag": null,
+      "label": "Similarity-degree rank",
+      "value": "1st of 916"
+    },
+    {
+      "flag": null,
+      "label": "Routed failures",
+      "value": "none — not itself a routing target"
+    }
+  ],
+  "flagship_rank_sentence": null,
+  "headline": "Thousands of candidate training frames — which are worth labelling?",
+  "image": {
+    "alt": "A candidate training-pool frame with its ground-truth boxes drawn on it.",
+    "height": 540,
+    "src": "story/selected-frame.jpg",
+    "width": 960
+  },
+  "lede_sentence": "Instead of randomly adding more images, the system searches the training pool for examples related to the diagnosed failure.",
+  "mechanism_sentence": "Nothing about this frame on its own selected it: its community carried failure mass, that mass bought the community a quota, the frame ranked high enough inside it by similarity — and a night floor takes 375 night frames first.",
+  "provenance": [
+    {
+      "detail": "demo al-explain reproduced the run: 1,500 frames, 97 communities",
+      "kind": "reproduced",
+      "sentence": "reproduced selection — re-derived by demo al-explain and validated equal to the run"
+    }
+  ],
+  "selection_chain": [
+    "Failed validation frame",
+    "relevant driving scenario",
+    "candidate training frames",
+    "targeted retraining set"
+  ],
+  "selection_path": "failed val frame → similarity community → representative train-pool frames → selected for retraining",
+  "token": "00740c25baf64f12a411963aadb5c81c",
+  "train_pool_note": "train-pool frame — no predictions (models never saw it as a test image)",
+  "weak_rejected_sentence": null
+}
