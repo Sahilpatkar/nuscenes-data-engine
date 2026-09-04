@@ -1,0 +1,214 @@
+/* =============================================================================
+   tokens.css — the story site's colour + type system.
+
+   THREE LAYERS, ONE RULE
+   ----------------------
+   1. bare `:root`                              → DARK (design-primary, the deck)
+   2. `@media (prefers-color-scheme: light) :root:not([data-theme])`
+      and `:root[data-theme="light"]`           → LIGHT (warm paper)
+   3. `:root[data-theme="dark"]`                → DARK again, so an explicit
+                                                  choice beats a light OS
+
+   RULE (audited in review): **no colour may be defined ONLY inside a media or
+   [data-theme] block.** Every token exists on bare `:root` with a real value;
+   the other layers only *redefine* tokens that already exist. A page that
+   never matches a block still renders complete.
+
+   The two LIGHT blocks (layer 2) are the same declarations pasted twice —
+   `@media` and `[data-theme=]` cannot be combined without losing the
+   toggle-beats-OS precedence. **They must stay textually identical** between
+   their `LIGHT SET` / `END LIGHT SET` markers (indentation aside — one block is
+   nested in the media query, so compare with leading whitespace stripped).
+   The review extracts both marked spans, strips indentation, and diffs them;
+   any token that appears in one and not the other is a bug.
+
+   Dark values are the presentation deck palette verbatim
+   (docs/presentation/nuscenes-data-engine-deck.html `:root`).
+   ============================================================================= */
+
+/* -----------------------------------------------------------------------------
+   CHART SLOTS — validated, not eyeballed
+   -----------------------------------------------------------------------------
+   The UI palette below is the deck palette, tuned for a presentation. Chart *marks*
+   answer to the dataviz method instead, so they get their own slots, stepped
+   into each mode's lightness band from the same brand hues.
+
+   Validator: dataviz skill `scripts/validate_palette.js` (bundled-skills
+   2.1.240), node v25.3.0, run 2026-09-04 on the worst-case surface of each mode
+   (dark `--panel-2` #1B2238, the lightest dark surface; light `--panel-2`
+   #F1EDE4, the darkest light surface). Checks: OKLCH lightness band, chroma
+   floor 0.10, CVD ΔE (Machado 2009, protan/deutan), normal-vision ΔE ≥ 15,
+   WCAG ≥ 3:1 vs surface.
+
+   Gated pair 1 — emphasis (muted bars vs the one accent bar):
+     dark   #198CB5 vs #C77A14 → ALL CHECKS PASS (CVD ΔE 19.8, normal 25.4)
+     light  #1A7AA9 vs #9C5D0C → ALL CHECKS PASS (CVD ΔE 20.1, normal 22.7)
+   Gated pair 2 — polarity (positive vs negative delta):
+     dark   #3AAD79 vs #DD3843 → ALL CHECKS PASS (CVD ΔE  8.1, normal 31.7)
+     light  #0F774E vs #CC2635 → ALL CHECKS PASS (CVD ΔE  8.8, normal 29.3)
+
+   Adjustments this required (the deck values as-is do NOT pass):
+     · --muted #8A93A6 is chroma 0.03 — reads as gray, fails the chroma floor.
+       chart-muted takes the deck's cyan family stepped into band instead
+       (dark #198CB5 L 0.600 C 0.112; light #1A7AA9 L 0.549 C 0.110).
+     · --accent #F2A33A is L 0.776, above the dark band (0.48–0.67); chart-accent
+       uses the deck's deep amber #C77A14 (L 0.648). Light chart-accent is
+       #9C5D0C, not #C77A14: the latter is only 2.89:1 on light --panel-2.
+     · --pass/--fail at equal lightness are CVD-indistinguishable (green vs red
+       measured ΔE 3.9 deutan). The chart pair splits their lightness, which is
+       what lifts the pair over the ΔE 8 target in both modes.
+
+   Contrast of every chart slot vs ground / panel / panel-2:
+     dark   accent 5.61/5.11/4.67 · muted 4.92/4.49/4.10 · pos 6.70/6.11/5.58
+            neg 4.26/3.88/3.54 · zero 6.13/5.59/5.11 · grid 1.52/1.39/1.27
+     light  accent 4.93/5.27/4.51 · muted 4.46/4.77/4.08 · pos 5.21/5.57/4.77
+            neg 5.04/5.39/4.61 · zero 5.53/5.92/5.06 · grid 1.30/1.39/1.19
+   All marks clear the 3:1 mark floor on every surface; every slot except the
+   grid also clears 4.5:1, so a direct label may be tinted with it. `--chart-grid`
+   is a hairline that must recede — it is never a mark and never carries text.
+
+   ONE STANDING OBLIGATION: run as one four-slot palette with `--pairs all`, the
+   accent↔neg pair measures ΔE 14.7 normal / 6.1 deutan (dark) and 13.6 / 2.5
+   (light) — amber and red are neighbours under deuteranopia. They encode
+   different jobs (emphasis vs sign), never "which series", so per the method's
+   status rule they may sit in one chart ONLY with the sign carried elsewhere:
+   negative bars sit on the far side of the zero rule and every bar carries a
+   signed direct label. Never let hue alone say "this one went down".
+   ----------------------------------------------------------------------------- */
+
+/* ── layer 1: bare :root = DARK, design-primary ───────────────────────────── */
+:root {
+  /* surfaces */
+  --ground: #0B1020;
+  --panel: #141A2E;
+  --panel-2: #1B2238;
+  --line: #2A3350;
+
+  /* text */
+  --ink: #EDE9E1;
+  --muted: #8A93A6;
+
+  /* brand */
+  --accent: #F2A33A;
+  --accent-deep: #C77A14;
+  /* the accent stepped for contrast: safe for TEXT and for THIN marks (focus
+     rings, 1px accent borders) on every surface of this mode. Light mode steps
+     it down because the bright amber is only 2.89:1 on light --panel-2. */
+  --accent-strong: #F2A33A;
+  --cyan: #5BC0EB;
+
+  /* status */
+  --pass: #3DDC97;
+  --fail: #FF5A5F;
+
+  /* chart slots (see the validated block above) */
+  --chart-accent: #C77A14;
+  --chart-muted: #198CB5;
+  --chart-grid: #2A3350;
+  --chart-pos: #3AAD79;
+  --chart-neg: #DD3843;
+  --chart-zero: #8A93A6;
+
+  /* type */
+  --display: "Syne", "Avenir Next", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+/* ── layer 2a: light via the OS, only while no explicit choice is stamped ─── */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    /* LIGHT SET — twin of the other light block; keep in sync */
+    --ground: #FAF7F1;
+    --panel: #FFFFFF;
+    --panel-2: #F1EDE4;
+    --line: #E1DACB;
+
+    --ink: #1C2233;
+    --muted: #5C6478;
+
+    --accent: #C77A14;
+    --accent-deep: #9C5D0C;
+    --accent-strong: #9C5D0C;
+    --cyan: #20719A;
+
+    --pass: #1F8A5D;
+    --fail: #C43B40;
+
+    --chart-accent: #9C5D0C;
+    --chart-muted: #1A7AA9;
+    --chart-grid: #E1DACB;
+    --chart-pos: #0F774E;
+    --chart-neg: #CC2635;
+    --chart-zero: #5C6478;
+
+    color-scheme: light;
+    /* END LIGHT SET */
+  }
+}
+
+/* ── layer 2b: light chosen explicitly — beats a dark OS ──────────────────── */
+:root[data-theme="light"] {
+  /* LIGHT SET — twin of the other light block; keep in sync */
+  --ground: #FAF7F1;
+  --panel: #FFFFFF;
+  --panel-2: #F1EDE4;
+  --line: #E1DACB;
+
+  --ink: #1C2233;
+  --muted: #5C6478;
+
+  --accent: #C77A14;
+  --accent-deep: #9C5D0C;
+  --accent-strong: #9C5D0C;
+  --cyan: #20719A;
+
+  --pass: #1F8A5D;
+  --fail: #C43B40;
+
+  --chart-accent: #9C5D0C;
+  --chart-muted: #1A7AA9;
+  --chart-grid: #E1DACB;
+  --chart-pos: #0F774E;
+  --chart-neg: #CC2635;
+  --chart-zero: #5C6478;
+
+  color-scheme: light;
+  /* END LIGHT SET */
+}
+
+/* ── layer 3: dark chosen explicitly — beats a light OS ───────────────────── */
+:root[data-theme="dark"] {
+  --ground: #0B1020;
+  --panel: #141A2E;
+  --panel-2: #1B2238;
+  --line: #2A3350;
+
+  --ink: #EDE9E1;
+  --muted: #8A93A6;
+
+  --accent: #F2A33A;
+  --accent-deep: #C77A14;
+  --accent-strong: #F2A33A;
+  --cyan: #5BC0EB;
+
+  --pass: #3DDC97;
+  --fail: #FF5A5F;
+
+  --chart-accent: #C77A14;
+  --chart-muted: #198CB5;
+  --chart-grid: #2A3350;
+  --chart-pos: #3AAD79;
+  --chart-neg: #DD3843;
+  --chart-zero: #8A93A6;
+
+  color-scheme: dark;
+}
+
+/* USAGE NOTE — light `--accent` (#C77A14) measures 3.16 / 3.37 / 2.89 against
+   ground / panel / panel-2: legal for large fills and display type, but it does
+   not clear 3:1 on --panel-2 and never clears 4.5:1. Accent-coloured text,
+   focus rings and 1px accent borders use `--accent-strong` instead — dark
+   #F2A33A (7.56:1 worst surface), light #9C5D0C (4.51:1 worst surface). */

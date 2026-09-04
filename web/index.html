@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nuScenes Data Engine — from model failure to better training data</title>
+    <meta
+      name="description"
+      content="A closed-loop AV perception data engine: it finds where a detector fails, mines targeted training data, retrains, and measures the result."
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="nuScenes Data Engine — from model failure to better training data"
+    />
+    <meta
+      property="og:description"
+      content="A closed-loop AV perception data engine: it finds where a detector fails, mines targeted training data, retrains, and measures the result."
+    />
+
+    <!-- Pre-paint theme: runs before first paint so an explicit choice never flashes
+         the other theme. No choice stored = follow the OS (tokens.css media query). -->
+    <script>
+      try {
+        var t = localStorage.getItem("theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,230 @@
+/* =============================================================================
+   base.css — reset, type scale, and the handful of primitives the story is
+   built from. Colour lives in tokens.css; nothing here hard-codes a hex.
+   ============================================================================= */
+
+/* ── reset (minimal) ──────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+}
+
+body {
+  /* the viewer's window must never show through: paint the ground explicitly */
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: clamp(15px, 1.15vw, 19px);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* ── type scale ───────────────────────────────────────────────────────────── */
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-weight: 800;
+  font-size: clamp(2.1rem, 4.4vw, 4.2rem);
+  line-height: 1.02;
+  max-width: 22ch;
+}
+
+h2 {
+  font-weight: 800;
+  font-size: clamp(1.55rem, 2.9vw, 2.8rem);
+  line-height: 1.06;
+}
+
+h3 {
+  font-weight: 700;
+  font-size: 1.15rem;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+p {
+  max-width: 66ch;
+}
+
+.lede {
+  font-size: 1.18em;
+  line-height: 1.45;
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+/* mono eyebrow — the step/section label above every heading */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.74em;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* the reading measure — one line of prose never runs wider than this */
+.measure {
+  max-width: 65ch;
+}
+
+/* numbers that must line up column-to-column (tables, stat tiles, deltas) */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--cyan);
+  text-underline-offset: 0.18em;
+}
+
+/* ── primitives ───────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: clamp(14px, 2vw, 22px);
+}
+
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 18px 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.stat .stat-value {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(1.6rem, 3vw, 2.6rem);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .stat-label {
+  font-family: var(--mono);
+  font-size: 0.72em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat .stat-note {
+  font-size: 0.88em;
+  color: var(--muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.78em;
+  line-height: 1.3;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── focus + motion ───────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── theme toggle ─────────────────────────────────────────────────────────── */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent-strong);
+  background: var(--panel-2);
+}
