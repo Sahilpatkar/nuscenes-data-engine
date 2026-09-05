@@ -101,6 +101,16 @@
   --pass: #3DDC97;
   --fail: #FF5A5F;
 
+  /* THEME-INVARIANT — deliberately defined once, on :root only, and NOT redefined
+     by the light blocks. The overlay legend's swatches are the exact RGBs burned
+     into the JPEGs (white, yellow, orange...); on warm paper the white and yellow
+     ones would vanish, so their chip keeps the night frame's own tone in both
+     modes. `--image-chip-ink` on `--image-chip` is 14.9:1 — the chip is readable
+     wherever it lands. */
+  --image-chip: #10162A;
+  --image-chip-line: #2A3350;
+  --image-chip-ink: #EDE9E1;
+
   /* chart slots (see the validated block above) */
   --chart-accent: #C77A14;
   --chart-muted: #198CB5;

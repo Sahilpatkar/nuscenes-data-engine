@@ -12,6 +12,11 @@ import type { Provenance } from "../data/types";
  * declined to write (its guard did not hold on this package) must not be
  * replaced by an invented one. The fallback is the step's fixed title, which
  * claims nothing.
+ *
+ * `tone` is the one visual choice the frame offers: "panel" gives the section a
+ * full-bleed surface band of its own. Exactly one step gets it — the centrepiece
+ * (story contract §1.2) — so the band reads as "this is the turn", not as
+ * decoration.
  */
 
 /** The tour's provenance vocabulary, as glyphs — the sentence carries the meaning. */
@@ -33,6 +38,8 @@ export interface SectionProps {
   title: string;
   /** The derived headline, or null where the exporter declined to write one. */
   headline: string | null;
+  /** "panel": a full-bleed surface band behind the whole section. */
+  tone?: "panel" | undefined;
   provenance: Provenance[];
   children?: ReactNode;
 }
@@ -44,13 +51,18 @@ export function Section({
   act,
   title,
   headline,
+  tone,
   provenance,
   children,
 }: SectionProps): JSX.Element {
   const reveal = useReveal<HTMLDivElement>();
 
   return (
-    <section id={id} className="section" aria-labelledby={`${id}-headline`}>
+    <section
+      id={id}
+      className={tone === "panel" ? "section section-feature" : "section"}
+      aria-labelledby={`${id}-headline`}
+    >
       <div className="page reveal" ref={reveal}>
         <p className="eyebrow section-eyebrow">
           <span>

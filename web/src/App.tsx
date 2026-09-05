@@ -1,8 +1,16 @@
+import type { ReactNode } from "react";
+
 import { DeepLink } from "./components/DeepLink";
 import { Footer } from "./components/Footer";
 import { Landing } from "./components/Landing";
 import { Section } from "./components/Section";
 import { StepRail, type RailStep } from "./components/StepRail";
+/* The section components share their names with the bundle interfaces below
+   (both are named for the step they belong to), so each is aliased once here. */
+import { Blindspot as BlindspotSection } from "./sections/Blindspot";
+import { MissedPedestrian as MissedPedestrianSection } from "./sections/MissedPedestrian";
+import { Scenario as ScenarioSection } from "./sections/Scenario";
+import { WhyFrame as WhyFrameSection } from "./sections/WhyFrame";
 
 import blindspotJson from "./data/blindspot.json";
 import closedLoopJson from "./data/closed_loop.json";
@@ -60,8 +68,12 @@ interface StorySection {
   headline: string | null;
   provenance: Provenance[];
   links: DeepLinkRef[];
-  /** What Task 4/5 pours into this frame — placeholder copy, never a claim. */
-  pending: string;
+  /** The section's own internals, or null while Task 5 still owes them. */
+  body: ReactNode | null;
+  /** Placeholder copy for a step not built yet — never a claim. */
+  pending?: string;
+  /** The centrepiece alone gets a surface band (story contract §1.2). */
+  tone?: "panel";
 }
 
 /* The seven steps, in story order. Titles, stages and the deep-link labels are
@@ -77,7 +89,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: blindspot.headline,
     provenance: blindspot.provenance,
     links: deepLinks("failures"),
-    pending: "Three opening beats — problem sentence, the stat tiles, the purpose line.",
+    body: <BlindspotSection data={blindspot} />,
   },
   {
     id: "hero-frame",
@@ -88,7 +100,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: heroFrame.headline,
     provenance: heroFrame.provenance,
     links: deepLinks("failures"),
-    pending: "The overlay frame, its per-model claims, the legend and the bridge sentence.",
+    body: <MissedPedestrianSection data={heroFrame} />,
   },
   {
     id: "scenario",
@@ -99,7 +111,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: scenario.headline,
     provenance: scenario.provenance,
     links: deepLinks("scenarios"),
-    pending: "The event card, and the filmstrip scrubbed against its CAN speed and accel curves.",
+    body: <ScenarioSection data={scenario} />,
   },
   {
     id: "why-frame",
@@ -110,7 +122,8 @@ const SECTIONS: readonly StorySection[] = [
     headline: whyFrame.headline,
     provenance: whyFrame.provenance,
     links: deepLinks("active_learning"),
-    pending: "The centrepiece — the selection chain, the chosen frame and its reasons.",
+    body: <WhyFrameSection data={whyFrame} />,
+    tone: "panel",
   },
   {
     id: "intervention",
@@ -121,6 +134,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: intervention.headline,
     provenance: intervention.provenance,
     links: deepLinks("active_learning"),
+    body: null,
     pending: "The fairness strip bound to the strategy chart, and the winner sentence.",
   },
   {
@@ -132,6 +146,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: verdict.headline,
     provenance: verdict.provenance,
     links: deepLinks("active_learning"),
+    body: null,
     pending: "Two evidence tiers — the one before/after example, then the aggregate result.",
   },
   {
@@ -152,6 +167,7 @@ const SECTIONS: readonly StorySection[] = [
       "weak_supervision",
       "chat_replay",
     ),
+    body: null,
     pending: "The three hero cards, the four answers, and the closing thesis.",
   },
 ];
@@ -178,10 +194,13 @@ export default function App(): JSX.Element {
             act={section.act}
             title={section.title}
             headline={section.headline}
+            tone={section.tone}
             provenance={section.provenance}
           >
-            {/* Task 4/5: the real internals replace this placeholder. */}
-            <p className="pending mono">{section.pending}</p>
+            {/* Task 5 still owes three sections their internals; until then the
+                frame states what is coming rather than claiming anything. */}
+            {section.body ??
+              (section.pending ? <p className="pending mono">{section.pending}</p> : null)}
 
             {section.links.length > 0 ? (
               <div className="deep-links">
