@@ -3797,9 +3797,12 @@ def test_tour_walks_steps_0_and_1(
         text.startswith("See how the data engine finds a perception weakness")
         for text in captions
     )
-    # (step 0) the headline the three cards are the evidence for
+    # (step 0, beat a) the plain-language problem the three cards are the evidence
+    # for -- the story site's own opening sentence (web-frontend-v1 spec §1.1), so
+    # both front-ends open on the same claim.
     assert [str(head.value) for head in at.subheader] == [
-        "Aggregate accuracy was hiding a night-driving blind spot."
+        "The detector looked reasonable overall — but performance dropped sharply at "
+        "night, especially for pedestrians."
     ]
 
     # The nav row is drawn FIRST, and Back is dead on the first step.
@@ -3820,13 +3823,26 @@ def test_tour_walks_steps_0_and_1(
         "1 of 1 night validation frames carry at least one baseline miss" in text
         for text in markdowns
     )
-    # (step 0) the single derived sentence: all three numbers off the same baseline
-    # row the cards are read from (0.2000 / 0.1000 / ped 0.0500).
-    assert any(
-        "`baseline` scores 0.2000 mAP50-95 overall but 0.1000 at night — and 0.0500 "
-        "on night pedestrians, the case that matters most." in text
-        for text in markdowns
+    # (step 0, beat b) the single derived sentence: all three numbers off the same
+    # baseline row the cards are read from (0.2000 / 0.1000 / ped 0.0500).
+    derived = next(
+        index
+        for index, text in enumerate(markdowns)
+        if "`baseline` scores 0.2000 mAP50-95 overall but 0.1000 at night — and "
+        "0.0500 on night pedestrians, the case that matters most." in text
     )
+    # (step 0, beat c) ... and the purpose line under it: what the system IS, in the
+    # site's own words, written AFTER the numbers it is the answer to.
+    purpose = next(
+        index
+        for index, text in enumerate(markdowns)
+        if text.startswith("The goal of the system:")
+    )
+    assert markdowns[purpose] == (
+        "The goal of the system: automatically find failures like this and turn them "
+        "into better training data."
+    )
+    assert derived < purpose
     # ... closed by the takeaway callout
     assert any(
         ":material/school:" in text
@@ -3982,12 +3998,29 @@ def test_tour_walks_steps_2_to_5(
     assert [str(head.value) for head in at.subheader] == [
         "Thousands of candidate training frames — which are worth labelling?"
     ]
-    # the one-line selection path, above the fold that details it
-    assert any(
-        "**failed val frame → similarity community → representative train-pool "
-        "frames → selected for retraining**" in text
-        for text in markdowns
+    # the lede, straight under the headline: what the system does INSTEAD of
+    # randomly adding images (web-frontend-v1 spec §1.2).
+    lede = next(
+        index
+        for index, text in enumerate(markdowns)
+        if text.startswith("Instead of randomly adding more images")
     )
+    assert markdowns[lede] == (
+        "Instead of randomly adding more images, the system searches the training "
+        "pool for examples related to the diagnosed failure."
+    )
+    # ... and the VISIBLE chain is the plain-language one; the implementation chain
+    # is folded away below.
+    plain = next(
+        index
+        for index, text in enumerate(markdowns)
+        if text.startswith("**Failed validation frame")
+    )
+    assert markdowns[plain] == (
+        "**Failed validation frame → relevant driving scenario → candidate training "
+        "frames → targeted retraining set**"
+    )
+    assert lede < plain
     # selection_factors, rendered exactly as the Active Learning page renders them
     # (the fixture's first candidate frame was taken by the night pass, floor 1) --
     # folded away now: mechanism detail, not the step's headline claim.
@@ -3995,6 +4028,13 @@ def test_tour_walks_steps_2_to_5(
     assert any("**Picked in:** night pass (night floor 1)" in text for text in markdowns)
     fold = next(block for block in at.expander if block.label == "How selection works")
     folded = [str(block.value) for block in fold.markdown]
+    # the implementation-oriented chain now opens the fold, above the factor lines --
+    # and the plain-language chain above is NOT a second copy of it inside.
+    assert folded[0] == (
+        "**failed val frame → similarity community → representative train-pool "
+        "frames → selected for retraining**"
+    )
+    assert not any("Failed validation frame" in text for text in folded)
     assert any(text.startswith("**Night frame:** yes ✓") for text in folded)
     assert any("Nothing about this frame on its own selected it" in text for text in folded)
     # the selection is REPRODUCED (demo al-explain), not recomputed or recorded
@@ -4065,14 +4105,22 @@ def test_tour_walks_steps_2_to_5(
         "Graph + night targeting (`graph_rate_night`)" in text
         for text in captions
     )
-    # the fairness statement. The fixture's charted arms do NOT share a budget
-    # (random 115 vs graph_rate_night 120 train images), so no frame count is
-    # claimed -- test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran
-    # pins the other branch.
-    assert (
-        "Same detector · same budget · same training configuration · scored on the "
-        "same held-out split — Random sample is the control." in markdowns
+    # the fairness statement, promoted out of prose into the bordered strip above
+    # the chart (web-frontend-v1 spec §1.3): an eyebrow, the held-constant clauses as
+    # chips, and the control clause emphasised in orange. The fixture's charted arms
+    # do NOT share a budget (random 115 vs graph_rate_night 120 train images), so no
+    # frame count is claimed -- test_tour_retrain_step_charts_similarity_mining_when
+    # _that_arm_ran pins the other branch.
+    assert "**Fair comparison**" in markdowns
+    chips = (
+        ":blue-badge[Same detector] :blue-badge[same budget] "
+        ":blue-badge[same training configuration] "
+        ":blue-badge[scored on the same held-out split] "
+        ":orange-badge[Random sample is the control]"
     )
+    assert chips in markdowns
+    # the old prose sentence is gone -- the strip is the only place it is said
+    assert not any("Same detector · same budget" in text for text in markdowns)
     # the winner is computed over the WHOLE arm table, not asserted
     assert (
         "Best intervention for the diagnosed night weakness: **Graph + night "
@@ -4117,13 +4165,22 @@ def test_tour_walks_steps_2_to_5(
     ]
     # the compact badge legend, under the two overlays
     assert any(":green-badge[green — ground truth]" in text for text in markdowns)
-    # the slice the tour diagnosed, stated absolute AND relative (fixture night
-    # pedestrian mAP 0.05 -> 0.09) -- computed by filters.gain_text, never asserted
-    assert any(
-        "Night pedestrian mAP50-95 0.0500 → 0.0900 (+0.0400 absolute, +80.0% relative)"
-        in text
-        for text in markdowns
+    # tier 1: the frame is labelled as ONE example, not as the result
+    # (web-frontend-v1 spec §1.4)
+    assert (
+        "One example — one hand-approved frame, illustrative, not the metric" in captions
     )
+    # tier 2: the arm-level numbers, under their own lead-in -- the slice the tour
+    # diagnosed, stated absolute AND relative (fixture night pedestrian mAP
+    # 0.05 -> 0.09), computed by filters.gain_text and never asserted
+    aggregate = markdowns.index("**The aggregate result:**")
+    gain = next(
+        index
+        for index, text in enumerate(markdowns)
+        if "Night pedestrian mAP50-95 0.0500 → 0.0900 (+0.0400 absolute, "
+        "+80.0% relative)" in text
+    )
+    assert aggregate < gain
     # the result is the arm, not the frame: fixture baseline night 0.10 -> arm 0.13.
     assert any(
         "Night mAP50-95 0.1000 → 0.1300 (+0.0300) on the held-out split" in text
@@ -4211,10 +4268,14 @@ def test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran(
         "graph + night-floor arm explicitly preserved night coverage." in text
         for text in captions
     )
-    # every charted non-baseline arm is at 120 training images, so the budget is named
+    # every charted non-baseline arm is at 120 training images, so the budget clause
+    # names the frame count -- inside the strip's chips, with its derived condition
+    # (and the control chip's emphasis) unchanged.
     assert (
-        "Same detector · same 120-frame budget · same training configuration · scored "
-        "on the same held-out split — Random sample is the control." in markdowns
+        ":blue-badge[Same detector] :blue-badge[same 120-frame budget] "
+        ":blue-badge[same training configuration] "
+        ":blue-badge[scored on the same held-out split] "
+        ":orange-badge[Random sample is the control]" in markdowns
     )
     # the winner is still computed: `mined` (+0.0072) does not beat the tour's arm
     assert (
@@ -4442,10 +4503,12 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     assert "recorded experiment output" in provenance_captions
     assert "recomputed in this app" in provenance_captions
 
-    # the one sentence the whole tour is evidence for, under the four answers
+    # the one sentence the whole tour is evidence for, under the four answers --
+    # the story site's closing thesis, word for word (web-frontend-v1 spec §1.5)
     assert any(
-        "**The system demonstrated a repeatable way to turn model failures into "
-        "data decisions.**" in text
+        "**Instead of blindly retraining the model, the system diagnoses where it "
+        "fails, finds the data that can address the weakness, and measures whether "
+        "the intervention actually works.**" in text
         for text in markdowns
     )
 

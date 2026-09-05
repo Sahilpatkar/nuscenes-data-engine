@@ -53,6 +53,7 @@ from render import (
     LOOP_STAGES,
     bar_chart,
     chip_row,
+    chip_row_text,
     curve_caption,
     curve_charts,
     draw_overlay,
@@ -119,6 +120,19 @@ _EXPLAIN_FRAME_ABSENT_NOTE = (
     "this frame is not in the staged selection facts — re-run `demo al-explain`"
 )
 _TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
+# Step 0: the three-beat opening the story site opens on too (web-frontend-v1 spec
+# §1.1: plain-language problem → the numbers → what the system is FOR). Both
+# sentences are copied from that spec rather than imported: `web/build_data.py`
+# ships them as bundle fields for the site, and the two front-ends must say exactly
+# the same thing -- the same copy-contract the tour keeps with the deep pages.
+_PROBLEM_SENTENCE = (
+    "The detector looked reasonable overall — but performance dropped sharply at "
+    "night, especially for pedestrians."
+)
+_PURPOSE_SENTENCE = (
+    "The goal of the system: automatically find failures like this and turn them "
+    "into better training data."
+)
 # Step 1: what the frame IS (written only where the manifest says so), and the
 # question it hands to the mining steps.
 _HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
@@ -133,8 +147,22 @@ _MINING_MECHANISM = (
     "The system searches driving context — night, braking, pedestrians near the ego — "
     "not just similar-looking images."
 )
-# Step 3: the selection path in one line (the fold under it carries the seven
-# recorded factors), and the system path the whole tour walks, end to end.
+# Step 3: the centerpiece (web-frontend-v1 spec §1.2) -- the lede that says what
+# the system does INSTEAD of randomly adding images, and the chain it walks to do
+# it, in the words a viewer already has. The implementation-oriented chain
+# (`_SELECTION_PATH`) says the same thing in the package's own vocabulary, so it is
+# what the "How selection works" fold opens with, above the seven recorded factors.
+_LEDE_SENTENCE = (
+    "Instead of randomly adding more images, the system searches the training pool "
+    "for examples related to the diagnosed failure."
+)
+_SELECTION_CHAIN: tuple[str, ...] = (
+    "Failed validation frame",
+    "relevant driving scenario",
+    "candidate training frames",
+    "targeted retraining set",
+)
+_PLAIN_SELECTION_PATH = "**" + " → ".join(_SELECTION_CHAIN) + "**"
 _SELECTION_PATH = (
     "**failed val frame → similarity community → representative train-pool frames → "
     "selected for retraining**"
@@ -153,6 +181,13 @@ _STRATEGY_CHART_TITLE = "Night mAP50-95 vs baseline, by acquisition strategy"
 # only when the charted arms really did share a training-set size) and minus the
 # control clause (only when the control arm is one of them).
 _FAIRNESS_TAIL = "same training configuration · scored on the same held-out split"
+# The fairness statement is what makes the chart a comparison rather than a
+# leaderboard, so (web-frontend-v1 spec §1.3) it is not prose that happens to sit
+# near the chart: it is a bordered strip directly above it, its clauses as chips,
+# with the control clause -- the arm every other bar is measured against -- the one
+# chip in accent. Written only when the control arm is actually charted.
+_FAIRNESS_LEAD = "Fair comparison"
+_FAIRNESS_CONTROL = "Random sample is the control"
 # A mined set whose night share rounds to 0 % at the shares' own precision. The
 # similarity explanation (brief sec37) is written only below this, so a set with any
 # real night coverage is never described as a daytime one.
@@ -163,6 +198,12 @@ _NIGHT_ABSENT_SHARE = 0.005
 # reads as an answer rather than as a table.
 _AFTER_HEADLINE = "Did the targeted retraining fix the kind of failure we started with?"
 _PER_BOX_FOLD = "Technical details — per-box claims"
+# The two evidence tiers (web-frontend-v1 spec §1.4): the frame is labelled as ONE
+# example before it is shown, and the arm-level numbers under it are labelled as
+# the result -- the structure itself answers "did you just pick a flattering
+# image?", rather than a caveat sentence somewhere below having to.
+_ONE_EXAMPLE_TIER = "One example — one hand-approved frame, illustrative, not the metric"
+_AGGREGATE_TIER = "**The aggregate result:**"
 
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
 _NO_UPGRADED_BOXES_NOTE = "no upgraded boxes on this frame"
@@ -186,8 +227,9 @@ _HERO_HONESTY_LINE = (
 _CLOSED_LOOP_IMPROVED = "Closed the loop: weakness → targeted data → measurable improvement"
 _CLOSED_LOOP_MEASURED = "Closed the loop: weakness → targeted data → measured result"
 _CLOSING_THESIS = (
-    "**The system demonstrated a repeatable way to turn model failures into data "
-    "decisions.**"
+    "**Instead of blindly retraining the model, the system diagnoses where it fails, "
+    "finds the data that can address the weakness, and measures whether the "
+    "intervention actually works.**"
 )
 
 # scenario_events' t-2..t+2 neighbour columns in strip order, with the event itself
@@ -280,13 +322,18 @@ def _night_miss_counts(data: _TourData) -> tuple[int, int, int] | None:
 
 
 def _render_weakness(data: _TourData) -> None:
-    """Step 0 — the sliced evaluation that makes the weakness visible."""
+    """Step 0 — the sliced evaluation that makes the weakness visible, in the three
+    beats the story site opens on (web-frontend-v1 spec §1.1): the plain-language
+    problem as the headline, the numbers that establish it (cards, the counted miss
+    line, the derived sentence), and the purpose line that says what the system does
+    about a diagnosis like this. Every figure is still derived here; the two fixed
+    sentences are the site's own, word for word."""
     rows = data.arms.loc[data.arms["arm"] == data.baseline]
     if rows.empty:
         st.info(STALE_PACKAGE_NOTE)
         return
     row = rows.iloc[0]
-    st.subheader("Aggregate accuracy was hiding a night-driving blind spot.")
+    st.subheader(_PROBLEM_SENTENCE)
 
     cards = [
         ("Overall mAP50-95", f"{row['overall_map5095']:.4f}"),
@@ -330,6 +377,9 @@ def _render_weakness(data: _TourData) -> None:
         f"`{data.baseline}` scores {row['overall_map5095']:.4f} mAP50-95 overall but "
         f"{row['night_map5095']:.4f} at night{night_ped_clause}."
     )
+    # Beat (c), and the last thing on the screen before the takeaway: the numbers
+    # above are a diagnosis, and this is what the rest of the tour does with one.
+    st.markdown(_PURPOSE_SENTENCE)
     learned("Aggregate metrics hide important failure slices.")
     provenance("recorded", "mAP from active_learning_results.parquet")
     if recomputed_detail:
@@ -686,13 +736,17 @@ def _render_why_selected(data: _TourData) -> None:
     """Step 3 — one mined frame and the recorded reason it was picked, reproduced
     by ``demo al-explain`` rather than reasoned about here.
 
-    Phase 10 (spec sec2 row 3) sets the question first, answers it in one line
-    (``_SELECTION_PATH``) and folds the seven recorded factors and the causal
-    closing sentence into "How selection works" -- the mechanism is one click
-    away, not the first thing on the screen. The chip row stays where it was,
-    between the frame and the fold: it is what the Active Learning page leads its
-    own per-frame panel with, and this step must not summarise that panel into a
-    different set of facts.
+    Phase 10 (spec sec2 row 3) sets the question first, answers it in one line and
+    folds the seven recorded factors and the causal closing sentence into "How
+    selection works" -- the mechanism is one click away, not the first thing on the
+    screen. web-frontend-v1 spec §1.2 makes that answer readable without the
+    package's vocabulary: the lede says what the system does instead of adding
+    images at random, the visible chain is the plain-language one, and
+    ``_SELECTION_PATH`` -- the same chain in the package's own terms -- opens the
+    fold, above the factors. The chip row stays where it was, between the frame and
+    the fold: it is what the Active Learning page leads its own per-frame panel
+    with, and this step must not summarise that panel into a different set of
+    facts.
     """
     if not al_explain_available():
         st.info(_EXPLAIN_ABSENT_NOTE)
@@ -708,6 +762,7 @@ def _render_why_selected(data: _TourData) -> None:
     token, scale = chosen
 
     st.subheader("Thousands of candidate training frames — which are worth labelling?")
+    st.markdown(_LEDE_SENTENCE)
     frame_row = data.manifest.loc[data.manifest["sample_data_token"] == token].iloc[0]
     gt_rows = visible_gt(data.gt, token)
     image_path = crop_path(token) if scale == 0.6 else thumb_path(token)
@@ -747,8 +802,11 @@ def _render_why_selected(data: _TourData) -> None:
             quota_before=frame_quota_before(data.communities, explain_row, arm=arm),
         )
     )
-    st.markdown(_SELECTION_PATH)
+    st.markdown(_PLAIN_SELECTION_PATH)
     with st.expander("How selection works"):
+        # The same chain in the package's own vocabulary, above the factors that
+        # detail it: the plain one above is the story, this one is the mechanism.
+        st.markdown(_SELECTION_PATH)
         for label, value, flag in selection_factors(
             explain_row, n_communities=n_communities, night_floor=night_floor
         ):
@@ -831,15 +889,19 @@ def _charted_ids_caption(coverage: pd.DataFrame) -> str:
     )
 
 
-def _fairness_statement(coverage: pd.DataFrame, *, baseline: str) -> str:
-    """What was held constant across the charted arms -- the sentence that makes the
-    chart a comparison rather than a leaderboard.
+def _fairness_parts(coverage: pd.DataFrame, *, baseline: str) -> tuple[list[str], str | None]:
+    """What was held constant across the charted arms, clause by clause -- the
+    promise that makes the chart a comparison rather than a leaderboard -- and the
+    control clause, or ``None`` when the control arm is not one of the charted ones.
 
     The budget clause names a frame count only when every charted non-baseline arm
     really was trained on the same number of images (computed from the arm table,
-    NA counting as "not known to be equal"); otherwise the sentence still promises
-    the same budget, without claiming a figure this package cannot show. The control
-    clause is written only when the control arm is one of the charted ones.
+    NA counting as "not known to be equal"); otherwise the clause still promises the
+    same budget, without claiming a figure this package cannot show.
+
+    Clauses rather than one sentence (web-frontend-v1 spec §1.3): the strip renders
+    them as chips and accents the control one, and the derivation must live in one
+    place whichever shape the screen draws them in.
     """
     others = coverage.loc[coverage["arm"] != baseline]
     sizes = others["n_train_images"]
@@ -850,12 +912,27 @@ def _fairness_statement(coverage: pd.DataFrame, *, baseline: str) -> str:
         if not others.empty and len(known) == len(sizes) and len(shared) == 1
         else "same budget"
     )
-    sentence = f"Same detector · {budget} · {_FAIRNESS_TAIL}"
-    if "random" in {str(name) for name in coverage["arm"]}:
-        # "Random sample", not the chart's own "Random sample — control" label: the
-        # clause would otherwise read "... — control is the control".
-        sentence += " — Random sample is the control"
-    return sentence + "."
+    clauses = ["Same detector", budget, *_FAIRNESS_TAIL.split(" · ")]
+    # "Random sample", not the chart's own "Random sample — control" label: the
+    # clause would otherwise read "... — control is the control".
+    control = (
+        _FAIRNESS_CONTROL if "random" in {str(name) for name in coverage["arm"]} else None
+    )
+    return clauses, control
+
+
+def _render_fairness_strip(coverage: pd.DataFrame, *, baseline: str) -> None:
+    """The fairness promise as the panel the chart is read through: an eyebrow, the
+    held-constant clauses as chips, and the control clause as the one chip in accent
+    -- the same grammar the story site's own strip uses, so the two front-ends bind
+    the same promise to the same chart."""
+    clauses, control = _fairness_parts(coverage, baseline=baseline)
+    with st.container(border=True):
+        st.markdown(f"**{_FAIRNESS_LEAD}**")
+        chips = chip_row_text(clauses)
+        if control is not None:
+            chips += " " + chip_row_text([control], color="orange")
+        st.markdown(chips)
 
 
 def _best_night_arm_sentence(arms: pd.DataFrame, *, baseline: str) -> str | None:
@@ -950,6 +1027,10 @@ def _render_retrain(data: _TourData) -> None:
     the Active Learning page's own strategy section charts) and surrounds it with
     the three sentences that make it readable as an experiment: what changed, what
     was held constant, and which arm actually won. The four cards are untouched.
+
+    web-frontend-v1 spec §1.3 promotes the middle one out of prose: what was held
+    constant is a bordered chip strip directly ABOVE the chart, because a viewer who
+    reads the bars first has already read them as a leaderboard.
     """
     arm = data.arm
     base_rows = data.arms.loc[data.arms["arm"] == data.baseline]
@@ -1000,6 +1081,8 @@ def _render_retrain(data: _TourData) -> None:
         data.arms,
         strategies=tour_strategies(data.arms, baseline=data.baseline, arm=arm),
     )
+    # Above the chart, not below it (see the docstring).
+    _render_fairness_strip(coverage, baseline=data.baseline)
     st.altair_chart(
         bar_chart(
             coverage,
@@ -1019,7 +1102,6 @@ def _render_retrain(data: _TourData) -> None:
         width="stretch",
     )
     st.caption(_charted_ids_caption(coverage))
-    st.markdown(_fairness_statement(coverage, baseline=data.baseline))
     winner = _best_night_arm_sentence(data.arms, baseline=data.baseline)
     if winner is not None:
         st.markdown(winner)
@@ -1106,6 +1188,11 @@ def _render_after(data: _TourData) -> None:
     the Active Learning deep link's job. The frame stays an illustration: the two
     sentences under it are arm-level results on the held-out split, which is what
     "did it work?" is answered with.
+
+    web-frontend-v1 spec §1.4 makes that hierarchy explicit rather than implied: the
+    picture is labelled "One example" before it is shown and the numbers under it are
+    labelled as the aggregate result, so the screen's own structure answers "did you
+    just pick a flattering image?".
     """
     arm = data.arm
     tokens = [str(token) for token in (data.exemplars.get("tokens") or [])]
@@ -1115,6 +1202,8 @@ def _render_after(data: _TourData) -> None:
     token = tokens[0]
 
     st.subheader(_AFTER_HEADLINE)
+    # Tier 1, labelled before the picture rather than caveated after it.
+    st.caption(_ONE_EXAMPLE_TIER)
 
     gt_rows = visible_gt(data.gt, token)
     frame_preds = data.preds.loc[data.preds["sample_data_token"] == token]
@@ -1156,10 +1245,14 @@ def _render_after(data: _TourData) -> None:
         # drew, so it is written only where an overlay was actually rendered.
         legend()
 
+    # Tier 2: the arm-level numbers on the held-out split -- written under their own
+    # lead-in, and the lead-in only where this package has such a number to state.
     ped_sentence = _night_ped_sentence(data, arm)
+    sentence = _night_map_sentence(data, arm)
+    if ped_sentence or sentence:
+        st.markdown(_AGGREGATE_TIER)
     if ped_sentence:
         st.markdown(ped_sentence)
-    sentence = _night_map_sentence(data, arm)
     if sentence:
         st.markdown(sentence)
     if _hero_recovery_is_low_conf(data):
