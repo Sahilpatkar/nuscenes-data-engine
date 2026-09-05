@@ -404,20 +404,36 @@ def _night_miss_counts(package: Package) -> tuple[int, int, int]:
 def build_blindspot(package: Package) -> dict[str, Any]:
     row = package.arm_row(package.baseline)
     overall, night = float(row["overall_map5095"]), float(row["night_map5095"])
-    night_ped = float(row["night_ped_map5095"])
     n_night, n_night_fn, n_val = _night_miss_counts(package)
+    # night_ped_map5095 is the night PEDESTRIAN class -- the mechanism the night arms
+    # move, and absent (or NA) on a package whose eval never wrote per-class night
+    # metrics. Guarded exactly as `views/tour.py::_render_weakness` guards it: the
+    # card AND the sentence's clause are dropped together, because an absent card is
+    # better than a card reading "nan" and a sentence must not out-claim its cards.
+    night_ped = row.get("night_ped_map5095")
+    has_night_ped = night_ped is not None and bool(pd.notna(night_ped))
+    cards = [
+        {"label": "Overall mAP50-95", "value": _metric(overall)},
+        {"label": "Night mAP50-95", "value": _metric(night)},
+    ]
+    night_ped_clause = ""
+    if has_night_ped:
+        cards.append({"label": "Night pedestrian mAP50-95", "value": _metric(float(night_ped))})
+        night_ped_clause = (
+            f" — and {_metric(float(night_ped))} on night pedestrians, the case that matters most"
+        )
     return {
         "baseline": _label(package.baseline),
-        "cards": [
-            {"label": "Overall mAP50-95", "value": _metric(overall)},
-            {"label": "Night mAP50-95", "value": _metric(night)},
-            {"label": "Night pedestrian mAP50-95", "value": _metric(night_ped)},
-        ],
+        "cards": cards,
         "derived_sentence": (
             f"`{package.baseline}` scores {_metric(overall)} mAP50-95 overall but "
-            f"{_metric(night)} at night — and {_metric(night_ped)} on night "
-            "pedestrians, the case that matters most."
+            f"{_metric(night)} at night{night_ped_clause}."
         ),
+        # Site-only editorial, deliberately with no tour twin to pin it to: the tour's
+        # step 1 leads with `_PROBLEM_SENTENCE` as its own heading, while a scrolling
+        # page wants a section heading that names the finding. The claim stays true and
+        # is evidenced by the very cards below it (overall 0.2477 vs night 0.1667), so
+        # tests/test_web_export.py asserts it is non-empty rather than tour-bound.
         "headline": "Aggregate accuracy was hiding a night-driving blind spot.",
         "miss_sentence": (
             f"{n_night_fn} of {n_night} night validation frames carry at least one "

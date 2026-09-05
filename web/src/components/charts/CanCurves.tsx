@@ -267,26 +267,32 @@ export function CanCurves({
         onActivate={onActivate}
       />
 
-      {/* The table twin: every plotted value, reachable without the chart. */}
-      <table className="sr-only">
-        <caption>Filmstrip step readings</caption>
-        <thead>
-          <tr>
-            <th scope="col">Step</th>
-            <th scope="col">{speedTitle}</th>
-            <th scope="col">{accelTitle}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {steps.map((step) => (
-            <tr key={step.token}>
-              <th scope="row">{step.label}</th>
-              <td>{step.can_speed_kmh === null ? "not recorded" : format(step.can_speed_kmh)}</td>
-              <td>{step.accel_mps2 === null ? "not recorded" : format(step.accel_mps2)}</td>
+      {/* The table twin: every plotted value, reachable without the chart.
+          `.sr-only` sits on the wrapper, not on the <table>: a table box cannot
+          shrink below its min-content width, so an absolutely positioned one
+          stretched the document's scrollWidth past a 360px viewport. A block
+          wrapper honours the 1px clip and the table keeps its semantics. */}
+      <div className="sr-only">
+        <table>
+          <caption>Filmstrip step readings</caption>
+          <thead>
+            <tr>
+              <th scope="col">Step</th>
+              <th scope="col">{speedTitle}</th>
+              <th scope="col">{accelTitle}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {steps.map((step) => (
+              <tr key={step.token}>
+                <th scope="row">{step.label}</th>
+                <td>{step.can_speed_kmh === null ? "not recorded" : format(step.can_speed_kmh)}</td>
+                <td>{step.accel_mps2 === null ? "not recorded" : format(step.accel_mps2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

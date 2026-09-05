@@ -4035,6 +4035,19 @@ def test_tour_walks_steps_2_to_5(
         "frames → selected for retraining**"
     )
     assert not any("Failed validation frame" in text for text in folded)
+    # ... and the mirror of that pin: the implementation chain is rendered ONLY
+    # there. AppTest flattens an expander's children into `at.markdown` in document
+    # order, so what makes a copy "visible" is WHERE it sits, not whether the string
+    # exists somewhere -- subtracting the fold's blocks by value would quietly drop
+    # a second, visible copy as a duplicate. Counting them is what catches it.
+    implementation = [
+        index
+        for index, text in enumerate(markdowns)
+        if "failed val frame → similarity community" in text
+    ]
+    assert len(implementation) == 1, "the implementation chain is rendered twice"
+    assert markdowns[implementation[0]] == folded[0]
+    assert plain < implementation[0]  # the plain chain leads; the fold follows it
     assert any(text.startswith("**Night frame:** yes ✓") for text in folded)
     assert any("Nothing about this frame on its own selected it" in text for text in folded)
     # the selection is REPRODUCED (demo al-explain), not recomputed or recorded

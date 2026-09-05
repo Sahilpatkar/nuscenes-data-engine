@@ -12,9 +12,12 @@ import type { Blindspot as BlindspotData } from "../data/types";
  *   (c) the purpose: what the system exists to do about it. It closes the section
  *       because by the end of step 1 the viewer must know what this thing *is*.
  *
- * The accented tile is the last card. The exporter writes the three in a fixed
- * order (overall → night → night pedestrian, `build_blindspot`), so the last one
- * is the night-pedestrian metric: the case the rest of the story chases.
+ * The accented tile is the last card. The exporter writes them in a fixed order
+ * (overall → night → night pedestrian, `build_blindspot`), so the last one is the
+ * night-pedestrian metric: the case the rest of the story chases. On a package
+ * whose eval wrote no per-class night metric the exporter drops that card rather
+ * than shipping "nan", and the accent falls on the night metric instead — still
+ * the worst reading on the row, which is the point the accent is making.
  */
 export function Blindspot({ data }: { data: BlindspotData }): JSX.Element {
   const lastCard = data.cards.length - 1;

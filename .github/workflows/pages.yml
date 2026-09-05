@@ -15,15 +15,18 @@ on:
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
+# Workflow-level: read the repo, nothing more. The Pages write scope and the OIDC
+# token belong to the deploy job alone (see below) -- the build job runs untrusted
+# npm postinstall scripts and has no business holding a deploy credential.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# One deploy at a time; a newer push supersedes an in-flight one.
+# One deploy at a time -- and a newer push QUEUES behind an in-flight deploy rather
+# than cancelling it. GitHub's own guidance for production Pages deploys: a
+# half-completed deploy that is cancelled can leave the live site inconsistent.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -57,6 +60,11 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Least privilege: only this job writes Pages, and only this job mints the OIDC
+    # token `deploy-pages` exchanges for the deployment. It never checks the repo out.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

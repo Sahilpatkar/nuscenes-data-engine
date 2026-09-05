@@ -49,7 +49,7 @@ package, one set of derived numbers.
    details (similarity communities, graph context, CAN signals, quotas, failure-mass
    scoring, night floor) fold underneath. Largest visual weight after the landing.
 3. **Fair comparison (intervention):** the fairness statement ("Same detector · same
-   1,500-frame budget · same training configuration · scored on the same held-out
+   8,535-frame budget · same training configuration · scored on the same held-out
    split — Random sample is the control.") is a design element visually bound to the
    strategy chart — a bordered strip whose clauses render as mono chips, the control
    clause emphasized — not secondary prose. Budget clause keeps its derived condition.

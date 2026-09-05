@@ -105,7 +105,7 @@
      by the light blocks. The overlay legend's swatches are the exact RGBs burned
      into the JPEGs (white, yellow, orange...); on warm paper the white and yellow
      ones would vanish, so their chip keeps the night frame's own tone in both
-     modes. `--image-chip-ink` on `--image-chip` is 14.9:1 — the chip is readable
+     modes. `--image-chip-ink` on `--image-chip` is 14.8:1 — the chip is readable
      wherever it lands. */
   --image-chip: #10162A;
   --image-chip-line: #2A3350;

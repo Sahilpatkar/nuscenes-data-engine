@@ -22,8 +22,8 @@ import type { StrategyBar as StrategyBarDatum, StrategyChart } from "../../data/
  *
  * Interaction: pointing at OR tabbing to a bar's band raises a tooltip with the
  * story label, the raw arm id and the value. The bands are focusable and carry
- * that same reading as their accessible name; the `.sr-only` table under the
- * chart is the twin for reading the whole series at once.
+ * that same reading as their accessible name; the screen-reader-only table under
+ * the chart is the twin for reading the whole series at once.
  *
  * A bar whose delta the package never recorded is not drawn — plotting a missing
  * measurement at zero would claim the arm made no difference. It keeps its row in
@@ -111,26 +111,33 @@ export function StrategyBar({ chart }: { chart: StrategyChart }): JSX.Element | 
   );
   const places = decimals(plotted.map((entry) => entry.value));
 
+  // `.sr-only` goes on a block WRAPPER, never on the <table> itself: a table box
+  // cannot shrink below its min-content width (~438px here), so an absolutely
+  // positioned one kept stretching the document's scrollWidth past a 360px
+  // viewport — a horizontal scrollbar on every phone. A <div> honours the 1px
+  // clip; the table inside keeps every bit of its semantics.
   const table = (
-    <table className="sr-only">
-      <caption>{chart.title}</caption>
-      <thead>
-        <tr>
-          <th scope="col">Strategy</th>
-          <th scope="col">Arm</th>
-          <th scope="col">{chart.y_title}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {chart.bars.map((bar) => (
-          <tr key={bar.arm}>
-            <th scope="row">{bar.strategy}</th>
-            <td>{bar.arm}</td>
-            <td>{bar.delta_night === null ? "not recorded" : signed(bar.delta_night, places)}</td>
+    <div className="sr-only">
+      <table>
+        <caption>{chart.title}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Strategy</th>
+            <th scope="col">Arm</th>
+            <th scope="col">{chart.y_title}</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {chart.bars.map((bar) => (
+            <tr key={bar.arm}>
+              <th scope="row">{bar.strategy}</th>
+              <td>{bar.arm}</td>
+              <td>{bar.delta_night === null ? "not recorded" : signed(bar.delta_night, places)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 
   // Nothing plottable: the caption and the sentences around the chart still say
@@ -268,7 +275,11 @@ export function StrategyBar({ chart }: { chart: StrategyChart }): JSX.Element | 
               width={band}
               height={PLOT_H}
               tabIndex={0}
-              role="img"
+              // `graphics-symbol`, not `img`: this band IS focusable, and a
+              // focusable element inside an `img` role is exactly the thing an
+              // assistive technology is told to treat as opaque. The graphics
+              // role keeps the band a labelled unit of the chart.
+              role="graphics-symbol"
               aria-label={`${bar.strategy} (${bar.arm}): ${signed(value, places)}`}
               onPointerEnter={() => setActive(index)}
               onPointerLeave={() => setActive(null)}
