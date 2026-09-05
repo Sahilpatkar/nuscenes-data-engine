@@ -8,8 +8,11 @@ import { StepRail, type RailStep } from "./components/StepRail";
 /* The section components share their names with the bundle interfaces below
    (both are named for the step they belong to), so each is aliased once here. */
 import { Blindspot as BlindspotSection } from "./sections/Blindspot";
+import { ClosedLoop as ClosedLoopSection } from "./sections/ClosedLoop";
+import { Intervention as InterventionSection } from "./sections/Intervention";
 import { MissedPedestrian as MissedPedestrianSection } from "./sections/MissedPedestrian";
 import { Scenario as ScenarioSection } from "./sections/Scenario";
+import { Verdict as VerdictSection } from "./sections/Verdict";
 import { WhyFrame as WhyFrameSection } from "./sections/WhyFrame";
 
 import blindspotJson from "./data/blindspot.json";
@@ -68,10 +71,8 @@ interface StorySection {
   headline: string | null;
   provenance: Provenance[];
   links: DeepLinkRef[];
-  /** The section's own internals, or null while Task 5 still owes them. */
-  body: ReactNode | null;
-  /** Placeholder copy for a step not built yet — never a claim. */
-  pending?: string;
+  /** The section's own internals. */
+  body: ReactNode;
   /** The centrepiece alone gets a surface band (story contract §1.2). */
   tone?: "panel";
 }
@@ -134,8 +135,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: intervention.headline,
     provenance: intervention.provenance,
     links: deepLinks("active_learning"),
-    body: null,
-    pending: "The fairness strip bound to the strategy chart, and the winner sentence.",
+    body: <InterventionSection data={intervention} />,
   },
   {
     id: "verdict",
@@ -146,8 +146,7 @@ const SECTIONS: readonly StorySection[] = [
     headline: verdict.headline,
     provenance: verdict.provenance,
     links: deepLinks("active_learning"),
-    body: null,
-    pending: "Two evidence tiers — the one before/after example, then the aggregate result.",
+    body: <VerdictSection data={verdict} />,
   },
   {
     id: "closed-loop",
@@ -167,8 +166,7 @@ const SECTIONS: readonly StorySection[] = [
       "weak_supervision",
       "chat_replay",
     ),
-    body: null,
-    pending: "The three hero cards, the four answers, and the closing thesis.",
+    body: <ClosedLoopSection data={closedLoop} />,
   },
 ];
 
@@ -197,11 +195,10 @@ export default function App(): JSX.Element {
             tone={section.tone}
             provenance={section.provenance}
           >
-            {/* Task 5 still owes three sections their internals; until then the
-                frame states what is coming rather than claiming anything. */}
-            {section.body ??
-              (section.pending ? <p className="pending mono">{section.pending}</p> : null)}
+            {section.body}
 
+            {/* The go-deeper links close every section — and on the last one they
+                are the last thing on the page after the closing thesis. */}
             {section.links.length > 0 ? (
               <div className="deep-links">
                 {section.links.map((link) => (

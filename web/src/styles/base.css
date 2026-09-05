@@ -142,6 +142,9 @@ a {
   border: 1px solid var(--line);
   padding: 18px 20px;
   display: grid;
+  /* top-aligned: a tile with no delta line must not float its value down the
+     card just because the tile beside it has one */
+  align-content: start;
   gap: 6px;
 }
 
@@ -349,16 +352,6 @@ html {
   display: grid;
   gap: clamp(14px, 2vw, 22px);
   justify-items: start;
-}
-
-/* placeholder body — replaced by the real internals in Tasks 4 and 5 */
-.pending {
-  font-size: 0.82em;
-  color: var(--muted);
-  border: 1px dashed var(--line);
-  background: var(--panel);
-  padding: 14px 16px;
-  max-width: 60ch;
 }
 
 /* ── provenance row ───────────────────────────────────────────────────────── */
@@ -830,6 +823,12 @@ html {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+}
+
+/* four tiles in one row need a narrower floor than three do, or the fourth wraps
+   to a line of its own at exactly the widths the story is read at */
+.stat-row.is-quad {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
 }
 
 /* the one tile the story is about — never more than one per row */
@@ -1323,4 +1322,385 @@ ul.chip-row {
 .architecture-strip {
   font-size: 0.74em;
   max-width: 78ch;
+}
+
+/* ── step 5: the fair comparison, and the chart bound inside it ───────────── */
+
+/* Story contract §1.3: the fairness statement is not prose that happens to sit
+   near the chart — it IS the panel the chart is drawn inside. One bordered
+   surface, accent-edged, holding the clauses and the marks they qualify, so the
+   bars cannot be read without reading what was held constant. */
+.fairness {
+  width: 100%;
+  max-width: 60rem;
+  display: grid;
+  gap: clamp(10px, 1.4vw, 16px);
+  padding: clamp(14px, 2vw, 20px);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-strong);
+  background: var(--panel);
+}
+
+/* the clause the whole comparison rests on: the control every bar is measured
+   against, and the only chip that carries the accent */
+.fairness-parts .chip.is-control {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
+
+/* The chart keeps a readable width and scrolls inside the panel rather than
+   shrinking its 10 px labels into illegibility on a phone. */
+.strategy-scroll {
+  width: 100%;
+}
+
+.strategy-chart {
+  min-width: 32rem;
+}
+
+/* "mAP50-95" is a metric's name, not a word: this title keeps its own case where
+   the other chart titles wear the uppercase eyebrow treatment. */
+.strategy-chart .chart-title {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.strategy-plot {
+  position: relative;
+}
+
+/* Bar hue says EMPHASIS, never sign (tokens.css, the standing obligation): the
+   direction is in the geometry — below the zero rule — and in the signed label. */
+.bar {
+  fill: var(--chart-muted);
+}
+
+.bar.is-highlight {
+  fill: var(--chart-accent);
+}
+
+.bar-tip {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  gap: 2px;
+  max-width: 15rem;
+  margin-top: -10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  pointer-events: none;
+}
+
+.bar-tip-label {
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.bar-tip-id {
+  font-size: 0.72em;
+}
+
+.bar-tip-value {
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The tour bolds each arm's share and Streamlit renders it; the exporter strips
+   the markers, so the site carries the emphasis in its own type — which only
+   reads if the line around it is NOT already bold. */
+.night-shares {
+  font-size: 1.04em;
+  max-width: 62ch;
+}
+
+.night-shares strong {
+  font-weight: 700;
+}
+
+/* the charted arms' raw ids, under the chart they name */
+.charted-ids {
+  font-size: 0.74em;
+  max-width: 78ch;
+}
+
+/* ── step 6: the two evidence tiers ───────────────────────────────────────── */
+
+/* Contract §1.4's structure IS the argument: the example is LABELLED as one
+   example, with its caveat printed beside the label rather than buried under the
+   picture, and the aggregate tier carries the same label treatment. */
+.tier {
+  display: grid;
+  gap: 4px;
+}
+
+.tier-label {
+  font-size: 0.74em;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tier-caveat {
+  font-size: 0.9em;
+  max-width: 52ch;
+}
+
+.compare {
+  width: 100%;
+  max-width: 60rem;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+/* mobile first: the wipe needs room, so the static pair is what a narrow screen
+   gets (see the ≥ 480 px block below, where the two swap) */
+.compare-frame {
+  display: none;
+  position: relative;
+  border: 1px solid var(--line);
+  line-height: 0;
+}
+
+.compare-img {
+  width: 100%;
+}
+
+/* the seam. No transition: it tracks the pointer or the arrow key, which is the
+   reader's own motion — there is nothing here for reduced motion to switch off */
+.compare-after {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 calc(100% - var(--wipe)) 0 0);
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--wipe);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent-strong);
+  pointer-events: none;
+}
+
+.compare-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-strong);
+  background: var(--image-chip);
+}
+
+/* the end labels keep the IMAGE's own tone in both themes, like the legend chips:
+   they sit ON the night frame, not on the page */
+.compare-end {
+  position: absolute;
+  bottom: 8px;
+  max-width: 45%;
+  display: grid;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--image-chip-line);
+  background: var(--image-chip);
+  color: var(--image-chip-ink);
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.compare-end-after {
+  left: 8px;
+}
+
+.compare-end-before {
+  right: 8px;
+  text-align: right;
+}
+
+.compare-end-label {
+  font-size: 0.74em;
+  font-weight: 600;
+}
+
+.compare-end-id {
+  font-size: 0.66em;
+}
+
+/* A real range input, stretched over the frame: it drives the wipe, it takes the
+   arrow keys for free, and its focus ring (the global :focus-visible outline)
+   lands around the whole image. The thumb is a transparent hairline — the visible
+   handle is `.compare-handle`, drawn at the same percentage the clip uses, so the
+   control and the seam can never disagree. */
+.compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: ew-resize;
+}
+
+.compare-range::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.compare-range::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+
+.compare-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 2px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+}
+
+.compare-range::-moz-range-thumb {
+  width: 2px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+}
+
+.compare-static {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.compare-static-item {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.compare-static-item img {
+  width: 100%;
+  border: 1px solid var(--line);
+}
+
+.compare-static-item figcaption {
+  font-size: 0.72em;
+  line-height: 1.3;
+}
+
+.compare-caption {
+  font-size: 0.76em;
+}
+
+@media (min-width: 480px) {
+  .compare-frame {
+    display: block;
+  }
+
+  .compare-static {
+    display: none;
+  }
+}
+
+/* the aggregate result at stat-tile weight — the number this section exists for */
+.aggregate-line {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(1.3rem, 2.6vw, 2.2rem);
+  line-height: 1.14;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  max-width: 32ch;
+  text-wrap: balance;
+}
+
+.box-table {
+  width: 100%;
+  min-width: 34rem;
+  border-collapse: collapse;
+  font-size: 0.78em;
+}
+
+.box-table th,
+.box-table td {
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.box-table thead th {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+.box-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ── step 7: the four answers and the closing thesis ──────────────────────── */
+.answers {
+  width: 100%;
+  display: grid;
+  gap: clamp(10px, 1.4vw, 16px);
+}
+
+@media (min-width: 760px) {
+  .answers {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.answer {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: clamp(14px, 1.8vw, 20px);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* a question, not a headline: the body face at body size, carried by weight */
+.answer-question {
+  font-family: var(--body);
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.answer-line {
+  font-size: 0.9em;
+  max-width: 48ch;
+}
+
+/* Contract §1.5, the site's last sentence: the thesis the four answers are the
+   evidence for. The page's largest pull line, and nothing follows it but the
+   ways to go deeper. */
+.thesis {
+  width: 100%;
+  margin-top: clamp(4px, 1.2vw, 14px);
+  padding: 6px 0 6px clamp(16px, 2vw, 26px);
+  border-left: 3px solid var(--accent-strong);
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: clamp(1.2rem, 2.4vw, 2rem);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  max-width: 30ch;
+  text-wrap: pretty;
 }
