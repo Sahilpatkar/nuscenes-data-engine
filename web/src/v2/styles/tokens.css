@@ -1,0 +1,222 @@
+/* =============================================================================
+   tokens.css (v2, the report edition) — paper, ink, and one cobalt accent.
+
+   Loaded ONLY by the /v2/ document (main.tsx imports it), so it may claim plain
+   `:root` without touching the root edition's tokens of the same names.
+
+   THREE LAYERS, ONE RULE — v1's audited pattern, mirrored but LIGHT-FIRST
+   ---------------------------------------------------------------------
+   1. bare `:root`                              → LIGHT (paper, the design
+                                                  primary of a printed report)
+   2. `@media (prefers-color-scheme: dark) :root:not([data-theme])`
+      and `:root[data-theme="dark"]`            → DARK (tuned, first-class)
+   3. `:root[data-theme="light"]`               → LIGHT again, so an explicit
+                                                  choice beats a dark OS
+
+   RULE (audited in review): **no colour may be defined ONLY inside a media or
+   [data-theme] block.** Every token exists on bare `:root` with a real value;
+   the other layers only *redefine* tokens that already exist. A page that never
+   matches a block still renders complete.
+
+   The two DARK blocks (layer 2) are the same declarations pasted twice —
+   `@media` and `[data-theme=]` cannot be combined without losing the
+   toggle-beats-OS precedence. **They must stay textually identical** between
+   their `DARK SET` / `END DARK SET` markers (indentation aside — one block is
+   nested in the media query, so compare with leading whitespace stripped).
+   The review extracts both marked spans, strips indentation, and diffs them;
+   any token that appears in one and not the other is a bug.
+
+   Theme state is shared with the root edition: same `src/theme.ts`, same
+   `"theme"` localStorage key, same pre-paint script in the head. The CSS reads
+   `prefers-color-scheme: dark` where v1 reads `light` — complementary queries,
+   because the two editions default the other way.
+   ============================================================================= */
+
+/* -----------------------------------------------------------------------------
+   CHART SLOTS — validated, not eyeballed
+   -----------------------------------------------------------------------------
+   Chart *marks* answer to the dataviz method, not to the page's UI palette, so
+   they get their own slots stepped into each mode's lightness band.
+
+   Validator: dataviz skill `scripts/validate_palette.js` (bundled-skills
+   2.1.240), node v25.3.0, run 2026-09-05 on the worst-case surface of each mode
+   (light `--panel-2` #EFECE4, the darkest light surface; dark `--panel-2`
+   #22262E, the lightest dark surface). Checks: OKLCH lightness band, chroma
+   floor 0.10, CVD ΔE (Machado 2009, protan/deutan), normal-vision ΔE ≥ 15,
+   WCAG ≥ 3:1 vs surface.
+
+   Gated pair 1 — emphasis (muted bars vs the one accent bar), cobalt vs bronze:
+     light  #2447B2 vs #8C6A1D → ALL CHECKS PASS (CVD ΔE 26.9, normal 29.3)
+     dark   #6B8FE8 vs #B08A3E → ALL CHECKS PASS (CVD ΔE 24.3, normal 24.3)
+   Gated pair 2 — polarity (positive vs negative delta):
+     light  #127D52 vs #D22B33 → ALL CHECKS PASS (CVD ΔE  8.9, normal 29.6)
+     dark   #3AAD79 vs #DD3843 → ALL CHECKS PASS (CVD ΔE  8.1, normal 31.7)
+
+   Adjustments this required (the spec's starting values do NOT all pass):
+     · polarity light: the spec's #1E7A46 / #B4232A sit at nearly equal OKLCH
+       lightness (0.514 / 0.502) and measure ΔE 4.4 deutan — a FAIL. Splitting
+       their lightness is what lifts a green/red pair over the ΔE 8 target, so
+       the green steps down (#127D52, L 0.523) and the red steps up (#D22B33,
+       L 0.564) → 8.9.
+     · polarity dark: #4CBB82 is L 0.713, above the dark band (0.48–0.67), and
+       against #E4535B measured ΔE 4.5. Both step down — #3AAD79 (L 0.670) and
+       #DD3843 (L 0.595) → 8.1. The dark band is narrow, so this pair has little
+       lightness room; 8.1 is the best hard PASS found in the family.
+     · emphasis dark: the UI accent #93ACEE is L 0.751 (above band) and C 0.089
+       (below the chroma floor — as a mark it would read gray). It is a fine TEXT
+       colour (6.77:1 on the worst dark surface) and stays `--accent`;
+       `--chart-accent` takes the same cobalt stepped into band, #6B8FE8.
+     · emphasis light needed nothing: `--accent` #2447B2 is L 0.443 C 0.175, in
+       band and above the chroma floor, so the light chart accent IS the UI
+       accent — one cobalt, doing both jobs.
+
+   Contrast of every chart slot vs ground / panel / panel-2:
+     light  accent 7.36/8.02/6.79 · muted 4.60/5.01/4.24 · pos 4.72/5.15/4.36
+            neg 4.66/5.08/4.30 · zero 5.95/6.49/5.49 · grid 1.37/1.49/1.26
+     dark   accent 5.79/5.34/4.85 · muted 5.65/5.21/4.73 · pos 6.41/5.91/5.37
+            neg 4.07/3.75/3.41 · zero 6.68/6.16/5.59 · grid 1.54/1.42/1.29
+   All marks clear the 3:1 mark floor on every surface. Every slot except the
+   grid and dark `--chart-neg` also clears 4.5:1, so a direct label may be tinted
+   with it — EXCEPT a negative label in dark, which renders in `--ink` (the neg
+   slot is mark-only there). `--chart-grid` is a hairline that must recede: it is
+   never a mark and never carries text.
+
+   ONE STANDING OBLIGATION (unchanged from v1, and the reason the accent is
+   cobalt rather than an oxide red): run as one four-slot palette with
+   `--pairs all`, bronze↔red measures ΔE 2.8 deutan (light) and 5.2 (dark), and
+   bronze↔green 13.4 / 14.8 normal — bronze is a neighbour of both polarity hues
+   under CVD. The slots encode different jobs (emphasis vs sign), never "which
+   series", so per the method's status rule they may sit in one chart ONLY with
+   the sign carried elsewhere: negative bars sit on the far side of the zero rule
+   and every bar carries a signed direct label. Never let hue alone say "this one
+   went down". (An oxide-red accent would have put the *emphasis* pair itself on
+   the red axis and spread that hazard across every figure; cobalt-vs-bronze is a
+   blue/yellow-axis pair — the safest available — and cobalt is the fountain-pen
+   mark of printed research.)
+
+   NOTE — no `--accent-strong` here. v1 needed that split because its light amber
+   never cleared 4.5:1. Both v2 accents are text-safe on every surface of their
+   own mode (light #2447B2: 7.36/8.02/6.79; dark #93ACEE: 8.08/7.45/6.77), so
+   accent text, focus rings and 1px accent borders all use `--accent` directly.
+   ----------------------------------------------------------------------------- */
+
+/* ── layer 1: bare :root = LIGHT, design-primary (paper) ──────────────────── */
+:root {
+  /* surfaces */
+  --ground: #F7F5F0;
+  --panel: #FFFFFF;
+  --panel-2: #EFECE4;
+  --line: #D8D3C8;
+
+  /* text */
+  --ink: #1A1C21;
+  --muted: #5B5E66;
+
+  /* brand — one accent, and it is text-safe (see the note above) */
+  --accent: #2447B2;
+
+  /* THEME-INVARIANT — deliberately defined once, on :root only, and NOT redefined
+     by the dark blocks. Copied verbatim from v1's tokens.css: the overlay legend's
+     swatches are the exact RGBs burned into the JPEGs (white, yellow, orange...);
+     on warm paper the white and yellow ones would vanish, so their chip keeps the
+     night frame's own tone in both modes. `--image-chip-ink` on `--image-chip` is
+     14.8:1 — the chip is readable wherever it lands. */
+  --image-chip: #10162A;
+  --image-chip-line: #2A3350;
+  --image-chip-ink: #EDE9E1;
+
+  /* chart slots (see the validated block above) */
+  --chart-accent: #2447B2;
+  --chart-muted: #8C6A1D;
+  --chart-grid: #D8D3C8;
+  --chart-pos: #127D52;
+  --chart-neg: #D22B33;
+  --chart-zero: #5B5E66;
+
+  /* type — the Source superfamily: one foundry, three voices */
+  --display: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --body: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Source Code Pro", "SFMono-Regular", Menlo, Consolas, monospace;
+
+  color-scheme: light;
+}
+
+/* ── layer 2a: dark via the OS, only while no explicit choice is stamped ──── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    /* DARK SET — twin of the other dark block; keep in sync */
+    --ground: #14161B;
+    --panel: #1B1E24;
+    --panel-2: #22262E;
+    --line: #333844;
+
+    --ink: #E9E7E1;
+    --muted: #9A9DA6;
+
+    --accent: #93ACEE;
+
+    --chart-accent: #6B8FE8;
+    --chart-muted: #B08A3E;
+    --chart-grid: #333844;
+    --chart-pos: #3AAD79;
+    --chart-neg: #DD3843;
+    --chart-zero: #9A9DA6;
+
+    color-scheme: dark;
+    /* END DARK SET */
+  }
+}
+
+/* ── layer 2b: dark chosen explicitly — beats a light OS ──────────────────── */
+:root[data-theme="dark"] {
+  /* DARK SET — twin of the other dark block; keep in sync */
+  --ground: #14161B;
+  --panel: #1B1E24;
+  --panel-2: #22262E;
+  --line: #333844;
+
+  --ink: #E9E7E1;
+  --muted: #9A9DA6;
+
+  --accent: #93ACEE;
+
+  --chart-accent: #6B8FE8;
+  --chart-muted: #B08A3E;
+  --chart-grid: #333844;
+  --chart-pos: #3AAD79;
+  --chart-neg: #DD3843;
+  --chart-zero: #9A9DA6;
+
+  color-scheme: dark;
+  /* END DARK SET */
+}
+
+/* ── layer 3: light chosen explicitly — beats a dark OS ───────────────────── */
+:root[data-theme="light"] {
+  --ground: #F7F5F0;
+  --panel: #FFFFFF;
+  --panel-2: #EFECE4;
+  --line: #D8D3C8;
+
+  --ink: #1A1C21;
+  --muted: #5B5E66;
+
+  --accent: #2447B2;
+
+  --chart-accent: #2447B2;
+  --chart-muted: #8C6A1D;
+  --chart-grid: #D8D3C8;
+  --chart-pos: #127D52;
+  --chart-neg: #D22B33;
+  --chart-zero: #5B5E66;
+
+  color-scheme: light;
+}
+
+/* TEXT-CONTRAST NOTE — the non-chart tokens, measured against
+   ground / panel / panel-2 of their own mode:
+     light  ink 15.64/17.05/14.44 · muted 5.95/6.49/5.49 · accent 7.36/8.02/6.79
+     dark   ink 14.64/13.50/12.26 · muted 6.68/6.16/5.59 · accent 8.08/7.45/6.77
+   Every text token clears 4.5:1 on every surface of its mode, at any size.
+   `--line` is a hairline (light 1.37/1.49/1.26, dark 1.54/1.42/1.29): it draws
+   rules and borders, never text, and never a mark that carries meaning. */

@@ -1,0 +1,417 @@
+/* =============================================================================
+   base.css (v2, the report edition) — reset, the Source type scale, hairline
+   rules, and the report's one-column measure.
+
+   Colour lives in tokens.css; nothing here hard-codes a hex. Layout variables
+   follow the same rule as the colour tokens — a real value on `:root`, media
+   queries only redefine.
+
+   The idiom: where v1 drew panels, this edition draws RULES. A section opens on
+   a full-measure hairline; figures hang under numbered captions; provenance sets
+   as footnotes under a short rule. Everything reads down one column.
+   ============================================================================= */
+
+/* ── reset (minimal) ──────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+}
+
+body {
+  /* the viewer's window must never show through: paint the ground explicitly */
+  background: var(--ground);
+  color: var(--ink);
+  font: 17px/1.6 var(--body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+hr {
+  border: 0;
+}
+
+/* ── layout variables ─────────────────────────────────────────────────────── */
+:root {
+  /* the report's column: 76ch of container, 65ch of text inside it */
+  --container: 76ch;
+  --measure: 65ch;
+  /* figures and charts break out of the column to about this */
+  --figure-max: 60rem;
+  --gutter: clamp(1.1rem, 4vw, 2rem);
+  --space-section: clamp(3rem, 7vw, 5.5rem);
+  --space-block: 1.35rem;
+}
+
+/* ── the column ───────────────────────────────────────────────────────────── */
+.page {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* Text sets to the measure even inside the wider container, so a paragraph never
+   outruns the eye while a figure below it can still use the full column. */
+.measure {
+  max-width: var(--measure);
+}
+
+/* Breakout: centred on the column, never wider than the viewport minus its
+   gutters (so the page body itself never scrolls sideways). `max-width: none`
+   is load-bearing on an <img> — the reset caps images at 100% of their parent,
+   which would quietly undo the breakout. */
+.figure-wide {
+  width: min(var(--figure-max), calc(100vw - 2 * var(--gutter)));
+  max-width: none;
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+/* ── type scale ───────────────────────────────────────────────────────────── */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--display);
+  font-weight: 600;
+  text-wrap: balance;
+  line-height: 1.2;
+}
+
+/* the report's cover line */
+.cover-title,
+h1 {
+  font-size: clamp(2.1rem, 4.5vw, 3rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+  max-width: 20ch;
+}
+
+/* section heads */
+.section-title,
+h2 {
+  font-size: clamp(1.45rem, 2.6vw, 1.95rem);
+  letter-spacing: -0.008em;
+}
+
+h3 {
+  font-size: 1.12rem;
+}
+
+h4 {
+  font-size: 1rem;
+}
+
+/* the serif italic lede that opens a section or a figure caption */
+.lede {
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(1.14rem, 1.6vw, 1.3rem);
+  line-height: 1.5;
+}
+
+/* small-caps-ish label above a head, and the stage/act line beside it */
+.eyebrow {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the mono voice: section indices, arm ids, axis ticks, provenance detail */
+.mono {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-index {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+/* stat values and other display numerals set in the serif */
+.stat-value {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* every numeric context that has to line up in a column */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+p + p {
+  margin-top: var(--space-block);
+}
+
+/* ── footnotes ────────────────────────────────────────────────────────────── */
+.footnotes {
+  margin-top: 1.6rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+  /* the printed convention: the note block is narrower than the text it serves */
+  max-width: 52ch;
+}
+
+.footnote {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.footnote + .footnote {
+  margin-top: 0.45rem;
+}
+
+.footnote-mark {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin-right: 0.4em;
+}
+
+/* ── hairline rules ───────────────────────────────────────────────────────── */
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* the short rule that opens a note block or closes a stanza */
+.rule-short {
+  height: 1px;
+  width: 4.5rem;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* a rule in the accent, for the one place per page that wants emphasis */
+.rule-accent {
+  background: var(--accent);
+}
+
+/* ── links + focus ────────────────────────────────────────────────────────── */
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── the theme toggle (report chrome) ─────────────────────────────────────── */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.3rem 0.6rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+/* ── screen-reader-only (chart table twins, skip links) ───────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── scroll reveal ────────────────────────────────────────────────────────────
+   Enhancement only, and opacity-only in this edition (a report page does not
+   slide). The hidden state exists ONLY where motion is welcome, so a machine
+   asking for reduced motion — where useReveal registers no observer and never
+   adds .is-visible — still shows every section. Smooth scrolling is guarded the
+   same way. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  .reveal {
+    opacity: 0;
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transition: opacity 500ms ease-out;
+  }
+}
+
+/* =============================================================================
+   SPECIMEN — the type/palette proof sheet in App.tsx. Deleted with it in Tasks
+   2–3; nothing below is part of the report's own vocabulary.
+   ============================================================================= */
+.specimen {
+  padding-block: clamp(2.5rem, 6vw, 4rem);
+}
+
+.specimen-block {
+  margin-top: var(--space-section);
+}
+
+.specimen-block > .rule + * {
+  margin-top: 0.9rem;
+}
+
+.specimen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem 1.2rem;
+  margin-top: 0.7rem;
+}
+
+.specimen-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.9rem;
+  margin-top: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.specimen-swatch {
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.specimen-chip {
+  height: 3rem;
+}
+
+.specimen-swatch .mono {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.specimen-figure {
+  margin-top: 1.2rem;
+}
+
+.specimen-caption {
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.specimen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+/* The specimen's rough bar sample. SVG marks take their colour from CSS classes,
+   never from presentation attributes: `fill="var(--x)"` is not reliably
+   substituted, so the tokens are applied here (v1's charts do the same). */
+.specimen-svg {
+  width: 100%;
+  height: auto;
+}
+
+.specimen-zero {
+  stroke: var(--chart-zero);
+  stroke-width: 1;
+}
+
+.specimen-bar {
+  fill: var(--chart-muted);
+}
+
+.specimen-bar.is-highlight {
+  fill: var(--chart-accent);
+}
+
+.specimen-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  fill: var(--ink);
+}
+
+.specimen-tick {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--muted);
+}
