@@ -19,8 +19,7 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 **Live demo:** [nuscenes-data-engine-sahil.streamlit.app](https://nuscenes-data-engine-sahil.streamlit.app/)
 
-**Story site:** _pending first deploy — a designed scroll-through telling of the loop
-story (`web/`), deployed to GitHub Pages on merge_
+**Story site:** [sahilpatkar.github.io/nuscenes-data-engine](https://sahilpatkar.github.io/nuscenes-data-engine/) — a designed scroll-through telling of the loop story (`web/`), deployed to GitHub Pages on merge
 
 A self-contained Streamlit app ([app/demo/](app/demo/)) that presents this project's
 real results from a committed 25 MB artifact package — no backend, no GPU, no
