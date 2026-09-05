@@ -71,3 +71,34 @@ jobs:
 
       - name: 1-epoch CPU smoke train
         run: uv run --no-sync pytest -m smoke_train tests/test_smoke_train.py -rA
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The story site's numbers are not checked here: they live in the committed
+      # bundle (web/src/data/, web/public/story/), which the quality job's
+      # tests/test_web_export.py guards byte-for-byte against demo_data/. This job
+      # only proves the site still type-checks and builds — with the Pages base path,
+      # so a base-sensitive asset ref breaks here rather than after a deploy.
+      - name: Install deps (npm ci)
+        working-directory: web
+        run: npm ci
+
+      - name: Type-check (tsc)
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Build (vite)
+        working-directory: web
+        run: npm run build
+        env:
+          BASE_PATH: /nuscenes-data-engine/

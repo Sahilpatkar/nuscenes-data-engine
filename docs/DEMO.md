@@ -5,6 +5,49 @@ real results from a committed artifact package — no backend, no GPU, no databa
 The full plan is [DEMO_PLAN.md](DEMO_PLAN.md); the build lands in phases, each its own
 spec/plan/branch cycle.
 
+## Two front-ends, one package
+
+The committed package is read two ways, and neither reading carries a number of its
+own:
+
+- **The Streamlit app** (`app/demo/`, the rest of this document) is the **full
+  instrument**: every frame, every arm, every scenario event, the interactive graph
+  panel and the recorded chat session, with the guided tour as its default path.
+- **The story site** (`web/`, Vite + React + TypeScript) is a **designed
+  scrollytelling reading** of the same seven-step story — one page, seven sections,
+  hand-rolled SVG charts, first-class light and dark themes. It holds no deep-dive
+  pages of its own: every deep dive is a labelled deep link back into the live
+  Streamlit app.
+
+Every figure the site renders is exported at build time by `web/build_data.py`, which
+imports the app's own `filters.py` / `render.py` helpers and writes eight JSON files
+(`web/src/data/`) plus eleven pre-rendered overlays and thumbs (`web/public/story/`).
+That bundle is committed, and `tests/test_web_export.py` re-runs the exporter and
+asserts it comes back **byte-identical** — JSON byte-for-byte, images by name and
+dimensions — so a package or helper change that moves a number turns the suite red
+instead of drifting the site away from the app. The same tests pin the sentences the
+exporter re-derives (the computed winner, the fairness budget clause, the closed-loop
+headline guard, the `gain_text` sentence) to the shipped tour's own recorded output.
+
+```bash
+uv run python web/build_data.py   # regenerate the bundle from demo_data/ (commit the delta)
+cd web && npm install && npm run dev
+```
+
+### GitHub Pages runbook
+
+One-time, by hand: repo **Settings → Pages → Source = "GitHub Actions"**.
+
+From then on `.github/workflows/pages.yml` builds `web/dist` (with
+`BASE_PATH=/nuscenes-data-engine/`, the project-site base) and deploys it on every push
+to `main` touching `web/**` — plus manual `workflow_dispatch`. That workflow is
+hermetic: no Python, no `demo_data/`, no exporter run, because the committed bundle is
+the contract and CI's `quality` job is what guards it. `ci.yml` also gained a `web` job
+(node 22 → `npm ci`, `npm run typecheck`, `npm run build` with the same base path), so
+a change that breaks the site fails the PR rather than the deploy.
+
+**Story site URL:** _pending first deploy_
+
 ## Run it
 
 ```bash
@@ -14,7 +57,7 @@ uv run streamlit run app/demo/main.py
 The app reads only `demo_data/`. If the package is missing, the app says so and
 points at the builder.
 
-## Guided tour (Phase 9a, restructured in Phase 10)
+## Guided tour (Phase 9a, restructured in Phase 10, framing mirrored in Phase 11)
 
 The demo's default path. `views/tour.py` (`url_path="tour"`) is a seven-screen walk
 through the whole model-improvement loop, told as *problem → intervention → impact*:
@@ -32,15 +75,23 @@ page's only state, moved by the `tour_back` / `tour_next` buttons (mutated *befo
 the step renders, never via `st.rerun()`), with `tour_restart` returning to step 1
 from the result screen.
 
+Phase 11 mirrors the story site's framing into five of the steps (the story
+contracts of `docs/superpowers/specs/2026-09-04-web-frontend-v1-design.md` §1, applied to
+the tour in its §3): step 1's three-beat opening, step 4's lede and plain-language
+chain, step 5's **Fair comparison** strip, step 6's two evidence tiers, and step
+7's closing thesis. Those fixed sentences are word-for-word the same on both
+front-ends — `web/build_data.py` ships them as bundle fields and
+`tests/test_web_export.py` pins them.
+
 | # | Step | Stage | What it shows | Deep-links to |
 |---|---|---|---|---|
-| 1 | We found a blind spot | Diagnose | headline "Aggregate accuracy was hiding a night-driving blind spot.", the baseline's overall / night / night-pedestrian mAP50-95 cards, the bold count of night val frames carrying a miss, one derived sentence, and the takeaway "Aggregate metrics hide important failure slices." | Failure Explorer |
+| 1 | We found a blind spot | Diagnose | the three-beat opening: the plain-language problem as the headline ("The detector looked reasonable overall — but performance dropped sharply at night, especially for pedestrians."), then the numbers that establish it — the baseline's overall / night / night-pedestrian mAP50-95 cards, the bold count of night val frames carrying a miss, one derived sentence — then the purpose line "The goal of the system: automatically find failures like this and turn them into better training data.", and the takeaway "Aggregate metrics hide important failure slices." | Failure Explorer |
 | 2 | What the failure looks like | Diagnose | headline "Here the baseline misses a pedestrian at night.", the hero crop with the badge legend under it, the model radio (`tour_hero_model`, story labels), what each model claimed about the missed pedestrian, and the bridge into mining ("Finding one failure is easy — the hard part is finding the rest of the dataset where the same thing happens.") | Failure Explorer |
 | 3 | Where else does this happen? | Mine | headline "Is this one bad photo, or a recurring driving scenario?", the flagship scenario preset's top-ranked event (severity facts, chips, filmstrip, CAN curves), how many matching events are at night, one sentence on what the search matches on — driving context, not similar-looking images — and the takeaway "Perception failures must be analyzed in driving context." | Scenario Search |
-| 4 | What data should we add? | Mine | headline "Thousands of candidate training frames — which are worth labelling?", one AL-selected frame, its `reason_chips` row and the one-line selection path (failed val frame → similarity community → representative train-pool frames → selected for retraining), with the seven `selection_factors` and the causal closing sentence folded into **How selection works**; the flagship-rank / weak-rejected sentences, the `demo al-explain` provenance and the system-path caption stay outside the fold | Active Learning |
-| 5 | We changed the training data | Train | headline "We did not just add data — we changed what the model trains on.", the mined-set cards (frames mined, scenes covered, night share, training images), the night-share comparison against the comparator arms this package ran, and the tour's five-strategy **Night mAP50-95 vs baseline, by acquisition strategy** chart (baseline, the random control, similarity mining, the best score-based arm and the arm the tour follows — an id this package has no row for is dropped) with story labels on the axis, the charted arms' raw ids captioned under it, a fairness statement, the computed best-intervention sentence and the scene-spread sentence | Active Learning |
-| 6 | Did it fix the failure? | Evaluate | headline "Did the targeted retraining fix the kind of failure we started with?", the derived before/after callout cards, the hand-approved exemplar drawn twice side by side (baseline vs arm, each captioned with its story label *and* its raw id) with one badge legend under the pair, the `gain_text` night-pedestrian sentence and the night mAP result, and the upgraded-boxes table folded into **Technical details — per-box claims** | Active Learning |
-| 7 | Closed the loop | all four stages lit | the guarded headline ("Closed the loop: weakness → targeted data → measurable improvement" only when the arm's recorded night Δ is a gain, else "… measured result"), three hero cards (targeted frames added / night share of the mined data vs the random control / night-pedestrian mAP50-95 gain), the four bordered answers restating steps 1-6's numbers, the closing thesis, and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
+| 4 | What data should we add? | Mine | headline "Thousands of candidate training frames — which are worth labelling?" over the lede "Instead of randomly adding more images, the system searches the training pool for examples related to the diagnosed failure.", one AL-selected frame, its `reason_chips` row and the plain-language selection chain (**Failed validation frame → relevant driving scenario → candidate training frames → targeted retraining set**), with the same chain in the package's own vocabulary (failed val frame → similarity community → representative train-pool frames → selected for retraining), the seven `selection_factors` and the causal closing sentence folded into **How selection works**; the flagship-rank / weak-rejected sentences, the `demo al-explain` provenance and the system-path caption stay outside the fold | Active Learning |
+| 5 | We changed the training data | Train | headline "We did not just add data — we changed what the model trains on.", the mined-set cards (frames mined, scenes covered, night share, training images), the night-share comparison against the comparator arms this package ran, the bordered **Fair comparison** strip directly above the chart (the held-constant clauses as chips — "Same detector", the derived budget clause, "same training configuration", "scored on the same held-out split" — plus the accent chip "Random sample is the control", written only when the control arm is one of the charted ones), and the tour's five-strategy **Night mAP50-95 vs baseline, by acquisition strategy** chart (baseline, the random control, similarity mining, the best score-based arm and the arm the tour follows — an id this package has no row for is dropped) with story labels on the axis, the charted arms' raw ids captioned under it, the computed best-intervention sentence and the scene-spread sentence | Active Learning |
+| 6 | Did it fix the failure? | Evaluate | headline "Did the targeted retraining fix the kind of failure we started with?" over two labelled evidence tiers — **One example** (the caption "One example — one hand-approved frame, illustrative, not the metric", the derived before/after callout cards and the hand-approved exemplar drawn twice side by side, baseline vs arm, each captioned with its story label *and* its raw id, with one badge legend under the pair) then **The aggregate result:** (that lead-in, written only where this package has such a number, over the `gain_text` night-pedestrian sentence and the night mAP result on the held-out split) — and the upgraded-boxes table folded into **Technical details — per-box claims** | Active Learning |
+| 7 | Closed the loop | all four stages lit | the guarded headline ("Closed the loop: weakness → targeted data → measurable improvement" only when the arm's recorded night Δ is a gain, else "… measured result"), three hero cards (targeted frames added / night share of the mined data vs the random control / night-pedestrian mAP50-95 gain), the four bordered answers restating steps 1-6's numbers, the closing thesis ("Instead of blindly retraining the model, the system diagnoses where it fails, finds the data that can address the weakness, and measures whether the intervention actually works."), and six "go deeper" links across every page | Overview, Failure Explorer, Scenario Search, Active Learning, Weak Supervision, Ask the Dataset |
 
 Phase 10's shared vocabulary lives in `filters.py` / `render.py`, so no step writes a
 name or a number by hand:
@@ -739,8 +790,8 @@ deployed URL.
 | 3 | How does the system find difficult data? | Guided tour + Scenario Search | tour step 3, **Where else does this happen?** (the flagship event, and the sentence saying the search matches driving context — not similar-looking images), and the six **preset** buttons + ranked card grid | local: 2026-08-23 · live: pending |
 | 4 | Why is the graph useful? | Scenario Search | the compact `parity_short` line in the event viewer header (visible once an event is opened — flagship 30 events found · SQL 30 / Graph 30 ✓), and the same viewer's **Interactive graph** panel, whose **Reveal the matched path** slider walks Scene → Keyframe → nearest matching objects → Ego pose one step at a time (amber = revealed, hollow = still to come) | local: 2026-08-23 · live: pending |
 | 5 | What does CAN-bus data add? | Scenario Search (+ Overview) | the event viewer's two **CAN curves** beside the frame (speed km/h + longitudinal accel m/s² over t−2…t+2, the rule following the filmstrip slider), the **CAN speed** card in the metric grid, and the filmstrip's own ego-pose readout; Overview's **CAN speed vs ego-motion** card (r), inside the **Dataset scale & data checks** expander | local: 2026-08-23 · live: pending |
-| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **What data should we add?** (the reason chips and the one-line selection path, with the `selection_factors` lines inside the **How selection works** fold), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
-| 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **We changed the training data** (the five-strategy night-Δ chart, its fairness statement and the computed best-intervention sentence) / **Did it fix the failure?** (the side-by-side before/after exemplar and the night-pedestrian gain), plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-23 · live: pending |
+| 6 | How does active learning choose frames? | Guided tour + Active Learning | tour step 4, **What data should we add?** (the reason chips and the plain-language selection chain, with `_SELECTION_PATH` and the `selection_factors` lines inside the **How selection works** fold), and the deep page's **Three ways to pick 1,500 frames** strategy charts plus the **Why was this frame selected?** panel, whose reason chips head the factor lines | local: 2026-08-23 · live: pending |
+| 7 | Did targeted retraining improve performance? | Guided tour + Active Learning | tour steps 5-6, **We changed the training data** (the five-strategy night-Δ chart, its **Fair comparison** strip and the computed best-intervention sentence) / **Did it fix the failure?** (the side-by-side before/after exemplar and the night-pedestrian gain), plus the deep page's **Every arm, one chart** (13 arms in round order) and **Before / after** exemplars | local: 2026-08-23 · live: pending |
 | 8 | How well did VLM-generated supervision work? | Weak Supervision | the retention cards (GT gain retained + verifier retention), **One frame, three views** (what the VLM's counts kept on a train-pool frame, and what the weak-trained checkpoint vs its GT-labelled twin then did on a held-out val frame), and **What the VLM saw** accepted/rejected galleries | local: 2026-08-23 · live: pending |
 | 9 | Why did weak supervision underperform GT? | Weak Supervision | **Where the rest of the gain went** (dropped-frame cost vs label cost), **Where the VLM's counting breaks down** (count MAE per crowding bucket) and **What the verifier's rule selects for** (the crowding bias) | local: 2026-08-23 · live: pending |
 | 10 | How does the project form a closed model-improvement loop? | Guided tour + Active Learning + Weak Supervision | tour step 7, **Closed the loop** — its guarded headline and the three hero cards (frames added / night share vs the random control / night-pedestrian mAP50-95 gain) over the four bordered answers — closed by the persistent loop breadcrumb on every page | local: 2026-08-23 · live: pending |
@@ -772,3 +823,4 @@ is **not** redistributed by this repository.
 | 9a | guided tour, outcome-first Overview, loop breadcrumb + provenance + lessons | **shipped** |
 | 9b | Failure Explorer hook, one-screen Scenario Search (CAN curve, progressive graph path), acquisition-strategy chart + reason chips, Weak Supervision three views + crowding trend, package 0.8 | **shipped** |
 | 10 | storytelling rework of the guided tour (story titles, folds, 5-strategy chart, side-by-side, hero numbers, legend component) | **shipped** |
+| 11 | story site (`web/`): designed scrollytelling front-end, exporter + committed bundle + CI guard, GitHub Pages deploy; tour framing mirror | **shipped** |
