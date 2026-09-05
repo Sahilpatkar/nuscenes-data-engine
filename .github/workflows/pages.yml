@@ -1,0 +1,74 @@
+name: Deploy story site
+
+# The story site (web/) is a static Vite build over a COMMITTED data bundle
+# (web/src/data/*.json + web/public/story/*.jpg, produced by web/build_data.py).
+# That is why this workflow is hermetic — no Python, no demo_data/, no exporter run:
+# the committed bundle is the contract, and ci.yml's quality job guards it by
+# re-running the exporter and asserting byte-equality (tests/test_web_export.py).
+# A deploy therefore cannot invent a number the test suite has not already seen.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Workflow-level: read the repo, nothing more. The Pages write scope and the OIDC
+# token belong to the deploy job alone (see below) -- the build job runs untrusted
+# npm postinstall scripts and has no business holding a deploy credential.
+permissions:
+  contents: read
+
+# One deploy at a time -- and a newer push QUEUES behind an in-flight deploy rather
+# than cancelling it. GitHub's own guidance for production Pages deploys: a
+# half-completed deploy that is cancelled can leave the live site inconsistent.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install deps (npm ci)
+        working-directory: web
+        run: npm ci
+
+      # Project site, so every asset URL is prefixed with the repo name.
+      - name: Build (vite)
+        working-directory: web
+        run: npm run build
+        env:
+          BASE_PATH: /nuscenes-data-engine/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # Least privilege: only this job writes Pages, and only this job mints the OIDC
+    # token `deploy-pages` exchanges for the deployment. It never checks the repo out.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

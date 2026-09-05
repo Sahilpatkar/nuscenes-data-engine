@@ -1,0 +1,103 @@
+{
+  "aggregate_label": "The aggregate result",
+  "callout": {
+    "after": "0.47",
+    "before": "low-conf 0.30",
+    "category": "pedestrian"
+  },
+  "callout_labels": {
+    "after": "After — Graph + night targeting",
+    "before": "Before — Baseline (no mined data)"
+  },
+  "example_caveat": "one hand-approved frame — illustrative, not the metric",
+  "example_label": "One example",
+  "fixed_boxes": [
+    {
+      "annotation_token": "5ef6f8d28c014c4c8f022f6db7300670",
+      "arm_claim": "0.47",
+      "baseline_claim": "low-conf 0.30",
+      "category_group": "pedestrian",
+      "distance_to_ego_m": 26.25
+    }
+  ],
+  "headline": "Did the targeted retraining fix the kind of failure we started with?",
+  "held_out_caption": "Held-out validation frame — never in any training set",
+  "hero_honesty_line": "The hero frame's pedestrian recovery (step 2) is a low-confidence claim and does not pass this table's confident-detection rule; the hand-approved exemplars do.",
+  "images": {
+    "arm": {
+      "alt": "A hand-approved validation frame with the Graph + night targeting detections drawn over the ground truth.",
+      "height": 540,
+      "src": "story/exemplar-arm.jpg",
+      "width": 960
+    },
+    "baseline": {
+      "alt": "A hand-approved validation frame with the Baseline (no mined data) detections drawn over the ground truth.",
+      "height": 540,
+      "src": "story/exemplar-baseline.jpg",
+      "width": 960
+    }
+  },
+  "legend": [
+    {
+      "rgb": [
+        46,
+        204,
+        64
+      ],
+      "wording": "green — ground truth"
+    },
+    {
+      "rgb": [
+        255,
+        133,
+        27
+      ],
+      "wording": "orange dashed — GT box the model missed"
+    },
+    {
+      "rgb": [
+        255,
+        255,
+        255
+      ],
+      "wording": "white — true positive"
+    },
+    {
+      "rgb": [
+        255,
+        220,
+        0
+      ],
+      "wording": "yellow dotted — low-confidence claim (below the hit floor)"
+    },
+    {
+      "rgb": [
+        255,
+        65,
+        54
+      ],
+      "wording": "red — false positive"
+    }
+  ],
+  "models": {
+    "arm": {
+      "id": "graph_rate_night",
+      "label": "Graph + night targeting"
+    },
+    "baseline": {
+      "id": "baseline",
+      "label": "Baseline (no mined data)"
+    }
+  },
+  "night_map_sentence": "Night mAP50-95 0.1667 → 0.1768 (+0.0101) on the held-out split.",
+  "night_ped_sentence": "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345 absolute, +41.8% relative)",
+  "per_box_fold_label": "Technical details — per-box claims",
+  "provenance": [
+    {
+      "detail": "per-box claims from predictions.parquet",
+      "kind": "recomputed",
+      "sentence": "recomputed in this app from the package tables"
+    }
+  ],
+  "token": "00ec313e03a34216b14ae025674a953a"
+}

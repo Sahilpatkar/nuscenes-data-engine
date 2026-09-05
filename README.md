@@ -19,6 +19,9 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 **Live demo:** _pending deploy — link added after the first Streamlit Community Cloud deployment_
 
+**Story site:** _pending first deploy — a designed scroll-through telling of the loop
+story (`web/`), deployed to GitHub Pages on merge_
+
 A self-contained Streamlit app ([app/demo/](app/demo/)) that presents this project's
 real results from a committed 25 MB artifact package — no backend, no GPU, no
 databases, no API keys. A guided tour ("Explore a model failure →") walks the whole
@@ -32,7 +35,12 @@ function picks frames, and what retraining on them bought), **Weak Supervision**
 the Dataset (recorded)** (a recorded session with the tool-calling chat agent). Every
 number is derived from committed artifacts at package-build time — nothing is
 hardcoded — and recorded outputs (semantic search, the chat session) are labelled on
-screen as recorded: the public app never runs a model or calls an LLM.
+screen as recorded: the public app never runs a model or calls an LLM. That package
+has two front-ends and no second set of numbers: this Streamlit app is the full
+instrument — every frame, every arm, every event, plus the recorded chat — while the
+**story site** ([web/](web/)) is a designed scroll-through reading of the same
+seven-step story, its figures exported from the same package at build time and every
+deep dive a link back into the app.
 
 | | |
 |---|---|
@@ -52,10 +60,13 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 **All 5 phases built.** Ingestion → validated Parquet, YOLO fine-tuning with MLflow
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
-FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs with a
-two-job CI (quality + CPU smoke-train). **Demo phases 1–10 shipped:** a story-led
-guided tour plus the six-page public demo above runs entirely off the committed
-`demo_data/` package and is deployable to Streamlit Community Cloud.
+FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs
+with a three-job CI (quality + CPU smoke-train + the story-site build). **Demo phases
+1–11 shipped:** a story-led guided tour plus the six-page public demo above runs
+entirely off the committed `demo_data/` package and is deployable to Streamlit
+Community Cloud, and the story site (`web/`) tells the same loop as a designed
+scroll-through, built from that same package and published to GitHub Pages by its
+own workflow on merge.
 
 ## Architecture
 
@@ -166,9 +177,11 @@ src/nuscenes_data_engine/
 app/                        Streamlit serving UI (`app/streamlit_app.py`) + the public demo (`app/demo/`)
 app/demo/                   public demo app — reads demo_data/ only, no backend
 demo_data/                  committed artifact package the public demo reads
+web/                        the story site — a designed scrollytelling front-end over
+                            the same committed package (GitHub Pages)
 tests/                      pytest suite
 docs/                       DATA.md, EVALUATION.md, DEMO.md
-.github/workflows/          CI (ruff + mypy + pytest)
+.github/workflows/          CI (ruff + mypy + pytest + the story-site build) + Pages deploy
 ```
 
 ## Training (Phase 2)
@@ -345,7 +358,7 @@ picker after the first PR run).
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
 | 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine: `graph_rate_night` **+0.0101 night mAP50-95** |
 | 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
-| Demo 1-10 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — see [DEMO.md](docs/DEMO.md) |
+| Demo 1-11 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — plus the story site (`web/`), a designed scrollytelling front-end over the same package, exported by `web/build_data.py`, CI-guarded and published to GitHub Pages on merge — see [DEMO.md](docs/DEMO.md) |
 
 | B ✅ | Geo-spatial + CAN bus | Ego pose, all 1.17M 3D boxes, and keyframe-aligned CAN dynamics → Parquet, DuckDB, and Neo4j `EgoPose`/`ObjectObservation` nodes. *"Hard braking with a pedestrian within 10 m"* answers **30, identically in SQL and Cypher**; CAN speed cross-checks against GT pose at r = 0.999 — see [DATA.md](docs/DATA.md), [GRAPH.md](docs/GRAPH.md) |
 

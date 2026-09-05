@@ -1,0 +1,98 @@
+{
+  "bridge_sentence": "Finding one failure is easy — the hard part is finding the rest of the dataset where the same thing happens.",
+  "caption": "baseline misses a shadowed car and a pedestrian; the night-targeted retrain recovers the pedestrian (a low-confidence hit) — the far car defeats all five models. Explore more in the Failure Explorer.",
+  "facts": [
+    {
+      "claims": [
+        {
+          "claim": "no claim",
+          "id": "baseline",
+          "label": "Baseline (no mined data)"
+        },
+        {
+          "claim": "0.135 (low-confidence — below the 0.40 hit floor; the matching rule still counts it as a hit)",
+          "id": "graph_rate_night",
+          "label": "Graph + night targeting"
+        }
+      ],
+      "subject": "Pedestrian at 11.1 m"
+    }
+  ],
+  "headline": "Here the baseline misses a pedestrian at night.",
+  "held_out_caption": "Held-out validation frame — never in any training set",
+  "images": {
+    "arm": {
+      "alt": "Night driving frame with ground-truth and Graph + night targeting detection boxes drawn on it.",
+      "height": 540,
+      "src": "story/hero-arm.jpg",
+      "width": 960
+    },
+    "baseline": {
+      "alt": "Night driving frame with ground-truth and Baseline (no mined data) detection boxes drawn on it.",
+      "height": 540,
+      "src": "story/hero-baseline.jpg",
+      "width": 960
+    }
+  },
+  "legend": [
+    {
+      "rgb": [
+        46,
+        204,
+        64
+      ],
+      "wording": "green — ground truth"
+    },
+    {
+      "rgb": [
+        255,
+        133,
+        27
+      ],
+      "wording": "orange dashed — GT box the model missed"
+    },
+    {
+      "rgb": [
+        255,
+        255,
+        255
+      ],
+      "wording": "white — true positive"
+    },
+    {
+      "rgb": [
+        255,
+        220,
+        0
+      ],
+      "wording": "yellow dotted — low-confidence claim (below the hit floor)"
+    },
+    {
+      "rgb": [
+        255,
+        65,
+        54
+      ],
+      "wording": "red — false positive"
+    }
+  ],
+  "models": {
+    "arm": {
+      "id": "graph_rate_night",
+      "label": "Graph + night targeting"
+    },
+    "baseline": {
+      "id": "baseline",
+      "label": "Baseline (no mined data)"
+    }
+  },
+  "provenance": [
+    {
+      "detail": "boxes, claims and counts from gt_boxes/predictions",
+      "kind": "recomputed",
+      "sentence": "recomputed in this app from the package tables"
+    }
+  ],
+  "rarity_sentence": "Across the whole curated val split this is the only night frame where `graph_rate_night` turns a `baseline` pedestrian miss into a hit.",
+  "token": "5994f34b836043b3b5be191bceba2e3e"
+}

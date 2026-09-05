@@ -1,0 +1,47 @@
+{
+  "attribution": {
+    "citation": "Caesar et al., nuScenes: A Multimodal Dataset for Autonomous Driving, CVPR 2020",
+    "dataset": "nuScenes",
+    "license": "CC BY-NC-SA 4.0",
+    "url": "https://www.nuscenes.org/nuscenes"
+  },
+  "deep_links": [
+    {
+      "label": "Guided tour — the same story, one screen at a time in the live app",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/tour",
+      "url_path": "tour"
+    },
+    {
+      "label": "Failure Explorer — every miss, filterable by condition",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/failures",
+      "url_path": "failures"
+    },
+    {
+      "label": "Scenario Search — every preset, every matching event",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/scenarios",
+      "url_path": "scenarios"
+    },
+    {
+      "label": "Active Learning — the full experiment, all arms",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/active_learning",
+      "url_path": "active_learning"
+    },
+    {
+      "label": "Weak Supervision — where the rest of the gain went",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/weak_supervision",
+      "url_path": "weak_supervision"
+    },
+    {
+      "label": "Ask the Dataset — recorded chat replays",
+      "url": "https://nuscenes-data-engine-sahil.streamlit.app/chat_replay",
+      "url_path": "chat_replay"
+    }
+  ],
+  "exporter": "web/build_data.py",
+  "package": {
+    "built_at": "2026-08-23T13:30:16-0700",
+    "git_sha": "97a793c8ddd90a885d468475b9e8d33a2b96466f",
+    "version": "0.8"
+  },
+  "streamlit_base": "https://nuscenes-data-engine-sahil.streamlit.app"
+}

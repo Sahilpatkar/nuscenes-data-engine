@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "id": "baseline",
+    "label": "Baseline (no mined data)"
+  },
+  "cards": [
+    {
+      "label": "Overall mAP50-95",
+      "value": "0.2477"
+    },
+    {
+      "label": "Night mAP50-95",
+      "value": "0.1667"
+    },
+    {
+      "label": "Night pedestrian mAP50-95",
+      "value": "0.0826"
+    }
+  ],
+  "derived_sentence": "`baseline` scores 0.2477 mAP50-95 overall but 0.1667 at night — and 0.0826 on night pedestrians, the case that matters most.",
+  "headline": "Aggregate accuracy was hiding a night-driving blind spot.",
+  "miss_sentence": "60 of 62 night validation frames carry at least one baseline miss.",
+  "problem_sentence": "The detector looked reasonable overall — but performance dropped sharply at night, especially for pedestrians.",
+  "provenance": [
+    {
+      "detail": "mAP from active_learning_results.parquet",
+      "kind": "recorded",
+      "sentence": "recorded experiment output — shipped as the offline pipeline produced it"
+    },
+    {
+      "detail": "frame counts from frame_manifest/gt_boxes/predictions (125 curated val frames)",
+      "kind": "recomputed",
+      "sentence": "recomputed in this app from the package tables"
+    }
+  ],
+  "purpose_sentence": "The goal of the system: automatically find failures like this and turn them into better training data.",
+  "takeaway": "Aggregate metrics hide important failure slices."
+}

@@ -1,0 +1,108 @@
+{
+  "event": {
+    "chips": [
+      "night"
+    ],
+    "facts": "within 10 m: 12 pedestrians · nearest at 6.2 m",
+    "scene_name": "scene-1084",
+    "severity_caption": "0.45g braking",
+    "token": "5767aa113a984dd883f377744a8f54a7"
+  },
+  "filmstrip": {
+    "accel_title": "CAN accel (m/s²)",
+    "caption": "Keyframes are ~0.5 s apart; speed and longitudinal acceleration from the CAN bus",
+    "speed_is_can": true,
+    "speed_title": "CAN speed (km/h)",
+    "steps": [
+      {
+        "accel_mps2": -4.4162,
+        "can_speed_kmh": 26.23,
+        "image": {
+          "alt": "Filmstrip thumbnail t-2 of the scene-1084 braking event.",
+          "height": 144,
+          "src": "story/filmstrip-0.jpg",
+          "width": 256
+        },
+        "is_current": false,
+        "label": "t-2",
+        "token": "1dee7f7f4e864d9ba9235b7c09cca4c5"
+      },
+      {
+        "accel_mps2": -4.4597,
+        "can_speed_kmh": 19.29,
+        "image": {
+          "alt": "Filmstrip thumbnail t-1 of the scene-1084 braking event.",
+          "height": 144,
+          "src": "story/filmstrip-1.jpg",
+          "width": 256
+        },
+        "is_current": false,
+        "label": "t-1",
+        "token": "ff73f3eb447b4fe981d7a2c8278cb4b1"
+      },
+      {
+        "accel_mps2": -4.4597,
+        "can_speed_kmh": 12.55,
+        "image": {
+          "alt": "Filmstrip thumbnail current of the scene-1084 braking event.",
+          "height": 144,
+          "src": "story/filmstrip-2.jpg",
+          "width": 256
+        },
+        "is_current": true,
+        "label": "current",
+        "token": "5767aa113a984dd883f377744a8f54a7"
+      },
+      {
+        "accel_mps2": -3.8646,
+        "can_speed_kmh": 8.88,
+        "image": {
+          "alt": "Filmstrip thumbnail t+1 of the scene-1084 braking event.",
+          "height": 144,
+          "src": "story/filmstrip-3.jpg",
+          "width": 256
+        },
+        "is_current": false,
+        "label": "t+1",
+        "token": "53e19355a2a04c19a81ebf9d48c2a7de"
+      },
+      {
+        "accel_mps2": -1.3296,
+        "can_speed_kmh": 8.44,
+        "image": {
+          "alt": "Filmstrip thumbnail t+2 of the scene-1084 braking event.",
+          "height": 144,
+          "src": "story/filmstrip-4.jpg",
+          "width": 256
+        },
+        "is_current": false,
+        "label": "t+2",
+        "token": "407ac0ff1fd442c19377f92d6dacff04"
+      }
+    ]
+  },
+  "headline": "Is this one bad photo, or a recurring driving scenario?",
+  "image": {
+    "alt": "The scene-1084 hard-braking event with its ground-truth boxes drawn on it.",
+    "height": 540,
+    "src": "story/scenario-event.jpg",
+    "width": 960
+  },
+  "mechanism_sentence": "The system searches driving context — night, braking, pedestrians near the ego — not just similar-looking images.",
+  "night_sentence": "6 of 30 matching events are at night.",
+  "parity_caption": "30 events found · SQL 30 / Graph 30 ✓",
+  "preset": "hard_braking_near_pedestrians",
+  "provenance": [
+    {
+      "detail": "event counts computed at build against SQL and the Neo4j graph",
+      "kind": "recorded",
+      "sentence": "recorded experiment output — shipped as the offline pipeline produced it"
+    },
+    {
+      "detail": "overlay from gt_boxes.parquet",
+      "kind": "recomputed",
+      "sentence": "recomputed in this app from the package tables"
+    }
+  ],
+  "takeaway": "Perception failures must be analyzed in driving context."
+}

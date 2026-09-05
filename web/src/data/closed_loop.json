@@ -1,0 +1,67 @@
+{
+  "answers": [
+    {
+      "question": "What weakness did we find?",
+      "sentences": [
+        "Night mAP50-95 0.1667 vs overall 0.2477.",
+        "Night pedestrian mAP50-95 0.0826.",
+        "60 of 62 night validation frames carry at least one baseline miss."
+      ]
+    },
+    {
+      "question": "What data did we add?",
+      "sentences": [
+        "`graph_rate_night` mined 1,500 frames across 368 scenes, 31% at night — random covered 501 scenes at 13% night; similarity mining covered 219 scenes at 0% night.",
+        "Visual similarity alone concentrated on daytime appearance (0% night); the graph + night-floor arm explicitly preserved night coverage."
+      ]
+    },
+    {
+      "question": "Did the model improve?",
+      "sentences": [
+        "Night mAP50-95 0.1667 → 0.1768 (+0.0101) on the held-out split.",
+        "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345 absolute, +41.8% relative)",
+        "Overall mAP50-95 +0.0254 against baseline.",
+        "The best overall arm is `graph` (+0.0344); the night arm trades overall gain for night gain."
+      ]
+    },
+    {
+      "question": "What failed along the way?",
+      "sentences": [
+        "Weak (VLM-verified) labels kept 18.2% of the ground-truth gain for the `random` pair: 49.7% was lost with the frames the verifier dropped, 32.1% to label noise on the ones it kept.",
+        "The verifier kept sparse frames: 3.87 vs 7.61 GT boxes per accepted vs rejected frame (random).",
+        "`weak_graph_rate_night` is the worst night result of the 13 arms (-0.0262).",
+        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135) — counted as a hit by the matching rule, not a confident detection."
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "label": "Targeted frames added",
+      "value": "1,500"
+    },
+    {
+      "delta": "vs 13% random control",
+      "label": "Night share of mined data",
+      "value": "31%"
+    },
+    {
+      "delta": "+0.0345 absolute",
+      "label": "Night-pedestrian mAP50-95",
+      "value": "+41.8% relative"
+    }
+  ],
+  "closing_thesis": "Instead of blindly retraining the model, the system diagnoses where it fails, finds the data that can address the weakness, and measures whether the intervention actually works.",
+  "headline": "Closed the loop: weakness → targeted data → measurable improvement",
+  "provenance": [
+    {
+      "detail": "weak_loss_decomposition.parquet, weak_supervision_results.parquet, active_learning_results.parquet",
+      "kind": "recorded",
+      "sentence": "recorded experiment output — shipped as the offline pipeline produced it"
+    },
+    {
+      "detail": "claim confidence from predictions.parquet",
+      "kind": "recomputed",
+      "sentence": "recomputed in this app from the package tables"
+    }
+  ]
+}
