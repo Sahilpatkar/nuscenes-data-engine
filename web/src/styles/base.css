@@ -228,3 +228,519 @@ a {
   border-color: var(--accent-strong);
   background: var(--panel-2);
 }
+
+/* =============================================================================
+   THE SCROLLYTELLING SHELL (Task 3)
+   Layout, the step rail, the reveal, and the landing/footer chrome. Colour still
+   comes only from tokens.css; the layout variables below follow the same rule as
+   the colour tokens — a real base value on :root, media queries only redefine.
+   ============================================================================= */
+
+:root {
+  --content-max: 72rem;
+  --page-pad: clamp(20px, 5vw, 56px);
+  /* The gutter the fixed step rail occupies. 0 while the rail is the thin top
+     progress bar; a dots-only column, then a labelled one, as room appears. */
+  --rail-w: 0px;
+  /* How tall the mobile rail sits over the top of the page. */
+  --rail-top-h: 14px;
+}
+
+@media (min-width: 900px) {
+  :root {
+    --rail-w: 3.5rem;
+    --rail-top-h: 0px;
+  }
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --rail-w: 15rem;
+  }
+}
+
+html {
+  /* Anchor jumps must clear the mobile rail and never land flush against the
+     viewport edge. */
+  scroll-padding-top: calc(var(--rail-top-h) + clamp(12px, 2vh, 28px));
+}
+
+/* the one content column: everything on the page is poured through .page */
+.page {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--page-pad);
+}
+
+/* the fixed rail is laid over the right edge — never over the content */
+.landing,
+.shell,
+.site-footer {
+  padding-right: var(--rail-w);
+}
+
+/* wide content (tables, charts, filmstrips) scrolls inside itself; the page
+   body must never scroll sideways */
+.overflow-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* visually hidden, still announced */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.accent {
+  color: var(--accent-strong);
+}
+
+/* ── scroll reveal ────────────────────────────────────────────────────────────
+   Enhancement only: the hidden state exists ONLY where motion is welcome, so a
+   machine asking for reduced motion (where useReveal registers no observer and
+   never adds .is-visible) still shows every section. */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+    transition: opacity 400ms ease-out, transform 400ms ease-out;
+  }
+}
+
+/* ── sections ─────────────────────────────────────────────────────────────── */
+.section {
+  border-top: 1px solid var(--line);
+}
+
+.section > .page {
+  padding-block: clamp(56px, 9vh, 118px);
+}
+
+.section-eyebrow {
+  /* p is capped at the 66ch measure; this row is chrome, not prose — its right
+     label belongs at the edge of the content column. */
+  max-width: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 24px;
+}
+
+.section-headline {
+  margin-top: clamp(12px, 1.6vw, 20px);
+  max-width: 24ch;
+}
+
+.section-body {
+  margin-top: clamp(18px, 2.6vw, 34px);
+  display: grid;
+  gap: clamp(14px, 2vw, 22px);
+  justify-items: start;
+}
+
+/* placeholder body — replaced by the real internals in Tasks 4 and 5 */
+.pending {
+  font-size: 0.82em;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  background: var(--panel);
+  padding: 14px 16px;
+  max-width: 60ch;
+}
+
+/* ── provenance row ───────────────────────────────────────────────────────── */
+.provenance {
+  max-width: 92ch;
+  list-style: none;
+  padding: 14px 0 0;
+  margin-top: clamp(22px, 3vw, 36px);
+  border-top: 1px dashed var(--line);
+  display: grid;
+  gap: 6px;
+  font-size: 0.78em;
+  color: var(--muted);
+}
+
+.provenance li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.provenance-icon {
+  font-family: var(--mono);
+  color: var(--accent-strong);
+  flex: none;
+}
+
+/* ── deep links ───────────────────────────────────────────────────────────── */
+.deep-links {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.deep-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--accent-strong);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 2px;
+  font-size: 0.95em;
+}
+
+.deep-link:hover {
+  border-bottom-color: var(--accent-strong);
+}
+
+.deep-link-arrow {
+  transition: transform 140ms ease-out;
+}
+
+.deep-link:hover .deep-link-arrow {
+  transform: translateX(3px);
+}
+
+.step-rail-link:focus-visible,
+.deep-link:focus-visible,
+.cta:focus-visible,
+.scroll-cue:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 4px;
+}
+
+/* ── step rail ────────────────────────────────────────────────────────────────
+   Mobile-first: a thin progress bar across the top. From 900 px it becomes the
+   fixed right-edge index; from 1280 px the labels join the dots. One markup,
+   one accessibility tree — the labels are always in the DOM. */
+.step-rail {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+}
+
+.step-rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+}
+
+.step-rail-list li {
+  flex: 1 1 0;
+}
+
+.step-rail-link {
+  display: block;
+  padding-bottom: 10px;
+  text-decoration: none;
+  color: var(--muted);
+}
+
+.step-rail-dot {
+  display: block;
+  height: 3px;
+  width: 100%;
+  background: var(--line);
+}
+
+.step-rail-link.is-passed .step-rail-dot {
+  background: var(--accent-strong);
+}
+
+.step-rail-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (min-width: 900px) {
+  .step-rail {
+    top: 50%;
+    left: auto;
+    right: 0;
+    transform: translateY(-50%);
+    width: var(--rail-w);
+    padding-right: clamp(14px, 1.6vw, 26px);
+    background: transparent;
+    border-bottom: 0;
+  }
+
+  .step-rail-list {
+    display: grid;
+    gap: 2px;
+  }
+
+  .step-rail-link {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 5px 0;
+  }
+
+  .step-rail-dot {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border: 1px solid var(--muted);
+    border-radius: 50%;
+    background: transparent;
+  }
+
+  .step-rail-link:hover {
+    color: var(--ink);
+  }
+
+  .step-rail-link:hover .step-rail-dot {
+    border-color: var(--ink);
+  }
+
+  .step-rail-link.is-passed .step-rail-dot {
+    background: transparent;
+  }
+
+  .step-rail-link.is-active {
+    color: var(--accent-strong);
+  }
+
+  .step-rail-link.is-active .step-rail-dot {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+  }
+}
+
+@media (min-width: 1280px) {
+  .step-rail-link {
+    justify-content: flex-start;
+  }
+
+  .step-rail-label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    line-height: 1.25;
+    letter-spacing: 0.04em;
+  }
+
+  .step-rail-number {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .step-rail-link.is-active .step-rail-number {
+    color: var(--accent-strong);
+  }
+}
+
+/* ── landing ──────────────────────────────────────────────────────────────── */
+.landing {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+}
+
+.landing-inner {
+  display: grid;
+  gap: clamp(22px, 3.4vh, 40px);
+  padding-block: calc(var(--rail-top-h) + clamp(28px, 6vh, 64px)) clamp(28px, 6vh, 64px);
+}
+
+.landing-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+
+.landing-main {
+  display: grid;
+  gap: clamp(26px, 4vw, 52px);
+  align-items: center;
+}
+
+.landing-copy {
+  display: grid;
+  gap: clamp(16px, 2.4vw, 26px);
+  justify-items: start;
+}
+
+.landing-title {
+  /* one step under the global h1 clamp: the landing title shares its column with
+     the hero frame, and the full display size broke it over five lines */
+  font-size: clamp(1.95rem, 3.2vw, 3.4rem);
+  max-width: 20ch;
+}
+
+.landing-lede {
+  color: var(--muted);
+}
+
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 18px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  font-family: var(--mono);
+  font-size: 0.78em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.cta:hover {
+  border-color: var(--accent-strong);
+  background: var(--panel-2);
+}
+
+.cta-primary {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
+
+.landing-figure {
+  display: grid;
+  gap: 10px;
+}
+
+.landing-figure img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+}
+
+.landing-figure figcaption {
+  font-size: 0.74em;
+  letter-spacing: 0.02em;
+}
+
+.scroll-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: start;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.scroll-cue:hover {
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-cue-arrow {
+    display: inline-block;
+    animation: cue-drift 1900ms ease-in-out infinite;
+  }
+}
+
+/* the arrow is pure affordance — under reduced motion it goes away and the link
+   (which is what actually navigates) stays */
+@media (prefers-reduced-motion: reduce) {
+  .scroll-cue-arrow {
+    display: none;
+  }
+}
+
+@keyframes cue-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+@media (min-width: 1000px) {
+  .landing-main {
+    grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  }
+}
+
+/* ── footer ───────────────────────────────────────────────────────────────── */
+.site-footer {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.site-footer > .page {
+  padding-block: clamp(40px, 6vh, 76px);
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+}
+
+.footer-facts {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  font-size: 0.76em;
+  overflow-wrap: anywhere;
+}
+
+.footer-facts .muted {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.footer-attribution,
+.footer-author {
+  font-size: 0.82em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.footer-author {
+  /* one line of identifiers, not prose: it does not answer to the 66ch measure */
+  max-width: none;
+}
