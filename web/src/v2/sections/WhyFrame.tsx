@@ -56,7 +56,10 @@ export function WhyFrame({ data }: { data: WhyFrameData }): JSX.Element {
           src={assetUrl(data.image.src)}
           width={data.image.width}
           height={data.image.height}
-          alt={data.image.alt}
+          // When the nullable note is absent the caption falls back to this
+          // image's alt text; a non-empty alt would then be announced twice
+          // inside one <figure> (final review) — the figcaption describes it.
+          alt={data.train_pool_note != null ? data.image.alt : ""}
           decoding="async"
         />
       </Figure>

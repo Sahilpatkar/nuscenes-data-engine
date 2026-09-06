@@ -59,7 +59,14 @@ export function Verdict({ data }: { data: VerdictData }): JSX.Element {
       >
         <CompareWipe
           before={data.images.baseline}
-          after={data.images.arm}
+          // When the nullable caption is absent the figure caption falls back
+          // to the arm image's alt; blank that alt then, or one <figure> would
+          // announce the same sentence twice (final review).
+          after={
+            data.held_out_caption != null
+              ? data.images.arm
+              : { ...data.images.arm, alt: "" }
+          }
           beforeLabel={data.models.baseline}
           afterLabel={data.models.arm}
         />

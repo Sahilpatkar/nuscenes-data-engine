@@ -75,13 +75,15 @@
             neg 4.66/5.08/4.30 · zero 5.95/6.49/5.49 · grid 1.37/1.49/1.26
      dark   accent 5.79/5.34/4.85 · muted 5.65/5.21/4.73 · pos 6.41/5.91/5.37
             neg 4.07/3.75/3.41 · zero 6.68/6.16/5.59 · grid 1.54/1.42/1.29
-   All marks clear the 3:1 mark floor on every surface. As TEXT, the slots clear
-   4.5:1 on `--ground` and `--panel` in both modes; on `--panel-2` only the
-   accent and zero slots do (light muted/pos/neg sit at 4.24-4.36, dark neg at
-   3.41 — see the table above), so a tinted label never sits on the second
-   surface, and a negative label in dark always renders in `--ink` (the neg slot
-   is mark-only there). `--chart-grid` is a hairline that must recede: it is
-   never a mark and never carries text.
+   All marks clear the 3:1 mark floor on every surface. As TEXT: every slot
+   except `--chart-grid` clears 4.5:1 on `--ground` and `--panel` in light mode;
+   in dark mode `--chart-neg` clears it on NO surface (4.07/3.75/3.41) and the
+   rest clear it everywhere but the grid. On `--panel-2` the sub-4.5 slots are
+   exactly light muted/pos/neg (4.24-4.36) and dark neg — see the table above —
+   so a tinted label never sits on the second surface, and a negative label in
+   dark always renders in `--ink` (the neg slot is mark-only there).
+   `--chart-grid` is a hairline that must recede: it is never a mark and never
+   carries text.
 
    ONE STANDING OBLIGATION (unchanged from v1, and the reason the accent is
    cobalt rather than an oxide red): run as one four-slot palette with
