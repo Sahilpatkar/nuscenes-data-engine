@@ -48,6 +48,30 @@ a change that breaks the site fails the PR rather than the deploy.
 
 **Story site URL:** _pending first deploy_
 
+### Report edition (`/v2/`)
+
+A second presentation of the same story, served one directory down at
+`…/nuscenes-data-engine/v2/`: the same seven steps in a research-report idiom — paper
+and ink with a cobalt accent, the Source superfamily (Serif 4 / Sans 3 / Code Pro),
+hairline rules, numbered sections and figures, footnoted provenance, light-first with
+a first-class dark — designed entirely in code rather than from the deck's identity.
+Its code is `web/src/v2/` behind the MPA entry `web/v2/index.html`; one Vite build
+emits both editions (`dist/index.html` and `dist/v2/index.html`) from the one npm
+project, so the Pages workflow above needs no change.
+
+Zero data drift is structural rather than promised: the report edition imports the
+**same** `web/src/data/*.json` and `web/public/story/` bundle the root edition does —
+no second export, no second set of numbers — and `tests/test_web_v2.py` pins its copy
+the way `test_web_export.py` pins the root edition's: the seven step titles and stages
+against `views/tour.py`, the five story-contract sentences read from bundle fields
+instead of typed out, no recorded figure as a literal anywhere in the sources, the
+selection fold and fairness lead against their tour literals, and every image routed
+through `assetUrl` (the base-prefix helper that keeps the bundle's document-relative
+srcs resolving from `/v2/`).
+
+**Report edition URL:** _live after the next Pages deploy_ —
+…/nuscenes-data-engine/v2/
+
 ## Run it
 
 ```bash
