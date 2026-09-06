@@ -20,6 +20,9 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* Every `#anchor` — the contents links, the running head's readout, the
+     wordmark — lands clear of the sticky running head instead of under it. */
+  scroll-padding-top: calc(var(--header-h) + 1rem);
 }
 
 body,
@@ -76,6 +79,8 @@ hr {
   --gutter: clamp(1.1rem, 4vw, 2rem);
   --space-section: clamp(3rem, 7vw, 5.5rem);
   --space-block: 1.35rem;
+  /* the running head's height, so anchors can scroll clear of it */
+  --header-h: 3rem;
 }
 
 /* ── the column ───────────────────────────────────────────────────────────── */
@@ -193,18 +198,19 @@ p + p {
 }
 
 /* ── footnotes ────────────────────────────────────────────────────────────── */
-.footnotes {
-  margin-top: 1.6rem;
-  padding-top: 0.7rem;
-  border-top: 1px solid var(--line);
-  /* the printed convention: the note block is narrower than the text it serves */
-  max-width: 52ch;
-}
-
+/* Provenance is the report's footnote apparatus. It is set in the data voice
+   (Source Code Pro, per the identity's "arm ids, axes, provenance" rule), small
+   and muted, under the short rule the section frame draws. The block that holds
+   them — `.section-notes` — is part of the chrome vocabulary at the foot of this
+   file; these two rules are the type. */
 .footnote {
-  font-size: 0.82rem;
-  line-height: 1.5;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  /* a parquet path is one unbreakable word: break it rather than the page */
+  overflow-wrap: break-word;
 }
 
 .footnote + .footnote {
@@ -315,103 +321,377 @@ a:hover {
 }
 
 /* =============================================================================
-   SPECIMEN — the type/palette proof sheet in App.tsx. Deleted with it in Tasks
-   2–3; nothing below is part of the report's own vocabulary.
+   THE REPORT'S CHROME — running head, cover, numbered section frames, colophon.
+
+   Everything below is FRAME: the parts of the document that are the report
+   rather than the story. Same discipline as above — tokens only, no hex, no
+   fill, no shadow. Where the root edition would draw a panel this draws a
+   hairline; where it would slide something in, this holds still.
+
+   Narrow widths are handled by DEGRADING, not by re-laying-out: the running
+   head's title ellipsizes and then goes screen-reader-only, the section head's
+   two halves stack. Nothing is ever removed from the accessibility tree.
    ============================================================================= */
-.specimen {
-  padding-block: clamp(2.5rem, 6vw, 4rem);
+
+/* ── the running head ─────────────────────────────────────────────────────── */
+/* A slim sticky bar carrying the wordmark, where-you-are, and the theme toggle.
+   Solid `--ground` because the report scrolls underneath it; the one-pixel rule
+   at its foot is both the page's top hairline and the read-progress indicator.
+   No menu: a printed report keeps its map on the contents page. */
+.report-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--ground);
 }
 
-.specimen-block {
-  margin-top: var(--space-section);
+.report-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: var(--header-h);
 }
 
-.specimen-block > .rule + * {
-  margin-top: 0.9rem;
+/* Both halves may shrink to nothing before either widens the bar past the page
+   — that is what keeps 360 px free of a horizontal scrollbar. */
+.wordmark,
+.header-right {
+  min-width: 0;
 }
 
-.specimen-head {
+.wordmark {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.wordmark-sep,
+.wordmark-edition {
+  /* hidden under 560 px — see the degradation block at the end of this section */
+  display: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.wordmark:hover,
+.wordmark:hover .wordmark-edition {
+  color: var(--accent);
+}
+
+.header-right {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+}
+
+.header-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28em;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.header-readout:hover {
+  color: var(--ink);
+}
+
+/* the mono index — the only part of the readout that is never given up */
+.header-readout-index {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.header-readout-dash {
+  flex: 0 0 auto;
+  display: none;
+}
+
+.header-readout-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* screen-reader-only by default; shown from 560 px up (see below), so the
+     link's accessible name carries the section title at EVERY width */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* The bar's bottom hairline IS the progress track: `--line` for the part of the
+   report still ahead, `--accent` for the part already read. Pure decoration —
+   the readout beside it states the same fact in words, and the width is set from
+   the scroll position, so there is nothing here for reduced motion to disable. */
+.header-progress {
+  height: 1px;
+  background: var(--line);
+}
+
+.header-progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* From 560 px up the bar has room for its full readout and its edition line. */
+@media (min-width: 560px) {
+  .wordmark-sep,
+  .wordmark-edition,
+  .header-readout-dash {
+    display: inline;
+  }
+
+  .header-readout-title {
+    position: static;
+    width: auto;
+    height: auto;
+    clip: auto;
+  }
+}
+
+/* ── the cover ────────────────────────────────────────────────────────────── */
+/* A report masthead: rule, series line, title, dek, dateline, contents, the two
+   cross-references, rule. */
+.cover {
+  padding-top: clamp(1.4rem, 4vw, 2.4rem);
+}
+
+.cover-series {
+  margin-top: 1rem;
+}
+
+.cover-title {
+  margin-top: 0.55rem;
+}
+
+.cover-dek {
+  margin-top: 1.1rem;
+  color: var(--muted);
+}
+
+.cover-dateline {
+  margin-top: 1.3rem;
+  color: var(--muted);
+}
+
+/* The masthead's closing rule is the only hr on the page that ends its column
+   rather than opening a block, so it takes its space here instead of every
+   `.rule` carrying a margin it does not want. */
+.cover .page > .rule:last-child {
+  margin-top: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+/* ── the contents block ───────────────────────────────────────────────────── */
+.cover-contents {
+  margin-top: clamp(1.8rem, 4vw, 2.4rem);
+}
+
+.contents-heading {
+  margin-bottom: 0.55rem;
+}
+
+.contents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: var(--measure);
+}
+
+/* hairline-separated entries, the printed convention — a rule above the first
+   and under each one, so the block reads as a ruled table of contents */
+.contents-list > li {
+  border-bottom: 1px solid var(--line);
+}
+
+.contents-list > li:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.contents-link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55em;
+  padding: 0.5rem 0;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.contents-link:hover .contents-title {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.contents-index {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.contents-dash {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.contents-title {
+  font-family: var(--display);
+  font-size: 1.05rem;
+}
+
+/* ── the cover's two cross-references ─────────────────────────────────────── */
+.crossrefs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  margin-top: clamp(1.6rem, 3.5vw, 2.1rem);
+  display: grid;
+  gap: 0.5rem;
+  max-width: var(--measure);
+}
+
+.crossrefs > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.8rem;
+}
+
+.crossref-label {
+  flex: 0 0 auto;
+  min-width: 10rem;
+}
+
+/* ── the numbered section frame ───────────────────────────────────────────── */
+.section-frame {
+  padding-top: var(--space-section);
+}
+
+/* The head: a mono index and the pinned title on the left, the loop stage and
+   the act small-caps on the right. Under 560 px the two halves stack — the
+   wrap is the flex container's own, and only the alignment has to be told. */
+.section-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.6rem 1.2rem;
+  gap: 0.4rem 1.5rem;
+  margin-top: 1.1rem;
+}
+
+.section-title {
+  flex: 1 1 22ch;
+  min-width: 0;
+}
+
+.section-stage {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+@media (max-width: 560px) {
+  .section-stage {
+    text-align: left;
+  }
+}
+
+.section-body {
+  margin-top: clamp(1.2rem, 3vw, 1.8rem);
+}
+
+/* The provenance apparatus: a short rule, then the bundle's own sentences set as
+   footnotes (type in the footnote block near the top of this file). */
+.section-notes {
+  margin-top: clamp(1.6rem, 3.5vw, 2.2rem);
+  max-width: var(--measure);
+}
+
+.section-notes .rule-short + .footnote {
   margin-top: 0.7rem;
 }
 
-.specimen-swatches {
+/* ── the colophon ─────────────────────────────────────────────────────────── */
+.colophon {
+  padding-top: var(--space-section);
+  padding-bottom: clamp(2.5rem, 6vw, 4rem);
+}
+
+.colophon-heading {
+  margin-top: 1rem;
+}
+
+.colophon .page > p {
+  margin-top: var(--space-block);
+}
+
+.colophon-stamp,
+.colophon-attribution,
+.colophon-author {
+  color: var(--muted);
+}
+
+.colophon-attribution {
+  font-size: 0.88rem;
+}
+
+/* A forty-character commit and a bare repo URL are each one unbreakable word:
+   let them break rather than push the page sideways at 360 px. */
+.colophon-stamp,
+.colophon-author {
+  overflow-wrap: break-word;
+}
+
+/* ── stat tiles ───────────────────────────────────────────────────────────── */
+/* Results set the way a printed table sets them: a hairline over a small-caps
+   label over the number. No card, no fill, no border but the one on top. */
+.stat-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-  gap: 0.9rem;
-  margin-top: 1rem;
-  padding: 0;
-  list-style: none;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1.2rem 1.6rem;
 }
 
-.specimen-swatch {
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  overflow: hidden;
+.stat-tile {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
 }
 
-.specimen-chip {
-  height: 3rem;
-}
-
-.specimen-swatch .mono {
-  display: block;
-  padding: 0.4rem 0.55rem;
+.stat-label {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
-  background: var(--panel);
 }
 
-.specimen-figure {
-  margin-top: 1.2rem;
+.stat-tile .stat-value {
+  margin-top: 0.35rem;
 }
 
-.specimen-caption {
-  margin-top: 0.6rem;
+.stat-note {
+  margin-top: 0.3rem;
   color: var(--muted);
-  font-size: 0.9rem;
 }
 
-.specimen-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 1rem;
+/* The one tile a section is ABOUT: cobalt rule, cobalt number. Never the only
+   cue — the label always says what the number is. */
+.stat-tile.is-accent {
+  border-top-color: var(--accent);
 }
 
-/* The specimen's rough bar sample. SVG marks take their colour from CSS classes,
-   never from presentation attributes: `fill="var(--x)"` is not reliably
-   substituted, so the tokens are applied here (v1's charts do the same). */
-.specimen-svg {
-  width: 100%;
-  height: auto;
-}
-
-.specimen-zero {
-  stroke: var(--chart-zero);
-  stroke-width: 1;
-}
-
-.specimen-bar {
-  fill: var(--chart-muted);
-}
-
-.specimen-bar.is-highlight {
-  fill: var(--chart-accent);
-}
-
-.specimen-value {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  fill: var(--ink);
-}
-
-.specimen-tick {
-  font-family: var(--mono);
-  font-size: 10px;
-  fill: var(--muted);
+.stat-tile.is-accent .stat-value {
+  color: var(--accent);
 }
