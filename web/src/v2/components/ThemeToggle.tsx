@@ -50,7 +50,9 @@ export function ThemeToggle(): JSX.Element {
     <button
       type="button"
       className="theme-toggle"
-      aria-label={`Switch to ${other} theme`}
+      // WCAG 2.5.3 Label in Name: the accessible name carries the visible
+      // word (Paper/Night), so speech input can address the control.
+      aria-label={`Switch to the ${other === "dark" ? "Night" : "Paper"} theme`}
       onClick={() => {
         applyTheme(other);
         setTheme(other);

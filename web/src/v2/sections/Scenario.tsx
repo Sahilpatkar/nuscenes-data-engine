@@ -37,7 +37,10 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
           src={assetUrl(data.image.src)}
           width={data.image.width}
           height={data.image.height}
-          alt={data.image.alt}
+          // The figure caption above renders this image's bundle alt text
+          // verbatim, so a non-empty alt here would be announced twice inside
+          // one <figure> (final-review M2). The figcaption is the description.
+          alt=""
           decoding="async"
         />
       </Figure>
