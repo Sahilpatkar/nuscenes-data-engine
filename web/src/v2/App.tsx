@@ -1,7 +1,18 @@
+import type { ReactNode } from "react";
+
 import { Colophon } from "./components/Colophon";
 import { Cover, type CoverEntry } from "./components/Cover";
 import { Header } from "./components/Header";
 import { SectionFrame } from "./components/SectionFrame";
+/* The section components share their names with the bundle interfaces below
+   (both are named for the step they belong to), so each is aliased once here. */
+import { Blindspot as BlindspotSection } from "./sections/Blindspot";
+import { ClosedLoop as ClosedLoopSection } from "./sections/ClosedLoop";
+import { Intervention as InterventionSection } from "./sections/Intervention";
+import { MissedPedestrian as MissedPedestrianSection } from "./sections/MissedPedestrian";
+import { Scenario as ScenarioSection } from "./sections/Scenario";
+import { Verdict as VerdictSection } from "./sections/Verdict";
+import { WhyFrame as WhyFrameSection } from "./sections/WhyFrame";
 
 import blindspotJson from "../data/blindspot.json";
 import closedLoopJson from "../data/closed_loop.json";
@@ -47,6 +58,8 @@ interface StorySection {
   act: string;
   /** Where this section's numbers came from — set as its footnotes. */
   provenance: Provenance[];
+  /** The section's own content: its ledes, figures, charts and evidence. */
+  body: ReactNode;
 }
 
 /* The seven steps, in story order. Titles and stages are the live tour's own
@@ -62,6 +75,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Diagnose",
     act: "Problem",
     provenance: blindspot.provenance,
+    body: <BlindspotSection data={blindspot} />,
   },
   {
     id: "hero-frame",
@@ -70,6 +84,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Diagnose",
     act: "Problem",
     provenance: heroFrame.provenance,
+    body: <MissedPedestrianSection data={heroFrame} />,
   },
   {
     id: "scenario",
@@ -78,6 +93,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Mine",
     act: "Approach",
     provenance: scenario.provenance,
+    body: <ScenarioSection data={scenario} />,
   },
   {
     id: "why-frame",
@@ -86,6 +102,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Mine",
     act: "Approach",
     provenance: whyFrame.provenance,
+    body: <WhyFrameSection data={whyFrame} />,
   },
   {
     id: "intervention",
@@ -94,6 +111,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Train",
     act: "Approach",
     provenance: intervention.provenance,
+    body: <InterventionSection data={intervention} />,
   },
   {
     id: "verdict",
@@ -102,6 +120,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "Evaluate",
     act: "Results",
     provenance: verdict.provenance,
+    body: <VerdictSection data={verdict} />,
   },
   {
     id: "closed-loop",
@@ -112,6 +131,7 @@ const SECTIONS: readonly StorySection[] = [
     stage: "The whole loop",
     act: "Results",
     provenance: closedLoop.provenance,
+    body: <ClosedLoopSection data={closedLoop} />,
   },
 ];
 
@@ -140,9 +160,7 @@ export default function App(): JSX.Element {
             act={section.act}
             provenance={section.provenance}
           >
-            {/* Task 3 — the section's own content: figures, charts, evidence
-                tiers. Until then the frame stands on its own: the numbered head
-                and the footnoted provenance are what this task pins. */}
+            {section.body}
           </SectionFrame>
         ))}
       </main>
