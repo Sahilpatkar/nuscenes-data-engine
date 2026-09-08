@@ -1,0 +1,1792 @@
+/* =============================================================================
+   base.css (v2, the report edition) — reset, the Source type scale, hairline
+   rules, and the report's one-column measure.
+
+   Colour lives in tokens.css; nothing here hard-codes a hex. Layout variables
+   follow the same rule as the colour tokens — a real value on `:root`, media
+   queries only redefine.
+
+   The idiom: where v1 drew panels, this edition draws RULES. A section opens on
+   a full-measure hairline; figures hang under numbered captions; provenance sets
+   as footnotes under a short rule. Everything reads down one column.
+   ============================================================================= */
+
+/* ── reset (minimal) ──────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  /* Every `#anchor` — the contents links, the running head's readout, the
+     wordmark — lands clear of the sticky running head instead of under it. */
+  scroll-padding-top: calc(var(--header-h) + 1rem);
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+}
+
+body {
+  /* the viewer's window must never show through: paint the ground explicitly */
+  background: var(--ground);
+  color: var(--ink);
+  font: 17px/1.6 var(--body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+hr {
+  border: 0;
+}
+
+/* ── layout variables ─────────────────────────────────────────────────────── */
+:root {
+  /* the report's column: 76ch of container, 65ch of text inside it */
+  --container: 76ch;
+  --measure: 65ch;
+  /* figures and charts break out of the column to about this */
+  --figure-max: 60rem;
+  --gutter: clamp(1.1rem, 4vw, 2rem);
+  --space-section: clamp(3rem, 7vw, 5.5rem);
+  --space-block: 1.35rem;
+  /* the running head's height, so anchors can scroll clear of it */
+  --header-h: 3rem;
+}
+
+/* ── the column ───────────────────────────────────────────────────────────── */
+.page {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* Text sets to the measure even inside the wider container, so a paragraph never
+   outruns the eye while a figure below it can still use the full column. */
+.measure {
+  max-width: var(--measure);
+}
+
+/* Breakout: centred on the column, never wider than the viewport minus its
+   gutters (so the page body itself never scrolls sideways). `max-width: none`
+   is load-bearing on an <img> — the reset caps images at 100% of their parent,
+   which would quietly undo the breakout. */
+.figure-wide {
+  width: min(var(--figure-max), calc(100vw - 2 * var(--gutter)));
+  max-width: none;
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+/* ── type scale ───────────────────────────────────────────────────────────── */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--display);
+  font-weight: 600;
+  text-wrap: balance;
+  line-height: 1.2;
+}
+
+/* the report's cover line */
+.cover-title,
+h1 {
+  font-size: clamp(2.1rem, 4.5vw, 3rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+  max-width: 20ch;
+}
+
+/* section heads */
+.section-title,
+h2 {
+  font-size: clamp(1.45rem, 2.6vw, 1.95rem);
+  letter-spacing: -0.008em;
+}
+
+h3 {
+  font-size: 1.12rem;
+}
+
+h4 {
+  font-size: 1rem;
+}
+
+/* the serif italic lede that opens a section or a figure caption */
+.lede {
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(1.14rem, 1.6vw, 1.3rem);
+  line-height: 1.5;
+}
+
+/* small-caps-ish label above a head, and the stage/act line beside it */
+.eyebrow {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the mono voice: section indices, arm ids, axis ticks, provenance detail */
+.mono {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-index {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+/* stat values and other display numerals set in the serif */
+.stat-value {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* every numeric context that has to line up in a column */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+p + p {
+  margin-top: var(--space-block);
+}
+
+/* ── footnotes ────────────────────────────────────────────────────────────── */
+/* Provenance is the report's footnote apparatus. It is set in the data voice
+   (Source Code Pro, per the identity's "arm ids, axes, provenance" rule), small
+   and muted, under the short rule the section frame draws. The block that holds
+   them — `.section-notes` — is part of the chrome vocabulary at the foot of this
+   file; these two rules are the type. */
+.footnote {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  /* a parquet path is one unbreakable word: break it rather than the page */
+  overflow-wrap: break-word;
+}
+
+.footnote + .footnote {
+  margin-top: 0.45rem;
+}
+
+.footnote-mark {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin-right: 0.4em;
+}
+
+/* ── hairline rules ───────────────────────────────────────────────────────── */
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* the short rule that opens a note block or closes a stanza */
+.rule-short {
+  height: 1px;
+  width: 4.5rem;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* a rule in the accent, for the one place per page that wants emphasis */
+.rule-accent {
+  background: var(--accent);
+}
+
+/* ── links + focus ────────────────────────────────────────────────────────── */
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── the theme toggle (report chrome) ─────────────────────────────────────── */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.3rem 0.6rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+/* ── screen-reader-only (chart table twins, skip links) ───────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── scroll reveal ────────────────────────────────────────────────────────────
+   Enhancement only, and opacity-only in this edition (a report page does not
+   slide). The hidden state exists ONLY where motion is welcome, so a machine
+   asking for reduced motion — where useReveal registers no observer and never
+   adds .is-visible — still shows every section. Smooth scrolling is guarded the
+   same way. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  .reveal {
+    opacity: 0;
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transition: opacity 500ms ease-out;
+  }
+}
+
+/* =============================================================================
+   THE REPORT'S CHROME — running head, cover, numbered section frames, colophon.
+
+   Everything below is FRAME: the parts of the document that are the report
+   rather than the story. Same discipline as above — tokens only, no hex, no
+   fill, no shadow. Where the root edition would draw a panel this draws a
+   hairline; where it would slide something in, this holds still.
+
+   Narrow widths are handled by DEGRADING, not by re-laying-out: the running
+   head's title ellipsizes and then goes screen-reader-only, the section head's
+   two halves stack. Nothing is ever removed from the accessibility tree.
+   ============================================================================= */
+
+/* ── the running head ─────────────────────────────────────────────────────── */
+/* A slim sticky bar carrying the wordmark, where-you-are, and the theme toggle.
+   Solid `--ground` because the report scrolls underneath it; the one-pixel rule
+   at its foot is both the page's top hairline and the read-progress indicator.
+   No menu: a printed report keeps its map on the contents page. */
+.report-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--ground);
+}
+
+.report-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: var(--header-h);
+}
+
+/* Both halves may shrink to nothing before either widens the bar past the page
+   — that is what keeps 360 px free of a horizontal scrollbar. */
+.wordmark,
+.header-right {
+  min-width: 0;
+}
+
+.wordmark {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.wordmark-sep,
+.wordmark-edition {
+  /* hidden under 560 px — see the degradation block at the end of this section */
+  display: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.wordmark:hover,
+.wordmark:hover .wordmark-edition {
+  color: var(--accent);
+}
+
+.header-right {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+}
+
+.header-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28em;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.header-readout:hover {
+  color: var(--ink);
+}
+
+/* the mono index — the only part of the readout that is never given up */
+.header-readout-index {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.header-readout-dash {
+  flex: 0 0 auto;
+  display: none;
+}
+
+.header-readout-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* screen-reader-only by default; shown from 560 px up (see below), so the
+     link's accessible name carries the section title at EVERY width */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* The bar's bottom hairline IS the progress track: `--line` for the part of the
+   report still ahead, `--accent` for the part already read. Pure decoration —
+   the readout beside it states the same fact in words, and the width is set from
+   the scroll position, so there is nothing here for reduced motion to disable. */
+.header-progress {
+  height: 1px;
+  background: var(--line);
+}
+
+.header-progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* From 560 px up the bar has room for its full readout and its edition line. */
+@media (min-width: 560px) {
+  .wordmark-sep,
+  .wordmark-edition,
+  .header-readout-dash {
+    display: inline;
+  }
+
+  .header-readout-title {
+    position: static;
+    width: auto;
+    height: auto;
+    clip: auto;
+  }
+}
+
+/* ── the cover ────────────────────────────────────────────────────────────── */
+/* A report masthead: rule, series line, title, dek, dateline, contents, the two
+   cross-references, rule. */
+.cover {
+  padding-top: clamp(1.4rem, 4vw, 2.4rem);
+}
+
+.cover-series {
+  margin-top: 1rem;
+}
+
+.cover-title {
+  margin-top: 0.55rem;
+}
+
+.cover-dek {
+  margin-top: 1.1rem;
+  color: var(--muted);
+}
+
+.cover-dateline {
+  margin-top: 1.3rem;
+  color: var(--muted);
+}
+
+/* The masthead's closing rule is the only hr on the page that ends its column
+   rather than opening a block, so it takes its space here instead of every
+   `.rule` carrying a margin it does not want. */
+.cover .page > .rule:last-child {
+  margin-top: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+/* ── the contents block ───────────────────────────────────────────────────── */
+.cover-contents {
+  margin-top: clamp(1.8rem, 4vw, 2.4rem);
+}
+
+.contents-heading {
+  margin-bottom: 0.55rem;
+}
+
+.contents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: var(--measure);
+}
+
+/* hairline-separated entries, the printed convention — a rule above the first
+   and under each one, so the block reads as a ruled table of contents */
+.contents-list > li {
+  border-bottom: 1px solid var(--line);
+}
+
+.contents-list > li:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.contents-link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55em;
+  padding: 0.5rem 0;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.contents-link:hover .contents-title {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.contents-index {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.contents-dash {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.contents-title {
+  font-family: var(--display);
+  font-size: 1.05rem;
+}
+
+/* ── the cover's two cross-references ─────────────────────────────────────── */
+.crossrefs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  margin-top: clamp(1.6rem, 3.5vw, 2.1rem);
+  display: grid;
+  gap: 0.5rem;
+  max-width: var(--measure);
+}
+
+.crossrefs > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.8rem;
+}
+
+.crossref-label {
+  flex: 0 0 auto;
+  min-width: 10rem;
+}
+
+/* ── the numbered section frame ───────────────────────────────────────────── */
+.section-frame {
+  padding-top: var(--space-section);
+}
+
+/* The head: a mono index and the pinned title on the left, the loop stage and
+   the act small-caps on the right. Under 560 px the two halves stack — the
+   wrap is the flex container's own, and only the alignment has to be told. */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 1.5rem;
+  margin-top: 1.1rem;
+}
+
+.section-title {
+  flex: 1 1 22ch;
+  min-width: 0;
+}
+
+.section-stage {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+@media (max-width: 560px) {
+  .section-stage {
+    text-align: left;
+  }
+}
+
+.section-body {
+  margin-top: clamp(1.2rem, 3vw, 1.8rem);
+}
+
+/* The provenance apparatus: a short rule, then the bundle's own sentences set as
+   footnotes (type in the footnote block near the top of this file). */
+.section-notes {
+  margin-top: clamp(1.6rem, 3.5vw, 2.2rem);
+  max-width: var(--measure);
+}
+
+.section-notes .rule-short + .footnote {
+  margin-top: 0.7rem;
+}
+
+/* ── the colophon ─────────────────────────────────────────────────────────── */
+.colophon {
+  padding-top: var(--space-section);
+  padding-bottom: clamp(2.5rem, 6vw, 4rem);
+}
+
+.colophon-heading {
+  margin-top: 1rem;
+}
+
+.colophon .page > p {
+  margin-top: var(--space-block);
+}
+
+.colophon-stamp,
+.colophon-attribution,
+.colophon-author {
+  color: var(--muted);
+}
+
+.colophon-attribution {
+  font-size: 0.88rem;
+}
+
+/* A forty-character commit and a bare repo URL are each one unbreakable word:
+   let them break rather than push the page sideways at 360 px. */
+.colophon-stamp,
+.colophon-author {
+  overflow-wrap: break-word;
+}
+
+/* ── stat tiles ───────────────────────────────────────────────────────────── */
+/* Results set the way a printed table sets them: a hairline over a small-caps
+   label over the number. No card, no fill, no border but the one on top. */
+.stat-row {
+  display: grid;
+  /* The floor is what decides how many tiles share a row inside the column
+     (~578 px at 1280): 9.5rem fits the three-metric row, and the quad row below
+     tightens the gap to fit its fourth. */
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1.2rem 1.6rem;
+}
+
+.stat-tile {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+
+.stat-label {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat-tile .stat-value {
+  margin-top: 0.35rem;
+}
+
+.stat-note {
+  margin-top: 0.3rem;
+  color: var(--muted);
+}
+
+/* The one tile a section is ABOUT: cobalt rule, cobalt number. Never the only
+   cue — the label always says what the number is. */
+.stat-tile.is-accent {
+  border-top-color: var(--accent);
+}
+
+.stat-tile.is-accent .stat-value {
+  color: var(--accent);
+}
+
+/* =============================================================================
+   THE STORY'S BODY — the vocabulary the seven sections are written in.
+
+   Same discipline as the chrome above: tokens only, no hex, no fill where a
+   hairline will do, no shadow, and every interactive thing keeps a visible focus
+   ring. Where the root edition drew a card, this draws a rule and lets the paper
+   show through; where it slid something in, this holds still.
+
+   Four class families live here that this edition does not own: `.learned`,
+   `.legend*`, `.tick` and `.deep-link*` belong to the four shared renderers
+   (`src/components/{Learned,OverlayLegend,Ticks,DeepLink}.tsx`), which both
+   editions import unchanged. They are restyled here BY NAME — the components are
+   pure bundle-copy renderers, so the report can re-voice them without forking
+   them. The overlay legend's chip is the one exception to "tokens follow the
+   theme": its swatches are the exact RGBs burned into the JPEGs, so the chip
+   keeps the night frame's own tone in both modes (`--image-chip*`).
+
+   Narrow widths are handled by degrading, never by hiding: the chain stacks and
+   its arrows turn to point down, the wipe swaps to a static pair under 480 px,
+   and everything too wide to fit (filmstrip, strategy chart, per-box table)
+   scrolls INSIDE its own `.overflow-x` box so the page body never does.
+   ============================================================================= */
+
+/* ── the block rhythm of a section body ───────────────────────────────────── */
+.section-body > * + * {
+  margin-top: clamp(1.1rem, 2.4vw, 1.6rem);
+}
+
+/* ── inline voices ────────────────────────────────────────────────────────── */
+.muted {
+  color: var(--muted);
+}
+
+.accent {
+  color: var(--accent);
+}
+
+/* Wide content scrolls inside itself; the page body must never scroll sideways
+   (the 360 px gate is `scrollWidth === clientWidth` on the document). */
+.overflow-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* a backticked span in exported copy — an arm id, rendered as the code it is */
+.tick {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  padding: 0.05em 0.32em;
+  background: var(--panel-2);
+}
+
+/* ── the beats a section is written in ────────────────────────────────────── */
+
+/* the section's opening sentence, in the report's italic serif (`.lede`) */
+.section-lede {
+  max-width: 46ch;
+}
+
+/* a counted line that must not be skimmed past (the 60-of-62 line, the night
+   count): weight, not size — a report raises its voice by half a step */
+.key-line {
+  font-weight: 600;
+  font-size: 1.04em;
+  max-width: 52ch;
+  text-wrap: balance;
+}
+
+/* a section's closing beat — the sentence that hands over to the next step */
+.beat {
+  border-top: 1px solid var(--line);
+  padding-top: clamp(0.8rem, 1.8vw, 1.1rem);
+  font-family: var(--display);
+  font-size: clamp(1.05rem, 1.9vw, 1.32rem);
+  line-height: 1.3;
+  max-width: 46ch;
+  text-wrap: balance;
+}
+
+/* The one line a section lands on, given the printed treatment: a full-measure
+   rule above and below, and nothing else inside them. Used at most once per
+   section (step 1's purpose, step 5's winner, step 7's thesis). */
+.pull-block {
+  display: grid;
+  gap: clamp(0.9rem, 2vw, 1.4rem);
+}
+
+.pull-line {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.15rem, 2.2vw, 1.6rem);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  max-width: 40ch;
+  text-wrap: balance;
+}
+
+/* the live app's "What we learned" callout, re-voiced as a margin note */
+.learned {
+  display: grid;
+  gap: 0.25rem;
+  max-width: var(--measure);
+  padding-left: clamp(0.9rem, 2vw, 1.2rem);
+  border-left: 2px solid var(--line);
+}
+
+.learned-label {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.learned-text {
+  font-size: 0.98em;
+}
+
+/* four tiles in one row need a narrower floor than three do, or the fourth wraps
+   to a line of its own at exactly the widths the report is read at */
+.stat-row.is-quad {
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  column-gap: 1rem;
+}
+
+/* ── numbered figures ─────────────────────────────────────────────────────── */
+/* No `margin` reset here: the element reset above already zeroes it, and a
+   `margin: 0` at this point in the file would out-order `.figure-wide`'s
+   `margin-left: 50%` and quietly cancel every breakout. */
+.figure {
+  display: grid;
+  gap: 0.7rem;
+}
+
+/* The caption in the italic serif, the way a plate is captioned in print. The
+   number is mono small-caps in the accent — the one part of a caption that is
+   the document's own word rather than the package's. */
+.figure-caption {
+  font-family: var(--display);
+  font-style: italic;
+  font-size: 0.94rem;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 72ch;
+}
+
+.figure-number {
+  font-family: var(--mono);
+  font-style: normal;
+  font-weight: 500;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* a second caption line (the held-out note) — the data voice, not the serif */
+.figure-note {
+  display: block;
+  margin-top: 0.3rem;
+  font-style: normal;
+}
+
+/* The exported crops are 960 px wide and never upscaled past the column; the
+   hairline is the frame a printed plate carries. */
+.figure > img,
+.overlay-panel img,
+.event-image {
+  width: 100%;
+  border: 1px solid var(--line);
+}
+
+/* ── step 2: the overlay pair ─────────────────────────────────────────────── */
+.overlay-figure {
+  gap: clamp(0.7rem, 1.6vw, 1rem);
+}
+
+/* one hairline box, divided — a segmented control the way a form is ruled */
+.overlay-tabs {
+  justify-self: start;
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+}
+
+.overlay-tab {
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+  padding: 0.45rem 0.9rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.overlay-tab + .overlay-tab {
+  border-left: 1px solid var(--line);
+}
+
+.overlay-tab:hover {
+  color: var(--ink);
+}
+
+/* selected: the paper steps up a layer, the label goes to full ink, and a cobalt
+   rule sits on top of the tab. Three cues, so it never rests on colour alone. */
+.overlay-tab.is-selected {
+  background: var(--panel-2);
+  color: var(--ink);
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.overlay-tab-label {
+  font-weight: 600;
+  font-size: 0.94rem;
+}
+
+.overlay-tab-id {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* the legend chip keeps the IMAGE's ground in both themes: the swatches are the
+   exact RGBs burned into the JPEG, and white/yellow would vanish on warm paper */
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--image-chip-line);
+  background: var(--image-chip);
+  color: var(--image-chip-ink);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.legend-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+/* the per-model claims: a ruled list, one subject per row */
+.claims {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+  max-width: 78ch;
+}
+
+.claims > li {
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+
+.claims-detail {
+  color: var(--muted);
+}
+
+/* ── step 3: the event's facts and the synced pair ────────────────────────── */
+.event-facts {
+  display: grid;
+  gap: 0.7rem;
+  max-width: var(--measure);
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+
+.event-head {
+  font-size: 1.1rem;
+}
+
+.chip-row {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  padding: 0.24rem 0.55rem;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.event-preset {
+  font-size: 0.76rem;
+}
+
+.event-preset .muted {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sync {
+  display: grid;
+  gap: clamp(0.9rem, 2vw, 1.4rem);
+}
+
+.filmstrip {
+  display: flex;
+  gap: 0.6rem;
+  padding-bottom: 0.25rem;
+}
+
+.film-thumb {
+  flex: 1 0 8rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+
+.film-thumb img {
+  width: 100%;
+}
+
+.film-label {
+  text-align: center;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the event's OWN frame — marked permanently, and it never moves */
+.film-thumb.is-current {
+  border-color: var(--accent);
+}
+
+/* what the reader is pointing at — moves with hover, focus, tap and arrow keys */
+.film-thumb.is-active {
+  background: var(--panel-2);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.film-thumb.is-active .film-label {
+  color: var(--ink);
+}
+
+/* ── charts (both) ────────────────────────────────────────────────────────── */
+.curves {
+  display: grid;
+  gap: clamp(0.9rem, 2vw, 1.6rem);
+}
+
+@media (min-width: 720px) {
+  .curves {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.chart {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.chart-title {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chart-svg {
+  width: 100%;
+  height: auto;
+}
+
+/* chart marks — the dataviz method's specs, in the validated chart slots */
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-zero {
+  stroke: var(--chart-zero);
+  stroke-width: 1;
+}
+
+.chart-rule {
+  stroke: var(--chart-accent);
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--chart-muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ≥ 8 px marker with the 2 px surface ring — and in this edition the surface is
+   the paper itself: the charts are drawn straight on `--ground`, not on a card */
+.chart-dot {
+  fill: var(--chart-muted);
+  stroke: var(--ground);
+  stroke-width: 2;
+}
+
+.chart-dot.is-active {
+  fill: var(--chart-accent);
+}
+
+.chart-tick,
+.chart-step {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--muted);
+}
+
+.chart-step.is-active {
+  fill: var(--ink);
+  font-weight: 500;
+}
+
+/* Text wears text tokens, never the mark colour — which is also what keeps the
+   dark mode's `--chart-neg` (a mark-only slot there) off of type. The 3 px halo
+   is the marker's ring idiom applied to type: a label sits over the active
+   step's rule and must stay legible where it crosses it. */
+.chart-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: var(--ground);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+/* a full-height hit band per step: far larger than the marker it activates */
+.chart-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+
+/* ── step 4: the centrepiece band ─────────────────────────────────────────── */
+
+/* The one band in the report: the step the story turns on gets a ground of its
+   own between two hairlines. It breaks out of the column exactly as a wide
+   figure does — deliberately NOT `100vw`, which counts the classic scrollbar and
+   would push the whole document sideways on any platform that draws one. */
+.chain-band {
+  width: min(var(--figure-max), calc(100vw - 2 * var(--gutter)));
+  max-width: none;
+  margin-left: 50%;
+  transform: translateX(-50%);
+  padding: clamp(1.2rem, 3vw, 1.9rem) clamp(1rem, 2.5vw, 1.6rem);
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.chain-scroll {
+  width: 100%;
+}
+
+.chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.7rem;
+}
+
+.chain-step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+
+/* the connector between stages: pointing down while the chain is stacked, right
+   once it lies out horizontally. Decoration — the order is the list's. */
+.chain-step::after {
+  content: "→";
+  position: absolute;
+  left: 50%;
+  bottom: -1.2rem;
+  transform: translateX(-50%) rotate(90deg);
+  font-family: var(--mono);
+  line-height: 1;
+  color: var(--muted);
+}
+
+.chain-step:last-child::after {
+  content: none;
+}
+
+.chain-num {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.chain-text {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.04rem;
+  line-height: 1.25;
+}
+
+/* the last stage is the outcome — the one accent in the device */
+.chain-step.is-outcome {
+  border-top-color: var(--accent);
+}
+
+.chain-step.is-outcome .chain-num,
+.chain-step.is-outcome .chain-text {
+  color: var(--accent);
+}
+
+@media (min-width: 760px) {
+  .chain {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 2rem;
+    /* wider than a phone: the chain scrolls inside .chain-scroll rather than
+       squeezing four stages into four columns of one word each */
+    min-width: 40rem;
+  }
+
+  .chain-step::after {
+    left: auto;
+    right: -1.35rem;
+    top: 0.35rem;
+    bottom: auto;
+    transform: none;
+  }
+}
+
+.chip-row-accent .chip {
+  border-color: var(--accent);
+}
+
+/* the fold: native <details>, so it opens without JavaScript and prints open */
+.fold {
+  border: 1px solid var(--line);
+}
+
+.fold > summary {
+  cursor: pointer;
+  padding: 0.7rem 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.fold > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.fold-body {
+  display: grid;
+  gap: 0.9rem;
+  padding: 0 0.9rem 0.9rem;
+}
+
+.fold-path {
+  font-size: 0.82rem;
+}
+
+.factors {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.factor {
+  display: grid;
+  gap: 0.1rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.45rem;
+}
+
+.factors dt {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.factors dd {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+/* The glyph is `aria-hidden` decoration beside a value that already says "yes"
+   or "none": it is picked out in the positive slot where it affirms, and stays
+   in ink where it denies — a negative that reads as ink rather than as red is
+   the honest treatment when the red slot is mark-only in dark mode. */
+.flag {
+  color: var(--ink);
+}
+
+.flag.is-yes {
+  color: var(--chart-pos);
+}
+
+@media (min-width: 640px) {
+  .factor {
+    grid-template-columns: 14rem minmax(0, 1fr);
+    gap: 0.15rem 1.2rem;
+    align-items: baseline;
+  }
+}
+
+/* the system path, end to end — the step's last, quietest line */
+.architecture-strip {
+  font-size: 0.74rem;
+  max-width: 78ch;
+}
+
+/* ── step 5: the fair comparison, and the chart bound inside it ───────────── */
+
+/* Story contract §1.3: the fairness statement is not prose that happens to sit
+   near the chart — it IS the box the chart is drawn inside. One hairline
+   rectangle, cobalt-edged, holding the lead, the clauses and the figure they
+   qualify, so the bars cannot be read without reading what was held constant. */
+.fairness {
+  display: grid;
+  gap: clamp(0.8rem, 2vw, 1.1rem);
+  padding: clamp(1rem, 2.4vw, 1.5rem);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+}
+
+.fairness > .eyebrow {
+  color: var(--accent);
+}
+
+/* the clause the whole comparison rests on: the control every bar is measured
+   against, and the only chip that carries the accent */
+.fairness-parts .chip.is-control {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The chart keeps a readable width and scrolls inside the box rather than
+   shrinking its 10 px labels into illegibility on a phone. */
+.strategy-scroll {
+  width: 100%;
+}
+
+/* The viewBox is 640 units wide and its marks are specified in those units (24 px
+   bars, 10 px labels): capping the drawn width at 40rem keeps one unit at one
+   pixel, so the bars stay inside the method's cap instead of being scaled up by
+   the box around them. The floor is what makes it scroll rather than shrink on a
+   phone. */
+.strategy-chart {
+  min-width: 32rem;
+  max-width: 40rem;
+}
+
+/* "mAP50-95" is a metric's name, not a word: this title keeps its own case where
+   the other chart titles wear the uppercase treatment. */
+.strategy-chart .chart-title {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.strategy-plot {
+  position: relative;
+}
+
+/* Bar hue says EMPHASIS, never sign (tokens.css, the standing obligation): the
+   direction is in the geometry — below the zero rule — and in the signed label. */
+.bar {
+  fill: var(--chart-muted);
+}
+
+.bar.is-highlight {
+  fill: var(--chart-accent);
+}
+
+/* the one filled box in the edition: a tooltip must cover what is under it */
+.bar-tip {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  gap: 0.1rem;
+  max-width: 15rem;
+  margin-top: -0.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  pointer-events: none;
+}
+
+.bar-tip-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.bar-tip-id {
+  font-size: 0.7rem;
+}
+
+.bar-tip-value {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The tour bolds each arm's share and Streamlit renders it; the exporter strips
+   the markers, so the report carries the emphasis in its own type — which only
+   reads if the line around it is NOT already bold. */
+.night-shares {
+  max-width: 62ch;
+}
+
+.night-shares strong {
+  font-weight: 600;
+}
+
+/* ── step 6: the two evidence tiers ───────────────────────────────────────── */
+
+/* Contract §1.4's structure IS the argument: each tier is a sub-head over a
+   heavy rule — the loudest structural thing in the section — and the example's
+   caveat is printed beside its label rather than buried under the picture. */
+.tier {
+  display: grid;
+  gap: 0.25rem;
+  border-top: 2px solid var(--ink);
+  padding-top: 0.6rem;
+  max-width: 60ch;
+}
+
+.tier-label {
+  font-family: var(--body);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.tier-caveat {
+  font-size: 0.92rem;
+  max-width: 52ch;
+}
+
+.compare {
+  display: grid;
+  gap: 0.6rem;
+}
+
+/* mobile first: the wipe needs room, so the static pair is what a narrow screen
+   gets (see the ≥ 480 px block below, where the two swap) */
+.compare-frame {
+  display: none;
+  position: relative;
+  border: 1px solid var(--line);
+  line-height: 0;
+}
+
+.compare-img {
+  width: 100%;
+}
+
+/* the seam. No transition: it tracks the pointer or the arrow key, which is the
+   reader's own motion — there is nothing here for reduced motion to switch off */
+.compare-after {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 calc(100% - var(--wipe)) 0 0);
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--wipe);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.compare-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--image-chip);
+}
+
+/* the end labels keep the IMAGE's own tone in both themes, like the legend chips:
+   they sit ON the night frame, not on the page */
+.compare-end {
+  position: absolute;
+  bottom: 8px;
+  max-width: 45%;
+  display: grid;
+  gap: 1px;
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--image-chip-line);
+  background: var(--image-chip);
+  color: var(--image-chip-ink);
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.compare-end-after {
+  left: 8px;
+}
+
+.compare-end-before {
+  right: 8px;
+  text-align: right;
+}
+
+.compare-end-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.compare-end-id {
+  font-size: 0.66rem;
+}
+
+/* A real range input, stretched over the frame: it drives the wipe, it takes the
+   arrow keys for free, and its focus ring (the global :focus-visible outline)
+   lands around the whole image. The thumb is a transparent hairline — the visible
+   handle is `.compare-handle`, drawn at the same percentage the clip uses, so the
+   control and the seam can never disagree. */
+.compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: ew-resize;
+}
+
+.compare-range::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.compare-range::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+
+.compare-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 2px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+}
+
+.compare-range::-moz-range-thumb {
+  width: 2px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+}
+
+.compare-static {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.compare-static-item {
+  margin: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.compare-static-item img {
+  width: 100%;
+  border: 1px solid var(--line);
+}
+
+.compare-static-item figcaption {
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+@media (min-width: 480px) {
+  .compare-frame {
+    display: block;
+  }
+
+  .compare-static {
+    display: none;
+  }
+}
+
+/* the aggregate result at the page's stat weight — the number this section
+   exists for, set in the serif like the tiles it summarises */
+.aggregate-line {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.3rem, 2.8vw, 2.1rem);
+  line-height: 1.16;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+  max-width: 30ch;
+  text-wrap: balance;
+}
+
+.box-table {
+  width: 100%;
+  min-width: 34rem;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+
+.box-table th,
+.box-table td {
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+
+.box-table thead th {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  border-bottom-color: var(--muted);
+}
+
+.box-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ── step 7: the answers, the thesis and the cross-references ─────────────── */
+
+/* the exporter's guarded headline, where it wrote one */
+.loop-headline {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(1.15rem, 2.2vw, 1.5rem);
+  line-height: 1.3;
+  max-width: 42ch;
+  text-wrap: balance;
+}
+
+/* Four answers as a ruled table, not four cards: hairlines above, between and
+   below, and from 760 px a second column with a rule down the middle. */
+.answers {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+
+.answer {
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+@media (min-width: 760px) {
+  .answers {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .answer {
+    padding-inline: clamp(1rem, 2.5vw, 1.6rem);
+  }
+
+  .answer:nth-child(odd) {
+    padding-left: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .answer:nth-child(even) {
+    padding-right: 0;
+  }
+}
+
+/* a question, not a headline: the body face at body size, carried by weight */
+.answer-question {
+  font-family: var(--body);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.answer-line {
+  font-size: 0.92rem;
+  max-width: 52ch;
+}
+
+/* an answer's sentences are one block of evidence, not separate paragraphs */
+.answer-line + .answer-line {
+  margin-top: 0.5rem;
+}
+
+/* Contract §1.5, the report's last sentence: the thesis the four answers are the
+   evidence for. The document's largest pull line, under the one accent rule the
+   page spends, and nothing after it but the ways to go deeper. */
+.thesis {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(1.3rem, 3vw, 2.1rem);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  max-width: 30ch;
+  text-wrap: pretty;
+}
+
+.crossref-block {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.crossref-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  max-width: var(--measure);
+}
+
+.deep-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.deep-link:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+/* the arrow's nudge is the only motion in the body, and it asks permission */
+@media (prefers-reduced-motion: no-preference) {
+  .deep-link-arrow {
+    transition: transform 140ms ease-out;
+  }
+
+  .deep-link:hover .deep-link-arrow {
+    transform: translateX(3px);
+  }
+}

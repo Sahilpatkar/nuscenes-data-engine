@@ -40,7 +40,11 @@ has two front-ends and no second set of numbers: this Streamlit app is the full
 instrument — every frame, every arm, every event, plus the recorded chat — while the
 **story site** ([web/](web/)) is a designed scroll-through reading of the same
 seven-step story, its figures exported from the same package at build time and every
-deep dive a link back into the app.
+deep dive a link back into the app. That site now has a second, report-style edition
+at `…/nuscenes-data-engine/v2/` (_live after the next Pages deploy_) —
+[web/src/v2/](web/src/v2/), designed entirely in code as a research report (paper and
+ink, Source Serif/Sans/Code, numbered sections and figures, light and dark) over the
+**same committed bundle**, so the two editions cannot disagree on a number.
 
 | | |
 |---|---|
