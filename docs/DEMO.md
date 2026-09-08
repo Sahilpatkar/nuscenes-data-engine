@@ -69,8 +69,7 @@ selection fold and fairness lead against their tour literals, and every image ro
 through `assetUrl` (the base-prefix helper that keeps the bundle's document-relative
 srcs resolving from `/v2/`).
 
-**Report edition URL:** _live after the next Pages deploy_ —
-…/nuscenes-data-engine/v2/
+**Report edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/v2/](https://sahilpatkar.github.io/nuscenes-data-engine/v2/) (first deployed 2026-09-08)
 
 ## Run it
 

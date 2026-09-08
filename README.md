@@ -41,7 +41,7 @@ instrument — every frame, every arm, every event, plus the recorded chat — w
 **story site** ([web/](web/)) is a designed scroll-through reading of the same
 seven-step story, its figures exported from the same package at build time and every
 deep dive a link back into the app. That site now has a second, report-style edition
-at `…/nuscenes-data-engine/v2/` (_live after the next Pages deploy_) —
+at `…/nuscenes-data-engine/v2/` ([live](https://sahilpatkar.github.io/nuscenes-data-engine/v2/)) —
 [web/src/v2/](web/src/v2/), designed entirely in code as a research report (paper and
 ink, Source Serif/Sans/Code, numbered sections and figures, light and dark) over the
 **same committed bundle**, so the two editions cannot disagree on a number.
