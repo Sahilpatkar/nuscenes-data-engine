@@ -1,18 +1,18 @@
 import { useState, type CSSProperties } from "react";
 
-import { assetUrl } from "../assetUrl";
+import { assetUrl } from "../../assetUrl";
 import type { ArmLabel, ImageRef } from "../../data/types";
 
 /**
  * One frame, drawn twice — the before/after wipe of story contract §1.4's first
  * evidence tier.
  *
- * FORKED FROM THE ROOT EDITION FOR ONE REASON: its `<img>` srcs are
- * document-relative and 404 from `/v2/`, so all four are resolved through
- * `assetUrl`. Two smaller changes serve the report frame: the root element is a
+ * FORKED FROM THE ORIGINAL EDITION for the report frame: the root element is a
  * `<div>` rather than a `<figure>` (the numbered `Figure` around it is the
  * figure, and figures do not nest usefully), and the caption is that Figure's
- * rather than this component's. Every mechanic below is the root edition's:
+ * rather than this component's. (All four `<img>` srcs go through `assetUrl`,
+ * as every image in either edition does.) Every mechanic below is the original
+ * edition's:
  *
  * The control is a real `<input type="range">`, not a drag handler: it is
  * keyboard-operable for free (arrows move one step, Home/End jump to the ends),

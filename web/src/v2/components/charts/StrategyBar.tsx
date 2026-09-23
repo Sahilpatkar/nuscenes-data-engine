@@ -7,7 +7,7 @@ import type { StrategyBar as StrategyBarDatum, StrategyChart } from "../../../da
  * metric — the tour's own five-bar chart (`strategy_coverage`), not the deep
  * page's thirteen.
  *
- * FORKED FROM THE ROOT EDITION AS A RESTYLE, NOT A REWRITE: every number this
+ * FORKED FROM THE ORIGINAL EDITION AS A RESTYLE, NOT A REWRITE: every number this
  * chart draws, and every rule it draws it by, is unchanged. The frame around it
  * is a `<div>`/`<p>` rather than `<figure>`/`<figcaption>` — in this edition the
  * numbered `Figure` inside the fair-comparison box is the figure — and the svg's

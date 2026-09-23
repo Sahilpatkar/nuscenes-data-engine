@@ -14,9 +14,9 @@ const meta = metaJson as Meta;
  * bundle does not supply:
  *
  *   · SERIES is the running series line a report carries above its title;
- *   · COVER_TITLE is the promise the root edition already makes in its own
+ *   · COVER_TITLE is the promise the original edition already makes in its own
  *     landing headline — the two editions are one story and title it once;
- *   · DEK is, verbatim, the `<meta name="description">` of `web/v2/index.html`,
+ *   · DEK is, verbatim, the `<meta name="description">` of `web/index.html`,
  *     so what a search result promises and what the cover says are the same
  *     sentence.
  *
@@ -56,8 +56,9 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
      one. */
   const builtOn = builtAt.split("T")[0] ?? builtAt;
   /* Vite's base: "/" in dev and preview, "/nuscenes-data-engine/" on Pages —
-     always with a trailing slash, and always the ROOT edition's document. */
-  const rootEdition = import.meta.env.BASE_URL;
+     always with a trailing slash, and always THIS document's directory. The
+     original edition is one level down from it. */
+  const originalEdition = `${import.meta.env.BASE_URL}v1/`;
 
   return (
     <section className="cover" id={COVER_ID} aria-labelledby="cover-title">
@@ -111,7 +112,7 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
           </li>
           <li>
             <span className="eyebrow crossref-label">Original edition</span>
-            <a href={rootEdition}>the story site at the site root</a>
+            <a href={originalEdition}>the scroll-through story site at /v1/</a>
           </li>
         </ul>
 

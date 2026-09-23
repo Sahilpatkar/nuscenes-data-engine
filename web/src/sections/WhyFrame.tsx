@@ -1,3 +1,4 @@
+import { assetUrl } from "../assetUrl";
 import type { WhyFrame as WhyFrameData } from "../data/types";
 
 /**
@@ -42,7 +43,7 @@ export function WhyFrame({ data }: { data: WhyFrameData }): JSX.Element {
 
       <figure className="frame-figure">
         <img
-          src={data.image.src}
+          src={assetUrl(data.image.src)}
           width={data.image.width}
           height={data.image.height}
           alt={data.image.alt}

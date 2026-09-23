@@ -1,8 +1,9 @@
 /* =============================================================================
    tokens.css (v2, the report edition) — paper, ink, and one cobalt accent.
 
-   Loaded ONLY by the /v2/ document (main.tsx imports it), so it may claim plain
-   `:root` without touching the root edition's tokens of the same names.
+   Loaded ONLY by the root document (src/v2/main.tsx imports it), so it may claim
+   plain `:root` without touching the original edition's tokens of the same names —
+   that edition is its own document, at /v1/.
 
    THREE LAYERS, ONE RULE — v1's audited pattern, mirrored but LIGHT-FIRST
    ---------------------------------------------------------------------
@@ -26,7 +27,7 @@
    The review extracts both marked spans, strips indentation, and diffs them;
    any token that appears in one and not the other is a bug.
 
-   Theme state is shared with the root edition: same `src/theme.ts`, same
+   Theme state is shared with the original edition: same `src/theme.ts`, same
    `"theme"` localStorage key, same pre-paint script in the head. The CSS reads
    `prefers-color-scheme: dark` where v1 reads `light` — complementary queries,
    because the two editions default the other way.

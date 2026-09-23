@@ -1,10 +1,10 @@
 import { useState } from "react";
 
-import { assetUrl } from "../assetUrl";
+import { assetUrl } from "../../assetUrl";
 import { CanCurves } from "../components/charts/CanCurves";
 import { FIGURE, Figure } from "../components/Figure";
-import { Filmstrip } from "../components/Filmstrip";
 
+import { Filmstrip } from "../../components/Filmstrip";
 import { Learned } from "../../components/Learned";
 import type { Scenario as ScenarioData } from "../../data/types";
 
@@ -19,7 +19,7 @@ import type { Scenario as ScenarioData } from "../../data/types";
  * Figure 3 answers "is it a moment or a manoeuvre": five keyframes against the
  * CAN speed and acceleration behind them, sharing one active step — point at a
  * thumb and both curves mark it; point at a curve and the thumb lights. The sync
- * is the root edition's mechanic exactly: one `active` index owned here and
+ * is the original edition's mechanic exactly: one `active` index owned here and
  * handed to both halves, starting on the event's own frame (`is_current`), which
  * is also the one the strip rings permanently. Nothing reverts on mouse-out: a
  * reader who scrubbed to t+2 meant to be at t+2.

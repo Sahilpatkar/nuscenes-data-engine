@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from "react";
 
+import { assetUrl } from "../assetUrl";
 import type { ArmLabel, ImageRef } from "../data/types";
 
 /**
@@ -55,7 +56,7 @@ export function CompareWipe({
       <div className="compare-frame" style={frameStyle}>
         <img
           className="compare-img"
-          src={before.src}
+          src={assetUrl(before.src)}
           width={before.width}
           height={before.height}
           alt={before.alt}
@@ -63,7 +64,7 @@ export function CompareWipe({
         />
         <img
           className="compare-img compare-after"
-          src={after.src}
+          src={assetUrl(after.src)}
           width={after.width}
           height={after.height}
           alt={after.alt}
@@ -104,7 +105,7 @@ export function CompareWipe({
         ].map(({ image, model }) => (
           <figure className="compare-static-item" key={model.id}>
             <img
-              src={image.src}
+              src={assetUrl(image.src)}
               width={image.width}
               height={image.height}
               alt={image.alt}

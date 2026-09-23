@@ -1,4 +1,5 @@
 import { ThemeToggle } from "./ThemeToggle";
+import { assetUrl } from "../assetUrl";
 import heroFrameJson from "../data/hero_frame.json";
 import metaJson from "../data/meta.json";
 import type { HeroFrame, Meta } from "../data/types";
@@ -61,7 +62,7 @@ export function Landing(): JSX.Element {
 
           <figure className="landing-figure">
             <img
-              src={image.src}
+              src={assetUrl(image.src)}
               width={image.width}
               height={image.height}
               alt={image.alt}

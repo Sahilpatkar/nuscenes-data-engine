@@ -10,16 +10,19 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
-      /* Two documents, one build (a Vite MPA): the v1 story site at the root and
-         the report edition at /v2/. Vite keeps each input's path relative to the
-         project root, so `v2/index.html` emits `dist/v2/index.html`, served at
-         `…/nuscenes-data-engine/v2/`. Shared chunks land in `dist/assets/` and are
-         referenced base-prefixed and root-absolute, which is correct from both
-         documents. package.json is `"type": "module"`, so entries resolve through
-         `import.meta.url` — `__dirname` does not exist here. */
+      /* Two documents, one build (a Vite MPA): the report edition (src/v2/) at the
+         site root and the original scroll-through edition (src/) at /v1/. Vite
+         keeps each input's path relative to the project root, so `v1/index.html`
+         emits `dist/v1/index.html`, served at `…/nuscenes-data-engine/v1/`. Shared
+         chunks land in `dist/assets/` and are referenced base-prefixed and
+         root-absolute, which is correct from both documents. The report edition's
+         first address, /v2/, is a static redirect stub under `public/v2/` that
+         Vite copies through untouched. package.json is `"type": "module"`, so
+         entries resolve through `import.meta.url` — `__dirname` does not exist
+         here. */
       input: {
         main: fileURLToPath(new URL("index.html", import.meta.url)),
-        v2: fileURLToPath(new URL("v2/index.html", import.meta.url)),
+        v1: fileURLToPath(new URL("v1/index.html", import.meta.url)),
       },
     },
   },

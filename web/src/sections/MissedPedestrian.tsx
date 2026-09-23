@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 
+import { assetUrl } from "../assetUrl";
 import { OverlayLegend } from "../components/OverlayLegend";
 import { Ticks } from "../components/Ticks";
 import type { HeroFrame } from "../data/types";
@@ -94,7 +95,7 @@ export function MissedPedestrian({ data }: { data: HeroFrame }): JSX.Element {
               hidden={!selected}
             >
               <img
-                src={image.src}
+                src={assetUrl(image.src)}
                 width={image.width}
                 height={image.height}
                 alt={image.alt}

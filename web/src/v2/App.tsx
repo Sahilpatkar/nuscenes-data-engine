@@ -33,7 +33,7 @@ import type {
   WhyFrame,
 } from "../data/types";
 
-/* The bundle — the SAME eight files the root edition reads, so the two editions
+/* The bundle — the SAME eight files the original edition reads, so the two editions
    cannot disagree on a number. The JSON's inferred types are widened (a `kind`
    field is `string`, not the union), so each import is asserted into its exported
    interface once, here, and never re-typed downstream. `meta.json` is read by the
@@ -64,8 +64,8 @@ interface StorySection {
 
 /* The seven steps, in story order. Titles and stages are the live tour's own
    (app/demo/views/tour.py `_STEPS`), typed out here a second time exactly as the
-   root edition types them: three front-ends, one set of names, pinned by test.
-   The ids are the root edition's too, so an anchor written for one edition means
+   original edition types them: three front-ends, one set of names, pinned by test.
+   The ids are the original edition's too, so an anchor written for one edition means
    the same section in the other. */
 const SECTIONS: readonly StorySection[] = [
   {

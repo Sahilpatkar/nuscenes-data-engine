@@ -1,7 +1,7 @@
 /**
  * One number, with the label that says what it measures — the report's tile.
  *
- * Same contract as the root edition's (the story's stats arrive pre-formatted
+ * Same contract as the original edition's (the story's stats arrive pre-formatted
  * from the bundle; the tile formats nothing and computes nothing), a different
  * voice: no card, no fill — a hairline over a small-caps label and the value set
  * in the serif, the way a table of results reads on paper.

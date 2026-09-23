@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 
-import { assetUrl } from "../assetUrl";
+import { assetUrl } from "../../assetUrl";
 import { FIGURE, Figure } from "../components/Figure";
 
 import { OverlayLegend } from "../../components/OverlayLegend";
@@ -16,7 +16,7 @@ import type { HeroFrame } from "../../data/types";
  * library, and not a link that swaps a `src`. BOTH images stay mounted; the
  * inactive panel is `hidden`, which keeps its image fetched but out of the
  * accessibility tree, so switching is instant with no flash and no reflow. The
- * mechanics are the root edition's, character for character; what this fork adds
+ * mechanics are the original edition's, character for character; what this fork adds
  * is `assetUrl` on both srcs and the numbered figure around them.
  *
  * Order mirrors the live tour's own hero step: the pair, the legend, the two
