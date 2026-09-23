@@ -7,10 +7,10 @@ import type { FilmstripStep } from "../../../data/types";
  * keyframes — the right half of the synced pair, marking the same `active` step
  * the thumbs do.
  *
- * FORKED FROM THE ROOT EDITION AS A RESTYLE, NOT A REWRITE: the geometry, the
+ * FORKED FROM THE ORIGINAL EDITION AS A RESTYLE, NOT A REWRITE: the geometry, the
  * domain arithmetic, the gap-splitting, the hit bands and the table twin are
  * unchanged. What changes is the frame around them — a `<div>` and a `<p>` where
- * the root edition used `<figure>`/`<figcaption>`, because in this edition the
+ * the original edition used `<figure>`/`<figcaption>`, because in this edition the
  * numbered `Figure` around the synced pair is the figure and figures do not nest
  * usefully. The svg keeps its `aria-labelledby` pointed at that title, so its
  * accessible name is exactly what it was.

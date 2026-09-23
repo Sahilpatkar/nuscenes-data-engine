@@ -18,7 +18,9 @@ const AUTHOR = "Sahil Patkar";
  */
 export function Colophon(): JSX.Element {
   const { attribution, exporter, package: pkg, streamlit_base: streamlitBase } = meta;
-  const rootEdition = import.meta.env.BASE_URL;
+  /* Vite's base is this document's directory; the original edition is one
+     level down from it. */
+  const originalEdition = `${import.meta.env.BASE_URL}v1/`;
 
   return (
     <footer className="colophon">
@@ -42,8 +44,8 @@ export function Colophon(): JSX.Element {
         </p>
 
         <p className="measure">
-          This is the report edition; the original edition lives{" "}
-          <a href={rootEdition}>at the site root</a>; the full instrument is{" "}
+          This is the report edition, the site's main one; the original scroll-through
+          edition lives <a href={originalEdition}>at /v1/</a>; the full instrument is{" "}
           <a href={streamlitBase} target="_blank" rel="noopener noreferrer">
             the live Streamlit app
           </a>

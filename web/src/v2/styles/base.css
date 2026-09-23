@@ -325,7 +325,7 @@ a:hover {
 
    Everything below is FRAME: the parts of the document that are the report
    rather than the story. Same discipline as above — tokens only, no hex, no
-   fill, no shadow. Where the root edition would draw a panel this draws a
+   fill, no shadow. Where the original edition would draw a panel this draws a
    hairline; where it would slide something in, this holds still.
 
    Narrow widths are handled by DEGRADING, not by re-laying-out: the running
@@ -704,7 +704,7 @@ a:hover {
 
    Same discipline as the chrome above: tokens only, no hex, no fill where a
    hairline will do, no shadow, and every interactive thing keeps a visible focus
-   ring. Where the root edition drew a card, this draws a rule and lets the paper
+   ring. Where the original edition drew a card, this draws a rule and lets the paper
    show through; where it slid something in, this holds still.
 
    Four class families live here that this edition does not own: `.learned`,

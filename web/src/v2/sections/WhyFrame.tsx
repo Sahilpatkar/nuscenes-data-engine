@@ -1,4 +1,4 @@
-import { assetUrl } from "../assetUrl";
+import { assetUrl } from "../../assetUrl";
 import { FIGURE, Figure } from "../components/Figure";
 
 import type { WhyFrame as WhyFrameData } from "../../data/types";
@@ -21,7 +21,7 @@ import type { WhyFrame as WhyFrameData } from "../../data/types";
  *       recorded factors and the sentence that says no single one of them chose
  *       the frame. Native, so it opens with no JavaScript and prints open.
  *
- * The band is the emphasis the root edition spent a full-section surface on: one
+ * The band is the emphasis the original edition spent a full-section surface on: one
  * step gets a ground of its own, and it is the step the story turns on.
  */
 export function WhyFrame({ data }: { data: WhyFrameData }): JSX.Element {

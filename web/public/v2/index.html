@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- The report edition was first published at this address (/v2/) and is now
+         the site's main edition, at the root. This static stub keeps the old link
+         alive: Vite copies public/ into dist/ untouched, so Pages serves it at
+         …/nuscenes-data-engine/v2/. The refresh target is relative (../ is the
+         site base, whatever it is), the script carries a section hash across,
+         and noindex keeps search engines on the canonical document. -->
+    <meta http-equiv="refresh" content="0; url=../" />
+    <meta name="robots" content="noindex" />
+    <title>nuScenes Data Engine — report edition (moved to the site root)</title>
+    <script>
+      location.replace(new URL("../" + location.hash, location.href).href);
+    </script>
+  </head>
+  <body>
+    <p>The report edition is now the site's main edition, one level up: <a href="../">continue to the site root</a>.</p>
+  </body>
+</html>

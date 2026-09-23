@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { assetUrl } from "../assetUrl";
 import { CanCurves } from "../components/charts/CanCurves";
 import { Filmstrip } from "../components/Filmstrip";
 import { Learned } from "../components/Learned";
@@ -28,7 +29,7 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
       <div className="event-card">
         <img
           className="event-image"
-          src={data.image.src}
+          src={assetUrl(data.image.src)}
           width={data.image.width}
           height={data.image.height}
           alt={data.image.alt}

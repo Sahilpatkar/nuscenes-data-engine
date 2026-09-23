@@ -19,8 +19,7 @@ model evaluations, use cases, and future scope: [docs/PROJECT.md](docs/PROJECT.m
 
 **Live demo:** _pending deploy — link added after the first Streamlit Community Cloud deployment_
 
-**Story site:** _pending first deploy — a designed scroll-through telling of the loop
-story (`web/`), deployed to GitHub Pages on merge_
+**Story site:** [sahilpatkar.github.io/nuscenes-data-engine](https://sahilpatkar.github.io/nuscenes-data-engine/) — the report edition of the loop story (`web/`, the site's main edition), deployed to GitHub Pages on merge; the original scroll-through edition stays at [/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/)
 
 A self-contained Streamlit app ([app/demo/](app/demo/)) that presents this project's
 real results from a committed 25 MB artifact package — no backend, no GPU, no
@@ -38,13 +37,16 @@ hardcoded — and recorded outputs (semantic search, the chat session) are label
 screen as recorded: the public app never runs a model or calls an LLM. That package
 has two front-ends and no second set of numbers: this Streamlit app is the full
 instrument — every frame, every arm, every event, plus the recorded chat — while the
-**story site** ([web/](web/)) is a designed scroll-through reading of the same
-seven-step story, its figures exported from the same package at build time and every
-deep dive a link back into the app. That site now has a second, report-style edition
-at `…/nuscenes-data-engine/v2/` ([live](https://sahilpatkar.github.io/nuscenes-data-engine/v2/)) —
+**story site** ([web/](web/)) is a designed reading of the same seven-step story, its
+figures exported from the same package at build time and every deep dive a link back
+into the app. Its main edition, at the site root
+([live](https://sahilpatkar.github.io/nuscenes-data-engine/)), is the **report edition** —
 [web/src/v2/](web/src/v2/), designed entirely in code as a research report (paper and
-ink, Source Serif/Sans/Code, numbered sections and figures, light and dark) over the
-**same committed bundle**, so the two editions cannot disagree on a number.
+ink, Source Serif/Sans/Code, numbered sections and figures, light and dark); the
+original scroll-through edition ([web/src/](web/src/)) stays one level down at
+[/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/), and the report's first
+address, `/v2/`, redirects to the root. Both editions render the **same committed
+bundle**, so they cannot disagree on a number.
 
 | | |
 |---|---|

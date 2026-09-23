@@ -13,11 +13,13 @@ own:
 - **The Streamlit app** (`app/demo/`, the rest of this document) is the **full
   instrument**: every frame, every arm, every scenario event, the interactive graph
   panel and the recorded chat session, with the guided tour as its default path.
-- **The story site** (`web/`, Vite + React + TypeScript) is a **designed
-  scrollytelling reading** of the same seven-step story — one page, seven sections,
-  hand-rolled SVG charts, first-class light and dark themes. It holds no deep-dive
-  pages of its own: every deep dive is a labelled deep link back into the live
-  Streamlit app.
+- **The story site** (`web/`, Vite + React + TypeScript) is a **designed reading**
+  of the same seven-step story — one page, seven sections, hand-rolled SVG charts,
+  first-class light and dark themes. It holds no deep-dive pages of its own: every
+  deep dive is a labelled deep link back into the live Streamlit app. It ships in
+  two editions over one bundle: the **report edition** at the site root (the main
+  edition) and the original scroll-through edition at `/v1/` — see "Report
+  edition" below.
 
 Every figure the site renders is exported at build time by `web/build_data.py`, which
 imports the app's own `filters.py` / `render.py` helpers and writes eight JSON files
@@ -46,30 +48,38 @@ the contract and CI's `quality` job is what guards it. `ci.yml` also gained a `w
 (node 22 → `npm ci`, `npm run typecheck`, `npm run build` with the same base path), so
 a change that breaks the site fails the PR rather than the deploy.
 
-**Story site URL:** _pending first deploy_
+**Story site URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/](https://sahilpatkar.github.io/nuscenes-data-engine/) (first deployed 2026-09-04; the root document is the report edition, the original scroll-through edition is at [/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/))
 
-### Report edition (`/v2/`)
+### Report edition (the site root)
 
-A second presentation of the same story, served one directory down at
-`…/nuscenes-data-engine/v2/`: the same seven steps in a research-report idiom — paper
-and ink with a cobalt accent, the Source superfamily (Serif 4 / Sans 3 / Code Pro),
-hairline rules, numbered sections and figures, footnoted provenance, light-first with
-a first-class dark — designed entirely in code rather than from the deck's identity.
-Its code is `web/src/v2/` behind the MPA entry `web/v2/index.html`; one Vite build
-emits both editions (`dist/index.html` and `dist/v2/index.html`) from the one npm
-project, so the Pages workflow above needs no change.
+The site's main edition, served at the root `…/nuscenes-data-engine/`: the same seven
+steps in a research-report idiom — paper and ink with a cobalt accent, the Source
+superfamily (Serif 4 / Sans 3 / Code Pro), hairline rules, numbered sections and
+figures, footnoted provenance, light-first with a first-class dark — designed entirely
+in code rather than from the deck's identity. Its code is `web/src/v2/` behind the
+root MPA entry `web/index.html`; the original scroll-through edition (`web/src/`,
+entry `web/v1/index.html`) is served one directory down at `…/v1/`, and one Vite
+build emits both editions (`dist/index.html` and `dist/v1/index.html`) from the one
+npm project, so the Pages workflow above needs no change. The report edition's first
+address, `…/v2/`, stays alive as a static redirect to the root
+(`web/public/v2/index.html`, copied through to `dist/v2/`), so links made before the
+swap still land.
 
 Zero data drift is structural rather than promised: the report edition imports the
-**same** `web/src/data/*.json` and `web/public/story/` bundle the root edition does —
-no second export, no second set of numbers — and `tests/test_web_v2.py` pins its copy
-the way `test_web_export.py` pins the root edition's: the seven step titles and stages
-against `views/tour.py`, the five story-contract sentences read from bundle fields
-instead of typed out, no recorded figure as a literal anywhere in the sources, the
-selection fold and fairness lead against their tour literals, and every image routed
-through `assetUrl` (the base-prefix helper that keeps the bundle's document-relative
-srcs resolving from `/v2/`).
+**same** `web/src/data/*.json` and `web/public/story/` bundle the original edition
+does — no second export, no second set of numbers — and `tests/test_web_v2.py` pins
+its copy the way `test_web_export.py` pins the original edition's: the seven step
+titles and stages against `views/tour.py`, the five story-contract sentences read
+from bundle fields instead of typed out, no recorded figure as a literal anywhere in
+the sources, the selection fold and fairness lead against their tour literals, and
+every image in **either** edition routed through the shared `web/src/assetUrl.ts`
+(the base-prefix helper that keeps the bundle's document-relative srcs resolving from
+`/v1/`). The layout itself is pinned there too — the report at the root, the original
+at `/v1/`, the `/v2/` redirect, and each edition's link to the other built from
+Vite's base — because a build emits any input map without comment.
 
-**Report edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/v2/](https://sahilpatkar.github.io/nuscenes-data-engine/v2/) (first deployed 2026-09-08)
+**Report edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/](https://sahilpatkar.github.io/nuscenes-data-engine/) (first deployed at `/v2/` on 2026-09-08, since promoted to the site root; `/v2/` redirects there).
+**Original edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/)
 
 ## Run it
 

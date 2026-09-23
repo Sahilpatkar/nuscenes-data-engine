@@ -10,12 +10,17 @@ const tourLink = meta.deep_links.find((link) => link.url_path === "tour") ?? nul
 const REPO_URL = "https://github.com/Sahilpatkar/nuscenes-data-engine";
 
 /**
- * Provenance, attribution, and the honest note that this is one of two readings
- * of the same package. Every fact here is read from meta.json — the version, the
- * sha and the build stamp are the package's own, not the site's.
+ * Provenance, attribution, and the honest note that this is one of three readings
+ * of the same package — and not the main one: the report edition at the site root
+ * is. Every fact here is read from meta.json — the version, the sha and the build
+ * stamp are the package's own, not the site's.
  */
 export function Footer(): JSX.Element {
   const { attribution, exporter, package: pkg, streamlit_base: streamlitBase } = meta;
+  /* Vite's base: "/" in dev and preview, "/nuscenes-data-engine/" on Pages — always
+     with a trailing slash, and always the report edition's document; this one is
+     served one level down from it, at /v1/. */
+  const reportEdition = import.meta.env.BASE_URL;
 
   return (
     <footer className="site-footer">
@@ -40,8 +45,10 @@ export function Footer(): JSX.Element {
         </ul>
 
         <p className="measure">
-          Two front-ends, one package: this site is the story, the live Streamlit app is the full
-          instrument — the same tables, the same numbers, read two ways.
+          One package, read three ways: this is the original scroll-through edition of the
+          story; the <a href={reportEdition}>report edition</a> at the site root is the main
+          one; the live Streamlit app is the full instrument — the same tables, the same
+          numbers.
         </p>
         {tourLink ? <DeepLink href={tourLink.url}>{tourLink.label}</DeepLink> : null}
 

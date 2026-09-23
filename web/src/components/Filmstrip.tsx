@@ -1,10 +1,12 @@
 import { useRef, type KeyboardEvent } from "react";
 
+import { assetUrl } from "../assetUrl";
 import type { FilmstripStep } from "../data/types";
 
 /**
  * The event's t−2 … t+2 keyframes — the Scenario page's filmstrip, and the left
  * half of this step's synced pair: the same `active` step the CAN curves mark.
+ * Shared by both editions — the report edition imports it unchanged.
  *
  * Every thumb is a real `<button>`: hover, tap and focus all set the active step,
  * and the arrow keys walk it (wrapping, with Home/End) so the scrub is reachable
@@ -64,7 +66,7 @@ export function Filmstrip({ steps, active, onActivate }: FilmstripProps): JSX.El
               onFocus={() => onActivate(index)}
             >
               <img
-                src={step.image.src}
+                src={assetUrl(step.image.src)}
                 width={step.image.width}
                 height={step.image.height}
                 alt={step.image.alt}

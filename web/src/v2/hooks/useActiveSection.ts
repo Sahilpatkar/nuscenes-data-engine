@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 /**
  * Which section owns the middle of the viewport — the report header's scroll-spy.
  *
- * Forked from the root edition's rail, where the same logic is module-private
+ * Forked from the original edition's rail, where the same logic is module-private
  * (`components/StepRail.tsx`). The behaviour is deliberately identical, because
  * both editions answer the same question about the same seven sections:
  *
