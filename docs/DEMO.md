@@ -55,7 +55,7 @@ a change that breaks the site fails the PR rather than the deploy.
 The site's main edition, served at the root `…/nuscenes-data-engine/`: the same seven
 steps in a research-report idiom — paper and ink with a cobalt accent, the Source
 superfamily (Serif 4 / Sans 3 / Code Pro), hairline rules, numbered sections and
-figures, footnoted provenance, light-first with a first-class dark — designed entirely
+figures, light-first with a first-class dark — designed entirely
 in code rather than from the deck's identity. Its code is `web/src/v2/` behind the
 root MPA entry `web/index.html`; the original scroll-through edition (`web/src/`,
 entry `web/v1/index.html`) is served one directory down at `…/v1/`, and one Vite

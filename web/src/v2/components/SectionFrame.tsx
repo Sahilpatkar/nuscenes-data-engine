@@ -1,24 +1,22 @@
 import type { ReactNode } from "react";
 
 import { useReveal } from "../../hooks/useReveal";
-import type { Provenance } from "../../data/types";
 
 /**
  * The numbered frame every section of the report is poured into.
  *
  * A section opens on a full-measure hairline, carries a two-digit index beside
  * the step's PINNED title ("01 / We found a blind spot" — the numbering is the
- * report's frame, the title string is the live tour's own), states its loop
- * stage and act in small caps on the right, and closes on a footnote block: a
- * short rule, then the bundle's provenance entries set small and muted, the way
- * a printed report sources its figures.
+ * report's frame, the title string is the live tour's own), and states its loop
+ * stage and act in small caps on the right. It sources nothing: the report
+ * carries no footnote apparatus, so a section ends where its content ends.
  *
  * Everything above is FRAME. The section's own content — figures, charts,
  * evidence tiers — arrives as `children`; the frame renders no copy of its own
- * beyond the numbering, and paraphrases no provenance sentence.
+ * beyond the numbering.
  *
- * The reveal is the shared hook, so this edition fades in exactly like the root
- * one and is equally inert under `prefers-reduced-motion`.
+ * The reveal is the shared hook, so this edition fades in exactly like the
+ * original one and is equally inert under `prefers-reduced-motion`.
  */
 
 /**
@@ -42,19 +40,10 @@ export interface SectionFrameProps {
   stage: string;
   /** The deck's act, so both tellings are structured the same way. */
   act: string;
-  provenance: Provenance[];
   children?: ReactNode;
 }
 
-export function SectionFrame({
-  id,
-  step,
-  title,
-  stage,
-  act,
-  provenance,
-  children,
-}: SectionFrameProps): JSX.Element {
+export function SectionFrame({ id, step, title, stage, act, children }: SectionFrameProps): JSX.Element {
   const reveal = useReveal<HTMLDivElement>();
 
   return (
@@ -79,19 +68,6 @@ export function SectionFrame({
         </div>
 
         {children ? <div className="section-body">{children}</div> : null}
-
-        {provenance.length > 0 ? (
-          <div className="section-notes">
-            <hr className="rule-short" />
-            {provenance.map((entry, index) => (
-              <p className="footnote" key={`${entry.kind}-${entry.detail}`}>
-                <sup className="footnote-mark">{index + 1}</sup>
-                {entry.sentence}
-                {entry.detail ? ` — ${entry.detail}` : ""}
-              </p>
-            ))}
-          </div>
-        ) : null}
       </div>
     </section>
   );
