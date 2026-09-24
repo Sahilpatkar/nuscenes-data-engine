@@ -7,50 +7,22 @@ const REPO_URL = "https://github.com/Sahilpatkar/nuscenes-data-engine";
 const AUTHOR = "Sahil Patkar";
 
 /**
- * The end-of-report colophon: how the document was made, what it is made of, and
- * where its two siblings live.
+ * The report's end matter: the dataset attribution the nuScenes licence asks
+ * for, and the author line. Nothing else — the report sources nothing on the
+ * page (no provenance sentence, no package stamp, no edition note; the cover's
+ * dateline is the one place the package version appears, and the cover's
+ * cross-references are the one door to the original edition).
  *
- * The prose is the site's own — the exporter's NAME, the package stamp, the
- * dataset, the licence and the live app's address are all read from `meta.json`,
- * so a re-export moves them without anyone editing this file. The stamp is the
- * FULL commit here; the cover's dateline abbreviates it, which is the printed
- * convention (a short date up front, the whole record at the back).
+ * The attribution is read from `meta.json`, so a re-export moves it without
+ * anyone editing this file.
  */
 export function Colophon(): JSX.Element {
-  const { attribution, exporter, package: pkg, streamlit_base: streamlitBase } = meta;
-  /* Vite's base is this document's directory; the original edition is one
-     level down from it. */
-  const originalEdition = `${import.meta.env.BASE_URL}v1/`;
+  const { attribution } = meta;
 
   return (
     <footer className="colophon">
       <div className="page">
         <hr className="rule" />
-
-        <h2 className="eyebrow colophon-heading">Colophon</h2>
-
-        <p className="measure">
-          Every number in this report is derived from the committed package at export time by{" "}
-          <span className="mono">{exporter}</span>; nothing on the page is typed by hand. A test
-          re-runs the exporter and fails the build if a single byte drifts.
-        </p>
-
-        <p className="mono colophon-stamp">
-          package v{pkg.version}
-          <span aria-hidden="true"> · </span>
-          git {pkg.git_sha}
-          <span aria-hidden="true"> · </span>
-          built {pkg.built_at}
-        </p>
-
-        <p className="measure">
-          This is the report edition, the site's main one; the original scroll-through
-          edition lives <a href={originalEdition}>at /v1/</a>; the full instrument is{" "}
-          <a href={streamlitBase} target="_blank" rel="noopener noreferrer">
-            the live Streamlit app
-          </a>
-          . All three read the same package, so they cannot disagree on a number.
-        </p>
 
         <p className="measure colophon-attribution">
           Data: {attribution.dataset} — {attribution.citation}. Licensed {attribution.license};

@@ -7,8 +7,8 @@
    queries only redefine.
 
    The idiom: where v1 drew panels, this edition draws RULES. A section opens on
-   a full-measure hairline; figures hang under numbered captions; provenance sets
-   as footnotes under a short rule. Everything reads down one column.
+   a full-measure hairline; figures hang under numbered captions. Everything
+   reads down one column.
    ============================================================================= */
 
 /* ── reset (minimal) ──────────────────────────────────────────────────────── */
@@ -163,7 +163,7 @@ h4 {
   color: var(--muted);
 }
 
-/* the mono voice: section indices, arm ids, axis ticks, provenance detail */
+/* the mono voice: section indices, arm ids, axis ticks */
 .mono {
   font-family: var(--mono);
   font-size: 0.82rem;
@@ -197,45 +197,9 @@ p + p {
   margin-top: var(--space-block);
 }
 
-/* ── footnotes ────────────────────────────────────────────────────────────── */
-/* Provenance is the report's footnote apparatus. It is set in the data voice
-   (Source Code Pro, per the identity's "arm ids, axes, provenance" rule), small
-   and muted, under the short rule the section frame draws. The block that holds
-   them — `.section-notes` — is part of the chrome vocabulary at the foot of this
-   file; these two rules are the type. */
-.footnote {
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  line-height: 1.55;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  /* a parquet path is one unbreakable word: break it rather than the page */
-  overflow-wrap: break-word;
-}
-
-.footnote + .footnote {
-  margin-top: 0.45rem;
-}
-
-.footnote-mark {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--accent);
-  margin-right: 0.4em;
-}
-
 /* ── hairline rules ───────────────────────────────────────────────────────── */
 .rule {
   height: 1px;
-  background: var(--line);
-  border: 0;
-  margin: 0;
-}
-
-/* the short rule that opens a note block or closes a stanza */
-.rule-short {
-  height: 1px;
-  width: 4.5rem;
   background: var(--line);
   border: 0;
   margin: 0;
@@ -612,32 +576,16 @@ a:hover {
   margin-top: clamp(1.2rem, 3vw, 1.8rem);
 }
 
-/* The provenance apparatus: a short rule, then the bundle's own sentences set as
-   footnotes (type in the footnote block near the top of this file). */
-.section-notes {
-  margin-top: clamp(1.6rem, 3.5vw, 2.2rem);
-  max-width: var(--measure);
-}
-
-.section-notes .rule-short + .footnote {
-  margin-top: 0.7rem;
-}
-
 /* ── the colophon ─────────────────────────────────────────────────────────── */
 .colophon {
   padding-top: var(--space-section);
   padding-bottom: clamp(2.5rem, 6vw, 4rem);
 }
 
-.colophon-heading {
-  margin-top: 1rem;
-}
-
 .colophon .page > p {
   margin-top: var(--space-block);
 }
 
-.colophon-stamp,
 .colophon-attribution,
 .colophon-author {
   color: var(--muted);
@@ -647,9 +595,8 @@ a:hover {
   font-size: 0.88rem;
 }
 
-/* A forty-character commit and a bare repo URL are each one unbreakable word:
-   let them break rather than push the page sideways at 360 px. */
-.colophon-stamp,
+/* A bare repo URL is one unbreakable word: let it break rather than push the
+   page sideways at 360 px. */
 .colophon-author {
   overflow-wrap: break-word;
 }

@@ -27,7 +27,6 @@ import type {
   ClosedLoop,
   HeroFrame,
   Intervention,
-  Provenance,
   Scenario,
   Verdict,
   WhyFrame,
@@ -37,7 +36,8 @@ import type {
    cannot disagree on a number. The JSON's inferred types are widened (a `kind`
    field is `string`, not the union), so each import is asserted into its exported
    interface once, here, and never re-typed downstream. `meta.json` is read by the
-   cover and the colophon, which are the only places its facts appear. */
+   cover (the package stamp, the live app's address) and the end matter (the
+   dataset attribution), which are the only places its facts appear. */
 const blindspot = blindspotJson as Blindspot;
 const heroFrame = heroFrameJson as HeroFrame;
 const scenario = scenarioJson as Scenario;
@@ -56,8 +56,6 @@ interface StorySection {
   stage: string;
   /** The deck's act, so both tellings are structured the same way. */
   act: string;
-  /** Where this section's numbers came from — set as its footnotes. */
-  provenance: Provenance[];
   /** The section's own content: its ledes, figures, charts and evidence. */
   body: ReactNode;
 }
@@ -74,7 +72,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "We found a blind spot",
     stage: "Diagnose",
     act: "Problem",
-    provenance: blindspot.provenance,
     body: <BlindspotSection data={blindspot} />,
   },
   {
@@ -83,7 +80,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "What the failure looks like",
     stage: "Diagnose",
     act: "Problem",
-    provenance: heroFrame.provenance,
     body: <MissedPedestrianSection data={heroFrame} />,
   },
   {
@@ -92,7 +88,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "Where else does this happen?",
     stage: "Mine",
     act: "Approach",
-    provenance: scenario.provenance,
     body: <ScenarioSection data={scenario} />,
   },
   {
@@ -101,7 +96,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "What data should we add?",
     stage: "Mine",
     act: "Approach",
-    provenance: whyFrame.provenance,
     body: <WhyFrameSection data={whyFrame} />,
   },
   {
@@ -110,7 +104,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "We changed the training data",
     stage: "Train",
     act: "Approach",
-    provenance: intervention.provenance,
     body: <InterventionSection data={intervention} />,
   },
   {
@@ -119,7 +112,6 @@ const SECTIONS: readonly StorySection[] = [
     title: "Did it fix the failure?",
     stage: "Evaluate",
     act: "Results",
-    provenance: verdict.provenance,
     body: <VerdictSection data={verdict} />,
   },
   {
@@ -130,7 +122,6 @@ const SECTIONS: readonly StorySection[] = [
     // loop rather than one stage of it.
     stage: "The whole loop",
     act: "Results",
-    provenance: closedLoop.provenance,
     body: <ClosedLoopSection data={closedLoop} />,
   },
 ];
@@ -158,7 +149,6 @@ export default function App(): JSX.Element {
             title={section.title}
             stage={section.stage}
             act={section.act}
-            provenance={section.provenance}
           >
             {section.body}
           </SectionFrame>

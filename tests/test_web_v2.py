@@ -298,6 +298,21 @@ def test_editions_link_to_each_other_through_the_base() -> None:
     report edition (at the root) points at `v1/`, the original edition (at `/v1/`)
     points back at the base itself. A hard-coded `/v1/` breaks under the Pages
     base `/nuscenes-data-engine/`; a hard-coded Pages URL breaks the preview."""
-    for name in ("Cover.tsx", "Colophon.tsx"):
-        assert "${import.meta.env.BASE_URL}v1/" in _code(V2_SRC / "components" / name), name
+    assert "${import.meta.env.BASE_URL}v1/" in _code(V2_SRC / "components" / "Cover.tsx")
     assert "import.meta.env.BASE_URL" in _code(SITE_SRC / "components" / "Footer.tsx")
+
+
+def test_report_edition_carries_no_provenance_apparatus() -> None:
+    """The report edition sources nothing on the page (decided 2026-09-24): no
+    footnote block under a section, and no provenance sentence, package stamp or
+    edition note in the end matter -- only the dataset attribution the nuScenes
+    licence asks for, and the author line. The bundle still ships every
+    provenance entry (the original edition and the app render them), so the
+    report's silence is the frame's, not the data's."""
+    frame = _code(V2_SRC / "components" / "SectionFrame.tsx")
+    assert "provenance" not in frame and "footnote" not in frame
+    assert "provenance" not in _code(V2_SRC / "App.tsx")
+    colophon = _code(V2_SRC / "components" / "Colophon.tsx")
+    for gone in ("exporter", "colophon-stamp", "git_sha", "originalEdition", "Colophon</h2>"):
+        assert gone not in colophon, f"{gone} is still in the end matter"
+    assert "attribution" in colophon, "the dataset attribution must stay"

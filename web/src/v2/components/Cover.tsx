@@ -33,7 +33,7 @@ const DEK =
   "which data fixes it, and whether the intervention worked — every number derived " +
   "from the committed experiment package.";
 
-/** Abbreviated-commit length — the dateline's, not the colophon's, which is full. */
+/** Abbreviated-commit length — the dateline is the one place the commit appears. */
 const SHA_CHARS = 7;
 
 /* The cover owns both anchors and exports them, because the running head links
