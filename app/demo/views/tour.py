@@ -155,17 +155,18 @@ _BRIDGE_TO_MINING = (
 # event, its filmstrip and its CAN curves above it are the evidence that the
 # failure recurs; this is the mechanism that found them.
 _MINING_MECHANISM = (
-    "The system doesn't just search for images that look similar. It searches for "
-    "situations that are similar — nighttime driving, hard braking, and pedestrians "
-    "near the vehicle."
+    "The system doesn't just find images that look similar. It finds driving "
+    "situations that are similar — nighttime conditions, hard braking, and "
+    "pedestrians near the vehicle."
 )
 
 # The event as a situation, and the timeline as a reading: step 2's reader-facing
 # copy. Every figure in it is the event's own; the fixed words describe the fixed
 # flagship preset (`_TOUR_PRESET`, hard braking near pedestrians) and nothing else.
 # `web/build_data.py` mirrors each helper by name so the site says the same thing.
+_SCENARIO_LEDE = "A model failure isn't just an image — it's a driving situation."
 _TIMELINE_LEDE = (
-    "Instead of looking at a single image, we reconstruct what was happening around it."
+    "Instead of analyzing one image, we reconstruct what was happening around it."
 )
 
 
@@ -186,6 +187,25 @@ def _event_facts(n_peds: int, nearest: float | None) -> str:
     if nearest is not None and bool(pd.notna(nearest)):
         facts += f" · closest: {float(nearest):.1f} m"
     return facts
+
+
+def _signals_sentence(*, is_night: bool, n_peds: int) -> str:
+    """"This scene combines three important signals: nighttime driving, hard braking,
+    and pedestrians close to the vehicle." -- the night and pedestrian signals only
+    where the event carries them; hard braking is the flagship preset's own."""
+    signals = [
+        *(["nighttime driving"] if is_night else []),
+        "hard braking",
+        *(["pedestrians close to the vehicle"] if n_peds > 0 else []),
+    ]
+    count = {1: "one", 2: "two", 3: "three"}[len(signals)]
+    if len(signals) == 1:
+        listed = signals[0]
+    elif len(signals) == 2:
+        listed = f"{signals[0]} and {signals[1]}"
+    else:
+        listed = f"{', '.join(signals[:-1])}, and {signals[-1]}"
+    return f"This scene combines {count} important signal{'' if len(signals) == 1 else 's'}: {listed}."
 
 
 def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) -> str:
@@ -210,13 +230,13 @@ def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) ->
     return " ".join(parts)
 
 
-def _found_sentence(n_events: int) -> str:
-    """The match count as the hero line of the search result."""
-    return f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}."
-
-
-def _night_sentence(n_night: int) -> str:
-    return f"{n_night} occurred at night."
+def _found_sentence(n_events: int, n_night: int) -> str:
+    """The search result as one hero line: the match count, and how many of them
+    were at night."""
+    return (
+        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'} — "
+        f"{n_night} of them at night."
+    )
 
 # Step 3: the centerpiece (web-frontend-v1 spec §1.2) -- the lede that says what
 # the system does INSTEAD of randomly adding images, and the chain it walks to do
@@ -224,8 +244,9 @@ def _night_sentence(n_night: int) -> str:
 # (`_SELECTION_PATH`) says the same thing in the package's own vocabulary, so it is
 # what the "How selection works" fold opens with, above the seven recorded factors.
 _LEDE_SENTENCE = (
-    "Instead of randomly adding more images, the system searches the training pool "
-    "for examples related to the diagnosed failure."
+    "More training data isn't necessarily better training data. Instead of randomly "
+    "adding images, the system searches for examples that specifically address the "
+    "weakness we found."
 )
 _SELECTION_CHAIN: tuple[str, ...] = (
     "Failed validation frame",
@@ -736,6 +757,7 @@ def _render_mine(data: _TourData) -> None:
         st.info(_NO_TOUR_EVENT_NOTE)
         return
     st.subheader("Is this one bad photo, or a recurring driving scenario?")
+    st.markdown(_SCENARIO_LEDE)
     row = ranked.iloc[0]
     token = str(row["sample_data_token"])
     is_night = bool(row["is_night"])
@@ -754,6 +776,7 @@ def _render_mine(data: _TourData) -> None:
             "night" if is_night else "day",
             *(["rain"] if bool(row["is_rain"]) else []),
         ])
+        st.markdown(_signals_sentence(is_night=is_night, n_peds=n_peds))
         st.caption(
             f"{row['scene_name']} · {severity_caption(_TOUR_PRESET, row.to_dict())} · "
             f"preset `{_TOUR_PRESET}`"
@@ -769,13 +792,12 @@ def _render_mine(data: _TourData) -> None:
         _render_event_curves(row)
         st.markdown(_timeline_sentence(curve, is_night=is_night, n_peds=n_peds))
 
-    # The search result: the match count as the hero line, the night count under
-    # it, and the SQL / graph parity as a caption beneath both -- a trust indicator,
+    # The search result as one hero line (the match count, how many at night), and
+    # the SQL / graph parity as a caption beneath it -- a trust indicator,
     # not a claim about this event: a package with no subgraphs staged simply omits
     # it (the Scenario page's own no-op).
     n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
-    st.markdown(f"**{_found_sentence(len(ranked))}**")
-    st.markdown(_night_sentence(n_night))
+    st.markdown(f"**{_found_sentence(len(ranked), n_night)}**")
     payload = load_subgraphs(_TOUR_PRESET) if subgraphs_available() else None
     if payload is not None:
         st.caption(
@@ -783,8 +805,8 @@ def _render_mine(data: _TourData) -> None:
         )
     st.markdown(_MINING_MECHANISM)
     learned(
-        "A single image doesn't tell the whole story. Understanding a model failure "
-        "requires knowing what was happening around the vehicle."
+        "A single image doesn't tell the whole story. Understanding a failure requires "
+        "knowing what was happening around the vehicle."
     )
     provenance("recorded", "event counts computed at build against SQL and the Neo4j graph")
     provenance("recomputed", "overlay from gt_boxes.parquet")

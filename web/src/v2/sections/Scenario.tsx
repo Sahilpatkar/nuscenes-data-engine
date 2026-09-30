@@ -11,6 +11,9 @@ import type { Scenario as ScenarioData } from "../../data/types";
 /**
  * Step 3 — one failure, or a recurring driving scenario?
  *
+ * Opens on its lede — the failure as a situation, not an image — set as the
+ * report's serif italic like step 1's, before the first figure.
+ *
  * Figure 2 answers "what is this": the top-ranked event of the flagship scenario
  * query as a situation first (its title, one plain sentence, what is near the
  * vehicle, its conditions), with the row it came from — scene, severity figure,
@@ -35,6 +38,8 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
 
   return (
     <>
+      <p className="lede measure section-lede">{data.lede_sentence}</p>
+
       <Figure number={FIGURE.scenarioEvent} wide caption={data.image.alt}>
         <img
           className="event-image"
@@ -60,6 +65,7 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
             </li>
           ))}
         </ul>
+        <p>{data.signals_sentence}</p>
         <p className="mono event-preset">
           <span className="muted">scene</span> {data.event.scene_name}
           <span aria-hidden="true"> · </span>
@@ -88,11 +94,7 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
         </>
       ) : null}
 
-      <p className="key-line">
-        {data.found_sentence}
-        <br />
-        {data.night_sentence}
-      </p>
+      <p className="key-line">{data.found_sentence}</p>
       <p className="mono muted">{data.parity_caption}</p>
       <p className="measure">{data.mechanism_sentence}</p>
 

@@ -83,7 +83,7 @@
       }
     ]
   },
-  "found_sentence": "The system found 30 similar driving events.",
+  "found_sentence": "The system found 30 similar driving events — 6 of them at night.",
   "headline": "Is this one bad photo, or a recurring driving scenario?",
   "image": {
     "alt": "The scene-1084 hard-braking event with its ground-truth boxes drawn on it.",
@@ -91,8 +91,8 @@
     "src": "story/scenario-event.jpg",
     "width": 960
   },
-  "mechanism_sentence": "The system doesn't just search for images that look similar. It searches for situations that are similar — nighttime driving, hard braking, and pedestrians near the vehicle.",
-  "night_sentence": "6 occurred at night.",
+  "lede_sentence": "A model failure isn't just an image — it's a driving situation.",
+  "mechanism_sentence": "The system doesn't just find images that look similar. It finds driving situations that are similar — nighttime conditions, hard braking, and pedestrians near the vehicle.",
   "parity_caption": "SQL: 30 · Knowledge graph: 30 ✓",
   "preset": "hard_braking_near_pedestrians",
   "provenance": [
@@ -107,7 +107,8 @@
       "sentence": "recomputed in this app from the package tables"
     }
   ],
-  "takeaway": "A single image doesn't tell the whole story. Understanding a model failure requires knowing what was happening around the vehicle.",
-  "timeline_lede": "Instead of looking at a single image, we reconstruct what was happening around it.",
+  "signals_sentence": "This scene combines three important signals: nighttime driving, hard braking, and pedestrians close to the vehicle.",
+  "takeaway": "A single image doesn't tell the whole story. Understanding a failure requires knowing what was happening around the vehicle.",
+  "timeline_lede": "Instead of analyzing one image, we reconstruct what was happening around it.",
   "timeline_sentence": "The vehicle slows from 26.2 km/h to about 8 km/h while experiencing strong braking. Combining the camera sequence with vehicle telemetry tells us that this is not simply a nighttime image — it is a nighttime hard-braking event with pedestrians nearby."
 }

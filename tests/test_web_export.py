@@ -78,8 +78,9 @@ PURPOSE_SENTENCE = (
     "model needs, and turns those failures into better training data."
 )
 LEDE_SENTENCE = (
-    "Instead of randomly adding more images, the system searches the training pool "
-    "for examples related to the diagnosed failure."
+    "More training data isn't necessarily better training data. Instead of randomly "
+    "adding images, the system searches for examples that specifically address the "
+    "weakness we found."
 )
 SELECTION_CHAIN = [
     "Failed validation frame",
@@ -390,19 +391,27 @@ def test_why_frame_chips_state_only_facts_the_package_carries(
 def test_scenario_states_the_event_and_the_search_in_plain_words(
     bundle: dict[str, dict[str, Any]],
 ) -> None:
-    """Step 3's reader-facing copy (wording fixed 2026-09-29), every figure in it
-    the package's: the event as a situation rather than a row, the timeline
-    sentence off the filmstrip's first and last CAN speeds, the search result
-    with the match count as the hero number and the SQL/graph parity underneath
-    it, and the mechanism + takeaway in the tour's own words."""
+    """Step 3's reader-facing copy (wording fixed 2026-09-30), every figure in it
+    the package's: the lede under the title, the event as a situation rather
+    than a row and the three signals it combines, the timeline sentence off the
+    filmstrip's first and last CAN speeds, the search result as one line with
+    the SQL/graph parity underneath it, and the mechanism + takeaway in the
+    tour's own words."""
     scenario = bundle["scenario"]
+    assert scenario["lede_sentence"] == (
+        "A model failure isn't just an image — it's a driving situation."
+    )
     assert scenario["event"]["title"] == "A hard-braking event at night"
     assert scenario["event"]["summary"] == (
         "The vehicle brakes sharply while pedestrians are nearby."
     )
     assert scenario["event"]["facts"] == "12 pedestrians within 10 m · closest: 6.2 m"
+    assert scenario["signals_sentence"] == (
+        "This scene combines three important signals: nighttime driving, hard braking, "
+        "and pedestrians close to the vehicle."
+    )
     assert scenario["timeline_lede"] == (
-        "Instead of looking at a single image, we reconstruct what was happening around it."
+        "Instead of analyzing one image, we reconstruct what was happening around it."
     )
     assert scenario["timeline_sentence"] == (
         "The vehicle slows from 26.2 km/h to about 8 km/h while experiencing strong "
@@ -410,17 +419,19 @@ def test_scenario_states_the_event_and_the_search_in_plain_words(
         "is not simply a nighttime image — it is a nighttime hard-braking event with "
         "pedestrians nearby."
     )
-    assert scenario["found_sentence"] == "The system found 30 similar driving events."
-    assert scenario["night_sentence"] == "6 occurred at night."
+    assert scenario["found_sentence"] == (
+        "The system found 30 similar driving events — 6 of them at night."
+    )
+    assert "night_sentence" not in scenario, "the night count is part of found_sentence"
     assert scenario["parity_caption"] == "SQL: 30 · Knowledge graph: 30 ✓"
     assert scenario["mechanism_sentence"] == (
-        "The system doesn't just search for images that look similar. It searches for "
-        "situations that are similar — nighttime driving, hard braking, and pedestrians "
-        "near the vehicle."
+        "The system doesn't just find images that look similar. It finds driving "
+        "situations that are similar — nighttime conditions, hard braking, and "
+        "pedestrians near the vehicle."
     )
     assert scenario["takeaway"] == (
-        "A single image doesn't tell the whole story. Understanding a model failure "
-        "requires knowing what was happening around the vehicle."
+        "A single image doesn't tell the whole story. Understanding a failure requires "
+        "knowing what was happening around the vehicle."
     )
 
 

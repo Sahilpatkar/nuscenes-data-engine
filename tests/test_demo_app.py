@@ -3968,9 +3968,16 @@ def test_tour_walks_steps_2_to_5(
     # event (so no "at night" on its title), its own severity figure
     # (accel_long_min_mps2 = -7.5) and its near-pedestrian facts (f1 at 5m within
     # 10m, f2 at 20m outside it) -- the situation first, the row as a caption.
+    # the lede under the headline, then the event block
+    assert "A model failure isn't just an image — it's a driving situation." in markdowns
     assert "**A hard-braking event**" in markdowns
     assert "The vehicle brakes sharply while pedestrians are nearby." in markdowns
     assert "1 pedestrian within 10 m · closest: 5.0 m" in markdowns
+    # ... and the signals it combines -- two on a day event (no nighttime signal)
+    assert (
+        "This scene combines two important signals: hard braking and pedestrians close "
+        "to the vehicle."
+    ) in markdowns
     assert any(
         "scene-X · 0.76g braking · preset `hard_braking_near_pedestrians`" in text
         for text in captions
@@ -3980,7 +3987,7 @@ def test_tour_walks_steps_2_to_5(
     # the timeline, framed before the strip and read after the curves: s1's own
     # CAN speed (36.0) to its t+1 neighbour's (18.0), and a day event's wording
     assert (
-        "Instead of looking at a single image, we reconstruct what was happening around it."
+        "Instead of analyzing one image, we reconstruct what was happening around it."
         in markdowns
     )
     assert (
@@ -3988,23 +3995,22 @@ def test_tour_walks_steps_2_to_5(
         "braking. Combining the camera sequence with vehicle telemetry tells us that this "
         "is not simply a single image — it is a hard-braking event with pedestrians nearby."
     ) in markdowns
-    # the search result: the match count as the hero line, the night count under it,
-    # then the SQL/graph parity read from graph_subgraphs/hard_braking_near_pedestrians
-    # .json (1/1, True) as a caption -- s1 is a day event, so 0 occurred at night
-    assert "**The system found 1 similar driving event.**" in markdowns
-    assert "0 occurred at night." in markdowns
+    # the search result as one hero line (match count, night count), then the
+    # SQL/graph parity read from graph_subgraphs/hard_braking_near_pedestrians.json
+    # (1/1, True) as a caption -- s1 is a day event, so 0 of them at night
+    assert "**The system found 1 similar driving event — 0 of them at night.**" in markdowns
     assert any("SQL: 1 · Knowledge graph: 1 ✓" in text for text in captions)
     # the one mechanism sentence: what the search matched on to find those events
     assert (
-        "The system doesn't just search for images that look similar. It searches for "
-        "situations that are similar — nighttime driving, hard braking, and pedestrians "
-        "near the vehicle."
+        "The system doesn't just find images that look similar. It finds driving "
+        "situations that are similar — nighttime conditions, hard braking, and "
+        "pedestrians near the vehicle."
     ) in markdowns
     # ... closed by the step's takeaway callout
     assert any(
         ":material/school:" in text
-        and "A single image doesn't tell the whole story. Understanding a model failure "
-        "requires knowing what was happening around the vehicle." in text
+        and "A single image doesn't tell the whole story. Understanding a failure requires "
+        "knowing what was happening around the vehicle." in text
         for text in markdowns
     )
     assert "Scenario Search" in str(at.button(key="tour_open_event").label)
@@ -4025,11 +4031,12 @@ def test_tour_walks_steps_2_to_5(
     lede = next(
         index
         for index, text in enumerate(markdowns)
-        if text.startswith("Instead of randomly adding more images")
+        if text.startswith("More training data isn't necessarily better")
     )
     assert markdowns[lede] == (
-        "Instead of randomly adding more images, the system searches the training "
-        "pool for examples related to the diagnosed failure."
+        "More training data isn't necessarily better training data. Instead of randomly "
+        "adding images, the system searches for examples that specifically address the "
+        "weakness we found."
     )
     # ... and the VISIBLE chain is the plain-language one; the implementation chain
     # is folded away below.

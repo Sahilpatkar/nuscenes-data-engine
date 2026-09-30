@@ -101,9 +101,9 @@ _BRIDGE_TO_MINING = (
     "where the same thing happens."
 )
 _MINING_MECHANISM = (
-    "The system doesn't just search for images that look similar. It searches for "
-    "situations that are similar — nighttime driving, hard braking, and pedestrians "
-    "near the vehicle."
+    "The system doesn't just find images that look similar. It finds driving "
+    "situations that are similar — nighttime conditions, hard braking, and "
+    "pedestrians near the vehicle."
 )
 _SELECTION_PATH = (
     "failed val frame → similarity community → representative train-pool frames → "
@@ -147,8 +147,9 @@ _PURPOSE_SENTENCE = (
     "model needs, and turns those failures into better training data."
 )
 _LEDE_SENTENCE = (
-    "Instead of randomly adding more images, the system searches the training pool "
-    "for examples related to the diagnosed failure."
+    "More training data isn't necessarily better training data. Instead of randomly "
+    "adding images, the system searches for examples that specifically address the "
+    "weakness we found."
 )
 _SELECTION_CHAIN = (
     "Failed validation frame",
@@ -603,8 +604,9 @@ def build_hero_frame(package: Package, writer: Writer) -> dict[str, Any]:
 
 # Step 3's reader-facing copy -- each helper mirrors its ``views/tour.py`` twin by
 # name, so the site and the tour say the same thing about the same event.
+_SCENARIO_LEDE = "A model failure isn't just an image — it's a driving situation."
 _TIMELINE_LEDE = (
-    "Instead of looking at a single image, we reconstruct what was happening around it."
+    "Instead of analyzing one image, we reconstruct what was happening around it."
 )
 
 
@@ -624,6 +626,23 @@ def _event_facts(n_peds: int, nearest: float | None) -> str:
     if nearest is not None and bool(pd.notna(nearest)):
         facts += f" · closest: {float(nearest):.1f} m"
     return facts
+
+
+def _signals_sentence(*, is_night: bool, n_peds: int) -> str:
+    """``views/tour.py::_signals_sentence``."""
+    signals = [
+        *(["nighttime driving"] if is_night else []),
+        "hard braking",
+        *(["pedestrians close to the vehicle"] if n_peds > 0 else []),
+    ]
+    count = {1: "one", 2: "two", 3: "three"}[len(signals)]
+    if len(signals) == 1:
+        listed = signals[0]
+    elif len(signals) == 2:
+        listed = f"{signals[0]} and {signals[1]}"
+    else:
+        listed = f"{', '.join(signals[:-1])}, and {signals[-1]}"
+    return f"This scene combines {count} important signal{'' if len(signals) == 1 else 's'}: {listed}."
 
 
 def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) -> str:
@@ -648,14 +667,12 @@ def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) ->
     return " ".join(parts)
 
 
-def _found_sentence(n_events: int) -> str:
-    """``views/tour.py::_found_sentence``."""
-    return f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}."
-
-
-def _night_sentence(n_night: int) -> str:
-    """``views/tour.py::_night_sentence``."""
-    return f"{n_night} occurred at night."
+def _found_sentence(n_events: int, n_night: int) -> str:
+    """``views/tour.py::_found_sentence`` -- the search result as one hero line."""
+    return (
+        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'} — "
+        f"{n_night} of them at night."
+    )
 
 
 def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
@@ -718,9 +735,9 @@ def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
                 f"The {scene} hard-braking event with its ground-truth boxes drawn on it."
             ),
         ),
-        "found_sentence": _found_sentence(len(ranked)),
+        "found_sentence": _found_sentence(len(ranked), n_night),
+        "lede_sentence": _SCENARIO_LEDE,
         "mechanism_sentence": _MINING_MECHANISM,
-        "night_sentence": _night_sentence(n_night),
         "parity_caption": parity_line(
             int(package.subgraph["sql_count"]),
             package.subgraph["cypher_count"],
@@ -733,9 +750,10 @@ def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
             ),
             _provenance("recomputed", "overlay from gt_boxes.parquet"),
         ],
+        "signals_sentence": _signals_sentence(is_night=is_night, n_peds=n_peds),
         "takeaway": (
-            "A single image doesn't tell the whole story. Understanding a model failure "
-            "requires knowing what was happening around the vehicle."
+            "A single image doesn't tell the whole story. Understanding a failure requires "
+            "knowing what was happening around the vehicle."
         ),
         "timeline_lede": _TIMELINE_LEDE,
         "timeline_sentence": (

@@ -153,16 +153,19 @@ export interface Filmstrip {
 export interface Scenario {
   event: ScenarioEvent;
   filmstrip: Filmstrip;
-  /** The match count as the hero line of the search result. */
+  /** The search result as one hero line: the match count, and how many at night. */
   found_sentence: string;
   headline: string;
   image: ImageRef;
+  /** Fixed: the lede under the section title. */
+  lede_sentence: string;
   mechanism_sentence: string;
-  night_sentence: string;
-  /** The SQL / knowledge-graph parity, set under the counts. */
+  /** The SQL / knowledge-graph parity, set under the hero line. */
   parity_caption: string;
   preset: string;
   provenance: Provenance[];
+  /** The signals the event combines (night, braking, pedestrians), as it has them. */
+  signals_sentence: string;
   takeaway: string;
   /** What to notice, set before the filmstrip and the curves. */
   timeline_lede: string;
