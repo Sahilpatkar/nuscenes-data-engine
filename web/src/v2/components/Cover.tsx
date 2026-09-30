@@ -29,9 +29,10 @@ const SERIES = "nuScenes Data Engine — Technical report";
 const COVER_TITLE = "From model failure to better training data";
 
 const DEK =
-  "The nuScenes data-engine story as a research report: where the detector fails, " +
-  "which data fixes it, and whether the intervention worked — every number derived " +
-  "from the committed experiment package.";
+  "An autonomous-driving model is only as good as the data it learns from. This report " +
+  "shows how we identify where a detector struggles, find the data behind those " +
+  "failures, and use those insights to build a better training set then measure " +
+  "whether the model actually improves.";
 
 /** Abbreviated-commit length — the dateline is the one place the commit appears. */
 const SHA_CHARS = 7;
