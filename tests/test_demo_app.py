@@ -1467,7 +1467,7 @@ def test_failure_explorer_model_radio_sits_beside_the_image(
     # colors everywhere" (brief sec22) was true of the boxes, but the page that
     # exists to read them said nothing about what they mean.
     assert any(
-        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+        ":green-badge[green: ground truth]" in str(m.value) for m in at.markdown
     )
     at.radio(key="failure_model").set_value("graph_rate_night").run(timeout=30)
     assert not at.exception
@@ -1667,7 +1667,7 @@ def test_overview_hero_renders_overlay(
     # so the same badge legend renders under it -- and only under the LIVE overlay,
     # never under the plain val-batch fallback, whose colours are YOLO's, not ours.
     assert any(
-        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+        ":green-badge[green: ground truth]" in str(m.value) for m in at.markdown
     )
 
 
@@ -2680,7 +2680,7 @@ def test_active_learning_page_renders_story_chart_and_exemplar_table(
 
     # (e) the overlay legend under that panel is the shared badge component (Phase 10
     # spec sec3), not this page's own prose copy of the colour rules.
-    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    assert any(":green-badge[green: ground truth]" in text for text in markdowns)
     assert not any("orange dashed = a GT box" in str(c.value) for c in at.caption)
 
 
@@ -2721,12 +2721,12 @@ def test_active_learning_page_why_selected_panel_with_explain(
     assert any("Community quota" in text for text in panel)
     assert any("#0 · 10 frames · 2 at night" in text for text in panel)
     assert any("night pass (night floor 1)" in text for text in panel)
-    assert any("none — not itself a routing target" in text for text in panel)
+    assert any("none (not itself a routing target)" in text for text in panel)
     assert not any(
         "per-frame community and routed mass are not included" in str(i.value) for i in at.info
     )
     assert any(
-        "train-pool frame — no predictions" in str(c.value) for c in at.caption
+        "train-pool frame: no predictions" in str(c.value) for c in at.caption
     )
 
 
@@ -3379,7 +3379,7 @@ def test_weak_supervision_one_frame_three_views(
     # page's own prose copy of it; row 1's pseudo-box legend is a different claim
     # ("what a pseudo box IS") and stays a caption.
     assert any(
-        ":green-badge[green — ground truth]" in str(m.value) for m in at.markdown
+        ":green-badge[green: ground truth]" in str(m.value) for m in at.markdown
     )
     assert not any("orange dashed = a GT box" in caption for caption in page_captions)
     assert any("Blue = a pseudo-label box" in caption for caption in page_captions)
@@ -3889,11 +3889,11 @@ def test_tour_walks_steps_0_and_1(
     assert len(at.image) == 1
     assert any("defeats all five models" in text for text in captions)
     # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
-    assert "Held-out validation frame — never in any training set" in captions
+    assert "Held-out validation frame, never in any training set" in captions
 
     markdowns = [str(block.value) for block in at.markdown]
     # the compact badge legend, under the overlay
-    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    assert any(":green-badge[green: ground truth]" in text for text in markdowns)
     # the derived fact line, each model under its story label: baseline never claims
     # v0's pedestrian (a2); graph_rate_night claims it at conf 0.80 -- a plain `tp`
     # in the table, written out as the words a viewer can read (review M3: the raw
@@ -3906,7 +3906,7 @@ def test_tour_walks_steps_0_and_1(
     )
     # the bridge out of one frame and into the mining steps
     assert any(
-        "Finding one failure is easy — the hard part is finding the rest of the "
+        "Finding one failure is easy. The hard part is finding the rest of the "
         "dataset where the same thing happens." in text
         for text in markdowns
     )
@@ -3969,7 +3969,7 @@ def test_tour_walks_steps_2_to_5(
     # (accel_long_min_mps2 = -7.5) and its near-pedestrian facts (f1 at 5m within
     # 10m, f2 at 20m outside it) -- the situation first, the row as a caption.
     # the lede under the headline, then the event block
-    assert "A model failure isn't just an image — it's a driving situation." in markdowns
+    assert "A model failure isn't just an image. It's a driving situation." in markdowns
     assert "**A hard-braking event**" in markdowns
     assert "The vehicle brakes sharply while pedestrians are nearby." in markdowns
     assert "1 pedestrian within 10 m · closest: 5.0 m" in markdowns
@@ -3993,17 +3993,17 @@ def test_tour_walks_steps_2_to_5(
     assert (
         "The vehicle slows from 36.0 km/h to about 18 km/h while experiencing strong "
         "braking. Combining the camera sequence with vehicle telemetry tells us that this "
-        "is not simply a single image — it is a hard-braking event with pedestrians nearby."
+        "is not simply a single image. It is a hard-braking event with pedestrians nearby."
     ) in markdowns
     # the search result as one hero line (match count, night count), then the
     # SQL/graph parity read from graph_subgraphs/hard_braking_near_pedestrians.json
     # (1/1, True) as a caption -- s1 is a day event, so 0 of them at night
-    assert "**The system found 1 similar driving event — 0 of them at night.**" in markdowns
+    assert "**The system found 1 similar driving event, 0 of them at night.**" in markdowns
     assert any("SQL: 1 · Knowledge graph: 1 ✓" in text for text in captions)
     # the one mechanism sentence: what the search matched on to find those events
     assert (
         "The system doesn't just find images that look similar. It finds driving "
-        "situations that are similar — nighttime conditions, hard braking, and "
+        "situations that are similar: nighttime conditions, hard braking, and "
         "pedestrians near the vehicle."
     ) in markdowns
     # ... closed by the step's takeaway callout
@@ -4024,7 +4024,7 @@ def test_tour_walks_steps_2_to_5(
         text.startswith("Step 4 of 7 · What data should we add?") for text in captions
     )
     assert [str(head.value) for head in at.subheader] == [
-        "Thousands of candidate training frames — which are worth labelling?"
+        "Thousands of candidate training frames: which are worth labelling?"
     ]
     # the lede, straight under the headline: what the system does INSTEAD of
     # randomly adding images (web-frontend-v1 spec §1.2).
@@ -4102,7 +4102,7 @@ def test_tour_walks_steps_2_to_5(
     # the intervention headline -- a claim the composition line under the cards
     # then supports with this package's own night shares
     assert [str(head.value) for head in at.subheader] == [
-        "We did not just add data — we changed what the model trains on."
+        "We did not just add data. We changed what the model trains on."
     ]
     # the fixture arm table: baseline 100 -> graph_rate_night 120 train images, and
     # the arm's own mined-set composition (1 scene, all-night).
@@ -4122,7 +4122,7 @@ def test_tour_walks_steps_2_to_5(
     # the same arm "Graph + night targeting" and the caption under that called it
     # `graph_rate_night`).
     assert (
-        "Graph + night targeting: **100% night** · Random sample — control: "
+        "Graph + night targeting: **100% night** · Random sample (control): "
         "**0% night**" in markdowns
     )
     assert not any("Targeted mining" in text for text in markdowns)
@@ -4134,16 +4134,16 @@ def test_tour_walks_steps_2_to_5(
     assert len(drawn) == 1
     assert list(drawn[0]["strategy"]) == [
         "Baseline (no mined data)",
-        "Random sample — control",
+        "Random sample (control)",
         "Graph + night targeting",
     ]
     assert "Δ night mAP50-95" in _all_y_titles(at)
     # ... tilted like the deep page's arm charts (review M5): five story labels
-    # ("Random sample — control" is 23 characters) collide when drawn flat.
+    # ("Random sample (control)" is 23 characters) collide when drawn flat.
     assert _chart_specs(at)[0]["layer"][0]["encoding"]["x"]["axis"]["labelAngle"] == -45
     # the raw ids stay on screen, in small text under the chart
     assert any(
-        "Baseline (no mined data) (`baseline`) · Random sample — control (`random`) · "
+        "Baseline (no mined data) (`baseline`) · Random sample (control) (`random`) · "
         "Graph + night targeting (`graph_rate_night`)" in text
         for text in captions
     )
@@ -4198,19 +4198,19 @@ def test_tour_walks_steps_2_to_5(
     # the derived before/after callout, read verbatim off the frame's own claim
     # strings: baseline never claims v0's pedestrian (a2), the arm claims it at 0.80.
     assert [str(metric.label) for metric in at.metric] == [
-        "Before — Baseline (no mined data)",
-        "After — Graph + night targeting",
+        "Before: Baseline (no mined data)",
+        "After: Graph + night targeting",
     ]
     assert [str(metric.value) for metric in at.metric] == [
         "pedestrian: none",
         "pedestrian: 0.80",
     ]
     # the compact badge legend, under the two overlays
-    assert any(":green-badge[green — ground truth]" in text for text in markdowns)
+    assert any(":green-badge[green: ground truth]" in text for text in markdowns)
     # tier 1: the frame is labelled as ONE example, not as the result
     # (web-frontend-v1 spec §1.4)
     assert (
-        "One example — one hand-approved frame, illustrative, not the metric" in captions
+        "One example: one hand-approved frame (illustrative, not the metric)" in captions
     )
     # tier 2: the arm-level numbers, under their own lead-in -- the slice the tour
     # diagnosed, stated absolute AND relative (fixture night pedestrian mAP
@@ -4229,11 +4229,11 @@ def test_tour_walks_steps_2_to_5(
         for text in markdowns
     )
     # v0 is a val row in the fixture's frame_manifest, so the held-out line is written
-    assert "Held-out validation frame — never in any training set" in captions
+    assert "Held-out validation frame, never in any training set" in captions
     # the exemplar's upgraded box: baseline never claims v0's pedestrian (a2),
     # graph_rate_night claims it at 0.80 -- now folded behind the technical detail
     # (AppTest walks into expanders, so the table is still reachable here).
-    assert "Technical details — per-box claims" in [
+    assert "Technical details: per-box claims" in [
         str(exp.label) for exp in at.get("expander")
     ]
     tables = [d.value for d in at.dataframe if "arm_claim" in getattr(d.value, "columns", [])]
@@ -4292,14 +4292,14 @@ def test_tour_retrain_step_charts_similarity_mining_when_that_arm_ran(
     captions = [str(caption.value) for caption in at.caption]
     markdowns = [str(block.value) for block in at.markdown]
     assert (
-        "Graph + night targeting: **100% night** · Random sample — control: "
+        "Graph + night targeting: **100% night** · Random sample (control): "
         "**0% night** · Similarity mining: **0% night**" in markdowns
     )
     drawn = _strategy_chart_frames(at)
     assert len(drawn) == 1
     assert list(drawn[0]["strategy"]) == [
         "Baseline (no mined data)",
-        "Random sample — control",
+        "Random sample (control)",
         "Similarity mining",
         "Graph + night targeting",
     ]
@@ -4392,7 +4392,7 @@ def test_tour_retrain_winner_never_crowns_the_baseline(
 
     markdowns = [str(block.value) for block in at.markdown]
     assert (
-        "No intervention beat the baseline on the diagnosed night weakness — the "
+        "No intervention beat the baseline on the diagnosed night weakness; the "
         "closest was **Graph + night targeting** (`graph_rate_night`, -0.0100 "
         "night)." in markdowns
     )
@@ -4560,7 +4560,7 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
     # Every label is a story sentence behind its page name, and none of them
     # hard-codes a count: a static label cannot be re-derived when the package
     # changes, so a number in one would be the only unchecked figure in the tour.
-    assert all(" — " in label for label in links)
+    assert all(": " in label for label in links)
     assert not any(character.isdigit() for label in links for character in label)
 
     # --- Restart -> step 0 ------------------------------------------------------
@@ -4764,7 +4764,7 @@ def test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf(
     assert not at.exception
     markdowns = [str(block.value) for block in at.markdown]
     assert any(
-        "Graph + night targeting: 0.135 (low-confidence — below the 0.40 hit floor; "
+        "Graph + night targeting: 0.135 (low-confidence, below the 0.40 hit floor; "
         "the matching rule still counts it as a hit)" in text
         for text in markdowns
     )
@@ -4786,8 +4786,8 @@ def test_tour_hero_honesty_lines_render_when_the_recovery_is_low_conf(
     assert not at.exception
     markdowns = [str(block.value) for block in at.markdown]
     assert any(
-        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135) "
-        "— counted as a hit by the matching rule, not a confident detection." in text
+        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135): "
+        "counted as a hit by the matching rule, not a confident detection." in text
         for text in markdowns
     )
 
@@ -4828,13 +4828,13 @@ def test_tour_step_4_says_flagship_and_rejected_when_the_frame_really_is(
     assert not at.exception
     markdowns = [str(block.value) for block in at.markdown]
     assert any(
-        "This frame is itself flagship event #2 — the scenario query and the "
+        "This frame is itself flagship event #2: the scenario query and the "
         "selection agree on it." in text
         for text in markdowns
     )
     assert any(
         "Later, the weak-supervision verifier rejected this frame as too crowded to "
-        "label automatically — step 7 shows why that matters." in text
+        "label automatically; step 7 shows why that matters." in text
         for text in markdowns
     )
 
@@ -4876,7 +4876,7 @@ def test_tour_mined_event_caption_says_train_pool_when_the_package_carries_the_f
     assert not at.exception
     captions = [str(c.value) for c in at.caption]
     assert any(
-        "train-pool frame — no predictions (models never saw it as a test image)" in text
+        "train-pool frame: no predictions (models never saw it as a test image)" in text
         for text in captions
     )
     assert not any("not in the curated prediction set" in text for text in captions)

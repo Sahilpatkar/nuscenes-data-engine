@@ -736,8 +736,8 @@ def test_legend_text_is_one_badge_chip_per_legend_item() -> None:
     assert text.count("-badge[") == len(LEGEND_ITEMS)
     for color, wording in LEGEND_ITEMS:
         assert f":{color}-badge[{wording}]" in text
-    assert text.startswith(":green-badge[green — ground truth]")
-    assert "white — true positive" in text and ":gray-badge[" in text
+    assert text.startswith(":green-badge[green: ground truth]")
+    assert "white: true positive" in text and ":gray-badge[" in text
 
     # The legend describes what the OVERLAY draws, and nothing else: a pseudo-label
     # box is not a prediction status (review M4 -- the opt-in pseudo chip this
@@ -750,11 +750,11 @@ def test_legend_text_is_one_badge_chip_per_legend_item() -> None:
 # Each legend entry, by its wording, and the NAME of the overlay style it describes.
 # The guard below reads this as a two-way contract with render.py's own style table.
 _LEGEND_STYLE_NAMES = {
-    "green — ground truth": "STYLE_GT",
-    "orange dashed — GT box the model missed": "STYLE_FN",
-    "white — true positive": "STYLE_TP",
-    "yellow dotted — low-confidence claim (below the hit floor)": "STYLE_LOW_CONF",
-    "red — false positive": "STYLE_FP",
+    "green: ground truth": "STYLE_GT",
+    "orange dashed: GT box the model missed": "STYLE_FN",
+    "white: true positive": "STYLE_TP",
+    "yellow dotted: low-confidence claim (below the hit floor)": "STYLE_LOW_CONF",
+    "red: false positive": "STYLE_FP",
 }
 
 

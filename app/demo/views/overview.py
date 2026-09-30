@@ -1,4 +1,4 @@
-"""Overview — the page that explains the project in seconds (DEMO_PLAN.md §1).
+"""Overview: the page that explains the project in seconds (DEMO_PLAN.md §1).
 
 Phase 9a (spec §4): outcome-first. The page now leads with a CTA into the guided
 tour and the loop strip, keeps only four flagship metrics in the headline row, and
@@ -51,7 +51,7 @@ from data import (
 # re-counted whenever `demo infer` changes how many there are.
 HERO_CAPTION = (
     "baseline misses a shadowed car and a pedestrian; the night-targeted "
-    "retrain recovers the pedestrian (a low-confidence hit) — the far car "
+    "retrain recovers the pedestrian (a low-confidence hit); the far car "
     "defeats all five models. Explore more in the Failure Explorer."
 )
 

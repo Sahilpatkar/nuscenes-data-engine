@@ -89,7 +89,7 @@ SELECTION_CHAIN = [
     "targeted retraining set",
 ]
 EXAMPLE_LABEL = "One example"
-EXAMPLE_CAVEAT = "one hand-approved frame — illustrative, not the metric"
+EXAMPLE_CAVEAT = "one hand-approved frame (illustrative, not the metric)"
 AGGREGATE_LABEL = "The aggregate result"
 CLOSING_THESIS = (
     "Instead of blindly retraining the model, the system diagnoses where it fails, "
@@ -399,7 +399,7 @@ def test_scenario_states_the_event_and_the_search_in_plain_words(
     tour's own words."""
     scenario = bundle["scenario"]
     assert scenario["lede_sentence"] == (
-        "A model failure isn't just an image — it's a driving situation."
+        "A model failure isn't just an image. It's a driving situation."
     )
     assert scenario["event"]["title"] == "A hard-braking event at night"
     assert scenario["event"]["summary"] == (
@@ -416,17 +416,17 @@ def test_scenario_states_the_event_and_the_search_in_plain_words(
     assert scenario["timeline_sentence"] == (
         "The vehicle slows from 26.2 km/h to about 8 km/h while experiencing strong "
         "braking. Combining the camera sequence with vehicle telemetry tells us that this "
-        "is not simply a nighttime image — it is a nighttime hard-braking event with "
+        "is not simply a nighttime image. It is a nighttime hard-braking event with "
         "pedestrians nearby."
     )
     assert scenario["found_sentence"] == (
-        "The system found 30 similar driving events — 6 of them at night."
+        "The system found 30 similar driving events, 6 of them at night."
     )
     assert "night_sentence" not in scenario, "the night count is part of found_sentence"
     assert scenario["parity_caption"] == "SQL: 30 · Knowledge graph: 30 ✓"
     assert scenario["mechanism_sentence"] == (
         "The system doesn't just find images that look similar. It finds driving "
-        "situations that are similar — nighttime conditions, hard braking, and "
+        "situations that are similar: nighttime conditions, hard braking, and "
         "pedestrians near the vehicle."
     )
     assert scenario["takeaway"] == (
@@ -546,3 +546,18 @@ def test_blindspot_headline_is_site_editorial_not_a_tour_twin(
     assert headline not in _source(TOUR_PY), (
         "the tour now says this too — bind the two instead of leaving it site-only"
     )
+
+
+def test_bundle_copy_has_no_em_dashes(bundle: dict[str, dict[str, Any]]) -> None:
+    """The reader-facing copy carries no em dash (decided 2026-09-30): each one was
+    replaced with the punctuation its sentence wanted -- a full stop, a colon, a
+    semicolon, a comma or a parenthesis. The provenance sentences are the app's
+    own (``render.PROVENANCE``) and the report edition does not render them, so
+    they are the one field left out of the sweep."""
+    offenders = [
+        f"{section}: {text}"
+        for section, payload in bundle.items()
+        for text in _strings({key: value for key, value in payload.items() if key != "provenance"})
+        if "\u2014" in text
+    ]
+    assert not offenders, f"em dashes in the bundle copy: {offenders}"

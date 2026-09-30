@@ -25,7 +25,7 @@ const meta = metaJson as Meta;
  * away from the package. Everything that IS a fact — the version, the build date,
  * the commit, the live app's address — is read from `meta.json`.
  */
-const SERIES = "nuScenes Data Engine — Technical report";
+const SERIES = "nuScenes Data Engine · Technical report";
 
 const COVER_TITLE = "From model failure to better training data";
 
@@ -91,7 +91,7 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
                     {reportIndex(entry.step)}
                   </span>
                   <span className="contents-dash" aria-hidden="true">
-                    —
+                    ·
                   </span>
                   <span className="contents-title">{entry.title}</span>
                 </a>

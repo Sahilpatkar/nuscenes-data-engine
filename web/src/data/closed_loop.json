@@ -11,7 +11,7 @@
     {
       "question": "What data did we add?",
       "sentences": [
-        "`graph_rate_night` mined 1,500 frames across 368 scenes, 31% at night — random covered 501 scenes at 13% night; similarity mining covered 219 scenes at 0% night.",
+        "`graph_rate_night` mined 1,500 frames across 368 scenes, 31% at night; random covered 501 scenes at 13% night; similarity mining covered 219 scenes at 0% night.",
         "Visual similarity alone concentrated on daytime appearance (0% night); the graph + night-floor arm explicitly preserved night coverage."
       ]
     },
@@ -30,7 +30,7 @@
         "Weak (VLM-verified) labels kept 18.2% of the ground-truth gain for the `random` pair: 49.7% was lost with the frames the verifier dropped, 32.1% to label noise on the ones it kept.",
         "The verifier kept sparse frames: 3.87 vs 7.61 GT boxes per accepted vs rejected frame (random).",
         "`weak_graph_rate_night` is the worst night result of the 13 arms (-0.0262).",
-        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135) — counted as a hit by the matching rule, not a confident detection."
+        "The hero frame's pedestrian recovery is a low-confidence claim (conf 0.135): counted as a hit by the matching rule, not a confident detection."
       ]
     }
   ],

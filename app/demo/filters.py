@@ -768,7 +768,7 @@ def model_label(model: str) -> str:
 # experimental claim keeps the backticked id it has always carried.
 _ARM_STORY_LABELS: dict[str, str] = {
     "baseline": "Baseline (no mined data)",
-    "random": "Random sample — control",
+    "random": "Random sample (control)",
     "mined": "Similarity mining",
     "rate": "Failure-rate mining",
     "strat": "Stratified mining",
@@ -1058,7 +1058,7 @@ def selection_factors(
         ),
         (
             "Routed failures",
-            "none — not itself a routing target"
+            "none (not itself a routing target)"
             if n_routed == 0
             else f"{n_routed} failure{'' if n_routed == 1 else 's'}, "
             f"mass {float(row['mass_routed']):.1f}",

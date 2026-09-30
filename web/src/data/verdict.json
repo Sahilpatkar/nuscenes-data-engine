@@ -6,10 +6,10 @@
     "category": "pedestrian"
   },
   "callout_labels": {
-    "after": "After — Graph + night targeting",
-    "before": "Before — Baseline (no mined data)"
+    "after": "After: Graph + night targeting",
+    "before": "Before: Baseline (no mined data)"
   },
-  "example_caveat": "one hand-approved frame — illustrative, not the metric",
+  "example_caveat": "one hand-approved frame (illustrative, not the metric)",
   "example_label": "One example",
   "fixed_boxes": [
     {
@@ -21,7 +21,7 @@
     }
   ],
   "headline": "Did the targeted retraining fix the kind of failure we started with?",
-  "held_out_caption": "Held-out validation frame — never in any training set",
+  "held_out_caption": "Held-out validation frame, never in any training set",
   "hero_honesty_line": "The hero frame's pedestrian recovery (step 2) is a low-confidence claim and does not pass this table's confident-detection rule; the hand-approved exemplars do.",
   "images": {
     "arm": {
@@ -44,7 +44,7 @@
         204,
         64
       ],
-      "wording": "green — ground truth"
+      "wording": "green: ground truth"
     },
     {
       "rgb": [
@@ -52,7 +52,7 @@
         133,
         27
       ],
-      "wording": "orange dashed — GT box the model missed"
+      "wording": "orange dashed: GT box the model missed"
     },
     {
       "rgb": [
@@ -60,7 +60,7 @@
         255,
         255
       ],
-      "wording": "white — true positive"
+      "wording": "white: true positive"
     },
     {
       "rgb": [
@@ -68,7 +68,7 @@
         220,
         0
       ],
-      "wording": "yellow dotted — low-confidence claim (below the hit floor)"
+      "wording": "yellow dotted: low-confidence claim (below the hit floor)"
     },
     {
       "rgb": [
@@ -76,7 +76,7 @@
         65,
         54
       ],
-      "wording": "red — false positive"
+      "wording": "red: false positive"
     }
   ],
   "models": {
@@ -91,7 +91,7 @@
   },
   "night_map_sentence": "Night mAP50-95 0.1667 → 0.1768 (+0.0101) on the held-out split.",
   "night_ped_sentence": "Night pedestrian mAP50-95 0.0826 → 0.1171 (+0.0345 absolute, +41.8% relative)",
-  "per_box_fold_label": "Technical details — per-box claims",
+  "per_box_fold_label": "Technical details: per-box claims",
   "provenance": [
     {
       "detail": "per-box claims from predictions.parquet",

@@ -43,11 +43,11 @@
     {
       "flag": null,
       "label": "Routed failures",
-      "value": "none — not itself a routing target"
+      "value": "none (not itself a routing target)"
     }
   ],
   "flagship_rank_sentence": null,
-  "headline": "Thousands of candidate training frames — which are worth labelling?",
+  "headline": "Thousands of candidate training frames: which are worth labelling?",
   "image": {
     "alt": "A candidate training-pool frame with its ground-truth boxes drawn on it.",
     "height": 540,
@@ -55,7 +55,7 @@
     "width": 960
   },
   "lede_sentence": "More training data isn't necessarily better training data. Instead of randomly adding images, the system searches for examples that specifically address the weakness we found.",
-  "mechanism_sentence": "Nothing about this frame on its own selected it: its community carried failure mass, that mass bought the community a quota, the frame ranked high enough inside it by similarity — and a night floor takes 375 night frames first.",
+  "mechanism_sentence": "Nothing about this frame on its own selected it: its community carried failure mass, that mass bought the community a quota, the frame ranked high enough inside it by similarity, and a night floor takes 375 night frames first.",
   "provenance": [
     {
       "detail": "demo al-explain reproduced the run: 1,500 frames, 97 communities",
@@ -71,6 +71,6 @@
   ],
   "selection_path": "failed val frame → similarity community → representative train-pool frames → selected for retraining",
   "token": "00740c25baf64f12a411963aadb5c81c",
-  "train_pool_note": "train-pool frame — no predictions (models never saw it as a test image)",
+  "train_pool_note": "train-pool frame: no predictions (models never saw it as a test image)",
   "weak_rejected_sentence": null
 }

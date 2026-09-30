@@ -336,3 +336,16 @@ def test_cover_dek_is_the_root_documents_description() -> None:
     )
     assert dek == description
     assert og_description == description
+
+
+def test_report_edition_chrome_has_no_em_dashes() -> None:
+    """The edition's own chrome (figure labels, the running head, the contents
+    list, the cover's series line, the attribution) separates with a full stop, a
+    colon or a middle dot -- never an em dash (decided 2026-09-30). Checked on the
+    comment-stripped sources, so prose ABOUT the old separator does not count,
+    and on the root document's titles."""
+    offenders = [str(path.relative_to(SITE_SRC)) for path in _v2_tsx() if "\u2014" in _code(path)]
+    assert not offenders, f"em dashes in the report edition's components: {offenders}"
+    document = _source(WEB / "index.html")
+    titles = re.findall(r"<title>([^<]*)</title>|og:title\" content=\"([^\"]*)\"", document)
+    assert titles and not any("\u2014" in "".join(match) for match in titles), titles

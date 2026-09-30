@@ -1,4 +1,4 @@
-"""Guided tour — the demo's default 2-3 minute path through the loop (Phase 9a,
+"""Guided tour: the demo's default 2-3 minute path through the loop (Phase 9a,
 docs/superpowers/specs/2026-08-22-demo-phase9a-design.md §1), retold as *problem →
 intervention → impact* by Phase 10
 (docs/superpowers/specs/2026-08-23-demo-phase10-design.md §2): the page itself
@@ -120,7 +120,7 @@ _EXPLAIN_ABSENT_NOTE = (
 _EXPLAIN_FRAME_ABSENT_NOTE = (
     "this frame is not in the staged selection facts — re-run `demo al-explain`"
 )
-_TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
+_TRAIN_POOL_NOTE = "train-pool frame: no predictions (models never saw it as a test image)"
 # Step 0: the three-beat opening the story site opens on too (web-frontend-v1 spec
 # §1.1: plain-language problem → the numbers → what the system is FOR). Both
 # sentences are copied from that spec rather than imported: `web/build_data.py`
@@ -146,9 +146,9 @@ def _miss_sentence(n_night_fn: int, n_night: int) -> str:
     )
 # Step 1: what the frame IS (written only where the manifest says so), and the
 # question it hands to the mining steps.
-_HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
+_HELD_OUT_CAPTION = "Held-out validation frame, never in any training set"
 _BRIDGE_TO_MINING = (
-    "Finding one failure is easy — the hard part is finding the rest of the dataset "
+    "Finding one failure is easy. The hard part is finding the rest of the dataset "
     "where the same thing happens."
 )
 # Step 2: the one sentence that says what the scenario search matches ON. The
@@ -156,7 +156,7 @@ _BRIDGE_TO_MINING = (
 # failure recurs; this is the mechanism that found them.
 _MINING_MECHANISM = (
     "The system doesn't just find images that look similar. It finds driving "
-    "situations that are similar — nighttime conditions, hard braking, and "
+    "situations that are similar: nighttime conditions, hard braking, and "
     "pedestrians near the vehicle."
 )
 
@@ -164,7 +164,7 @@ _MINING_MECHANISM = (
 # copy. Every figure in it is the event's own; the fixed words describe the fixed
 # flagship preset (`_TOUR_PRESET`, hard braking near pedestrians) and nothing else.
 # `web/build_data.py` mirrors each helper by name so the site says the same thing.
-_SCENARIO_LEDE = "A model failure isn't just an image — it's a driving situation."
+_SCENARIO_LEDE = "A model failure isn't just an image. It's a driving situation."
 _TIMELINE_LEDE = (
     "Instead of analyzing one image, we reconstruct what was happening around it."
 )
@@ -225,7 +225,7 @@ def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) ->
     peds = " with pedestrians nearby" if n_peds > 0 else ""
     parts.append(
         "Combining the camera sequence with vehicle telemetry tells us that this is not "
-        f"simply {image} — it is {event}{peds}."
+        f"simply {image}. It is {event}{peds}."
     )
     return " ".join(parts)
 
@@ -234,7 +234,7 @@ def _found_sentence(n_events: int, n_night: int) -> str:
     """The search result as one hero line: the match count, and how many of them
     were at night."""
     return (
-        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'} — "
+        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}, "
         f"{n_night} of them at night."
     )
 
@@ -267,7 +267,7 @@ _ARCHITECTURE_STRIP = (
 # claim about COMPOSITION -- the line under the cards has to support it out of this
 # package's own night shares, or the headline would be the one sentence on the step
 # nothing computed.
-_RETRAIN_HEADLINE = "We did not just add data — we changed what the model trains on."
+_RETRAIN_HEADLINE = "We did not just add data. We changed what the model trains on."
 _STRATEGY_CHART_TITLE = "Night mAP50-95 vs baseline, by acquisition strategy"
 # What the fairness statement promises, minus the budget clause (which is written
 # only when the charted arms really did share a training-set size) and minus the
@@ -289,12 +289,12 @@ _NIGHT_ABSENT_SHARE = 0.005
 # pictures that answer it -- and the fold the per-box evidence sits in, so the screen
 # reads as an answer rather than as a table.
 _AFTER_HEADLINE = "Did the targeted retraining fix the kind of failure we started with?"
-_PER_BOX_FOLD = "Technical details — per-box claims"
+_PER_BOX_FOLD = "Technical details: per-box claims"
 # The two evidence tiers (web-frontend-v1 spec §1.4): the frame is labelled as ONE
 # example before it is shown, and the arm-level numbers under it are labelled as
 # the result -- the structure itself answers "did you just pick a flattering
 # image?", rather than a caveat sentence somewhere below having to.
-_ONE_EXAMPLE_TIER = "One example — one hand-approved frame, illustrative, not the metric"
+_ONE_EXAMPLE_TIER = "One example: one hand-approved frame (illustrative, not the metric)"
 _AGGREGATE_TIER = "**The aggregate result:**"
 
 _NO_EXEMPLAR_NOTE = "no exemplar frames in this package"
@@ -512,7 +512,7 @@ def _claim_text(preds: pd.DataFrame, *, token: str, model: str, annotation: str)
     conf, status = claim
     if status == "low_conf":
         return (
-            f"{conf:.3f} (low-confidence — below the {_CONF_HIT_FLOOR:.2f} hit floor; "
+            f"{conf:.3f} (low-confidence, below the {_CONF_HIT_FLOOR:.2f} hit floor; "
             "the matching rule still counts it as a hit)"
         )
     if status == "tp":
@@ -541,7 +541,7 @@ def _pedestrian_facts(
             )
             for model in models
         )
-        lines.append(f"**Pedestrian{where}** — {claims}")
+        lines.append(f"**Pedestrian{where}** · {claims}")
     return lines
 
 
@@ -869,7 +869,7 @@ def _render_why_selected(data: _TourData) -> None:
         return
     token, scale = chosen
 
-    st.subheader("Thousands of candidate training frames — which are worth labelling?")
+    st.subheader("Thousands of candidate training frames: which are worth labelling?")
     st.markdown(_LEDE_SENTENCE)
     frame_row = data.manifest.loc[data.manifest["sample_data_token"] == token].iloc[0]
     gt_rows = visible_gt(data.gt, token)
@@ -928,19 +928,19 @@ def _render_why_selected(data: _TourData) -> None:
         st.markdown(
             f"Nothing about this frame on its own selected it: its community carried "
             f"failure mass, that mass bought the community a quota, the frame ranked "
-            f"high enough inside it by similarity — and {floor_text}."
+            f"high enough inside it by similarity, and {floor_text}."
         )
 
     rank = _flagship_rank(data, token)
     if rank is not None:
         st.markdown(
-            f"This frame is itself flagship event #{rank} — the scenario query and the "
+            f"This frame is itself flagship event #{rank}: the scenario query and the "
             "selection agree on it."
         )
     if str(frame_row.get("weak_verdict")) == "rejected":
         st.markdown(
             "Later, the weak-supervision verifier rejected this frame as too crowded to "
-            "label automatically — step 7 shows why that matters."
+            "label automatically; step 7 shows why that matters."
         )
     n_selected = int(data.validation.get("n_selected", len(data.explain)))
     provenance(
@@ -1021,7 +1021,7 @@ def _fairness_parts(coverage: pd.DataFrame, *, baseline: str) -> tuple[list[str]
         else "same budget"
     )
     clauses = ["Same detector", budget, *_FAIRNESS_TAIL.split(" · ")]
-    # "Random sample", not the chart's own "Random sample — control" label: the
+    # "Random sample", not the chart's own "Random sample (control)" label: the
     # clause would otherwise read "... — control is the control".
     control = (
         _FAIRNESS_CONTROL if "random" in {str(name) for name in coverage["arm"]} else None
@@ -1069,7 +1069,7 @@ def _best_night_arm_sentence(arms: pd.DataFrame, *, baseline: str) -> str | None
     name, delta = str(best["arm"]), float(best["delta_night"])
     if delta <= 0:
         return (
-            f"No intervention beat the baseline on the diagnosed night weakness — "
+            f"No intervention beat the baseline on the diagnosed night weakness; "
             f"the closest was **{arm_story_label(name)}** (`{name}`, {delta:+.4f} night)."
         )
     return (
@@ -1122,7 +1122,7 @@ def _scene_diversity_sentence(base_row: pd.Series, arm_row: pd.Series) -> str | 
         subject = "The mined frames"
     sentence = f"{subject} came from {scenes:,} scene{'' if scenes == 1 else 's'}"
     if scenes > 1:
-        sentence += " — targeted, but not near-duplicates of one scene"
+        sentence += ": targeted, but not near-duplicates of one scene"
     return sentence + "."
 
 
@@ -1202,7 +1202,7 @@ def _render_retrain(data: _TourData) -> None:
             title=_STRATEGY_CHART_TITLE,
             y_title="Δ night mAP50-95",
             # The same tilt the deep page's arm charts use (consolidated review
-            # M5): five story labels ("Random sample — control" is 23 characters)
+            # M5): five story labels ("Random sample (control)" is 23 characters)
             # crowd a chart this narrow, and `bar_chart` never drops or truncates a
             # label -- so drawn flat they would overlap instead.
             label_angle=-45,
@@ -1324,8 +1324,8 @@ def _render_after(data: _TourData) -> None:
         category, before, after = callout
         metric_cards(
             [
-                (f"Before — {arm_story_label(data.baseline)}", f"{category}: {before}"),
-                (f"After — {arm_story_label(arm)}", f"{category}: {after}"),
+                (f"Before: {arm_story_label(data.baseline)}", f"{category}: {before}"),
+                (f"After: {arm_story_label(arm)}", f"{category}: {after}"),
             ],
             per_row=2,
         )
@@ -1494,7 +1494,7 @@ def _result_data_added(data: _TourData) -> None:
         if clause is not None
     ]
     if clauses:
-        sentence += " — " + "; ".join(clauses)
+        sentence += "; " + "; ".join(clauses)
     st.markdown(sentence + ".")
     # What the comparator clause above leaves unexplained: WHY the similarity arm's
     # set looks like that. Written from the same helper step 4 captions, so the two
@@ -1619,7 +1619,7 @@ def _result_failures(data: _TourData) -> None:
     if hero_conf is not None:
         st.markdown(
             f"The hero frame's pedestrian recovery is a low-confidence claim "
-            f"(conf {hero_conf:.3f}) — counted as a hit by the matching rule, not a "
+            f"(conf {hero_conf:.3f}): counted as a hit by the matching rule, not a "
             "confident detection."
         )
         provenance("recomputed", "claim confidence from predictions.parquet")
@@ -1738,21 +1738,21 @@ _STEPS: tuple[_Step, ...] = (
         title="We found a blind spot",
         stage="Diagnose",
         render=_render_weakness,
-        links=(("failures", "Failure Explorer — see every night frame the baseline missed"),),
+        links=(("failures", "Failure Explorer: see every night frame the baseline missed"),),
     ),
     _Step(
         key="missed_pedestrian",
         title="What the failure looks like",
         stage="Diagnose",
         render=_render_missed_pedestrian,
-        links=(("failures", "Failure Explorer — inspect this failure on every val frame"),),
+        links=(("failures", "Failure Explorer: inspect this failure on every val frame"),),
     ),
     _Step(
         key="mine",
         title="Where else does this happen?",
         stage="Mine",
         render=_render_mine,
-        links=(("scenarios", "Scenario Search — find every braking-near-pedestrian event"),),
+        links=(("scenarios", "Scenario Search: find every braking-near-pedestrian event"),),
     ),
     _Step(
         key="why_selected",
@@ -1760,7 +1760,7 @@ _STEPS: tuple[_Step, ...] = (
         stage="Mine",
         render=_render_why_selected,
         links=(
-            ("active_learning", "Active Learning — inspect the full mined set and its communities"),
+            ("active_learning", "Active Learning: inspect the full mined set and its communities"),
         ),
     ),
     _Step(
@@ -1768,14 +1768,14 @@ _STEPS: tuple[_Step, ...] = (
         title="We changed the training data",
         stage="Train",
         render=_render_retrain,
-        links=(("active_learning", "Active Learning — every arm, its quotas and the full table"),),
+        links=(("active_learning", "Active Learning: every arm, its quotas and the full table"),),
     ),
     _Step(
         key="after",
         title="Did it fix the failure?",
         stage="Evaluate",
         render=_render_after,
-        links=(("active_learning", "Active Learning — every hand-approved before/after frame"),),
+        links=(("active_learning", "Active Learning: every hand-approved before/after frame"),),
     ),
     _Step(
         key="result",
@@ -1788,12 +1788,12 @@ _STEPS: tuple[_Step, ...] = (
         # count: a static label is the one string on the screen nothing recomputes,
         # so a number in one would be the only unchecked figure in the tour.
         links=(
-            ("overview", "Overview — the headline results in one screen"),
-            ("failures", "Failure Explorer — every miss, filterable by condition"),
-            ("scenarios", "Scenario Search — every preset, every matching event"),
-            ("active_learning", "Active Learning — the full experiment, all arms"),
-            ("weak_supervision", "Weak Supervision — where the rest of the gain went"),
-            ("chat_replay", "Ask the Dataset — recorded chat replays"),
+            ("overview", "Overview: the headline results in one screen"),
+            ("failures", "Failure Explorer: every miss, filterable by condition"),
+            ("scenarios", "Scenario Search: every preset, every matching event"),
+            ("active_learning", "Active Learning: the full experiment, all arms"),
+            ("weak_supervision", "Weak Supervision: where the rest of the gain went"),
+            ("chat_replay", "Ask the Dataset: recorded chat replays"),
         ),
     ),
 )
@@ -1814,7 +1814,7 @@ def _current_step() -> int:
 
 # At most three "Go deeper" links per row: the result screen carries six, and six
 # st.columns across the content width left each page_link ~150 px for a label like
-# "Active Learning — inspect the full mined set and its communities", which wrapped
+# "Active Learning: inspect the full mined set and its communities", which wrapped
 # to four lines of two words (Phase 9a review 5a). Rows of three give every label
 # the width of two of the old columns; a step with one or two links still gets a
 # single row.

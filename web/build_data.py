@@ -95,14 +95,14 @@ _CONF_HIT_FLOOR = 0.40
 _NIGHT_ABSENT_SHARE = 0.005
 _FAIRNESS_TAIL = "same training configuration · scored on the same held-out split"
 
-_HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
+_HELD_OUT_CAPTION = "Held-out validation frame, never in any training set"
 _BRIDGE_TO_MINING = (
-    "Finding one failure is easy — the hard part is finding the rest of the dataset "
+    "Finding one failure is easy. The hard part is finding the rest of the dataset "
     "where the same thing happens."
 )
 _MINING_MECHANISM = (
     "The system doesn't just find images that look similar. It finds driving "
-    "situations that are similar — nighttime conditions, hard braking, and "
+    "situations that are similar: nighttime conditions, hard braking, and "
     "pedestrians near the vehicle."
 )
 _SELECTION_PATH = (
@@ -113,12 +113,12 @@ _ARCHITECTURE_STRIP = (
     "System path: nuScenes → validated Parquet → SQL / Neo4j / CAN → failure analysis "
     "→ scenario search → active learning → YOLO retraining → evaluation"
 )
-_TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
-_RETRAIN_HEADLINE = "We did not just add data — we changed what the model trains on."
+_TRAIN_POOL_NOTE = "train-pool frame: no predictions (models never saw it as a test image)"
+_RETRAIN_HEADLINE = "We did not just add data. We changed what the model trains on."
 _STRATEGY_CHART_TITLE = "Night mAP50-95 vs baseline, by acquisition strategy"
 _STRATEGY_CHART_Y_TITLE = "Δ night mAP50-95"
 _AFTER_HEADLINE = "Did the targeted retraining fix the kind of failure we started with?"
-_PER_BOX_FOLD = "Technical details — per-box claims"
+_PER_BOX_FOLD = "Technical details: per-box claims"
 _HERO_HONESTY_LINE = (
     "The hero frame's pedestrian recovery (step 2) is a low-confidence claim and does "
     "not pass this table's confident-detection rule; the hand-approved exemplars do."
@@ -127,7 +127,7 @@ _CLOSED_LOOP_IMPROVED = "Closed the loop: weakness → targeted data → measura
 _CLOSED_LOOP_MEASURED = "Closed the loop: weakness → targeted data → measured result"
 _HERO_CAPTION = (
     "baseline misses a shadowed car and a pedestrian; the night-targeted "
-    "retrain recovers the pedestrian (a low-confidence hit) — the far car "
+    "retrain recovers the pedestrian (a low-confidence hit); the far car "
     "defeats all five models. Explore more in the Failure Explorer."
 )
 
@@ -158,7 +158,7 @@ _SELECTION_CHAIN = (
     "targeted retraining set",
 )
 _EXAMPLE_LABEL = "One example"
-_EXAMPLE_CAVEAT = "one hand-approved frame — illustrative, not the metric"
+_EXAMPLE_CAVEAT = "one hand-approved frame (illustrative, not the metric)"
 _AGGREGATE_LABEL = "The aggregate result"
 _CLOSING_THESIS = (
     "Instead of blindly retraining the model, the system diagnoses where it fails, "
@@ -175,12 +175,12 @@ EXPORTER_NAME = "web/build_data.py"
 # clause" label shape. No digits in a label: a static string is the one thing on
 # the page nothing recomputes, so a count in one would be the only unchecked figure.
 _DEEP_LINKS: tuple[tuple[str, str], ...] = (
-    ("tour", "Guided tour — the same story, one screen at a time in the live app"),
-    ("failures", "Failure Explorer — every miss, filterable by condition"),
-    ("scenarios", "Scenario Search — every preset, every matching event"),
-    ("active_learning", "Active Learning — the full experiment, all arms"),
-    ("weak_supervision", "Weak Supervision — where the rest of the gain went"),
-    ("chat_replay", "Ask the Dataset — recorded chat replays"),
+    ("tour", "Guided tour: the same story, one screen at a time in the live app"),
+    ("failures", "Failure Explorer: every miss, filterable by condition"),
+    ("scenarios", "Scenario Search: every preset, every matching event"),
+    ("active_learning", "Active Learning: the full experiment, all arms"),
+    ("weak_supervision", "Weak Supervision: where the rest of the gain went"),
+    ("chat_replay", "Ask the Dataset: recorded chat replays"),
 )
 
 _ATTRIBUTION = {
@@ -196,11 +196,11 @@ _ATTRIBUTION = {
 # to be these exact RGBs rather than theme tokens. Keyed off render.LEGEND_ITEMS so
 # the wording stays the app's.
 _LEGEND_RGB = {
-    "green — ground truth": STYLE_GT.color,
-    "orange dashed — GT box the model missed": STYLE_FN.color,
-    "white — true positive": STYLE_TP.color,
-    "yellow dotted — low-confidence claim (below the hit floor)": STYLE_LOW_CONF.color,
-    "red — false positive": STYLE_FP.color,
+    "green: ground truth": STYLE_GT.color,
+    "orange dashed: GT box the model missed": STYLE_FN.color,
+    "white: true positive": STYLE_TP.color,
+    "yellow dotted: low-confidence claim (below the hit floor)": STYLE_LOW_CONF.color,
+    "red: false positive": STYLE_FP.color,
 }
 
 _CROP_SCALE = 0.6
@@ -490,7 +490,7 @@ def _claim_text(package: Package, *, token: str, model: str, annotation: str) ->
     conf, status = claim
     if status == "low_conf":
         return (
-            f"{conf:.3f} (low-confidence — below the {_CONF_HIT_FLOOR:.2f} hit floor; "
+            f"{conf:.3f} (low-confidence, below the {_CONF_HIT_FLOOR:.2f} hit floor; "
             "the matching rule still counts it as a hit)"
         )
     if status == "tp":
@@ -604,7 +604,7 @@ def build_hero_frame(package: Package, writer: Writer) -> dict[str, Any]:
 
 # Step 3's reader-facing copy -- each helper mirrors its ``views/tour.py`` twin by
 # name, so the site and the tour say the same thing about the same event.
-_SCENARIO_LEDE = "A model failure isn't just an image — it's a driving situation."
+_SCENARIO_LEDE = "A model failure isn't just an image. It's a driving situation."
 _TIMELINE_LEDE = (
     "Instead of analyzing one image, we reconstruct what was happening around it."
 )
@@ -662,7 +662,7 @@ def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) ->
     peds = " with pedestrians nearby" if n_peds > 0 else ""
     parts.append(
         "Combining the camera sequence with vehicle telemetry tells us that this is not "
-        f"simply {image} — it is {event}{peds}."
+        f"simply {image}. It is {event}{peds}."
     )
     return " ".join(parts)
 
@@ -670,7 +670,7 @@ def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) ->
 def _found_sentence(n_events: int, n_night: int) -> str:
     """``views/tour.py::_found_sentence`` -- the search result as one hero line."""
     return (
-        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'} — "
+        f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}, "
         f"{n_night} of them at night."
     )
 
@@ -822,11 +822,11 @@ def build_why_frame(package: Package, writer: Writer) -> dict[str, Any]:
             None
             if rank is None
             else (
-                f"This frame is itself flagship event #{rank} — the scenario query and "
+                f"This frame is itself flagship event #{rank}: the scenario query and "
                 "the selection agree on it."
             )
         ),
-        "headline": "Thousands of candidate training frames — which are worth labelling?",
+        "headline": "Thousands of candidate training frames: which are worth labelling?",
         "image": writer.image(
             _overlay(package, token=token, model=package.arm, mode="gt", gt_rows=gt_rows),
             name="selected-frame",
@@ -838,7 +838,7 @@ def build_why_frame(package: Package, writer: Writer) -> dict[str, Any]:
         "mechanism_sentence": (
             "Nothing about this frame on its own selected it: its community carried "
             "failure mass, that mass bought the community a quota, the frame ranked "
-            f"high enough inside it by similarity — and {floor_text}."
+            f"high enough inside it by similarity, and {floor_text}."
         ),
         "provenance": [
             _provenance(
@@ -855,7 +855,7 @@ def build_why_frame(package: Package, writer: Writer) -> dict[str, Any]:
         ),
         "weak_rejected_sentence": (
             "Later, the weak-supervision verifier rejected this frame as too crowded to "
-            "label automatically — step 7 shows why that matters."
+            "label automatically; step 7 shows why that matters."
             if str(frame_row.get("weak_verdict")) == "rejected"
             else None
         ),
@@ -908,9 +908,9 @@ def _fairness_parts(coverage: pd.DataFrame, *, baseline: str) -> list[str]:
 
 def _fairness_sentence(parts: list[str], *, has_control: bool) -> str:
     """The clauses rejoined exactly as the tour joins them: " · " between the
-    held-constant clauses, an em dash before the control clause."""
+    held-constant clauses, a semicolon before the control clause."""
     if has_control:
-        return " · ".join(parts[:-1]) + f" — {parts[-1]}."
+        return " · ".join(parts[:-1]) + f"; {parts[-1]}."
     return " · ".join(parts) + "."
 
 
@@ -925,7 +925,7 @@ def _best_night_arm_sentence(package: Package) -> str | None:
     name, delta = str(best["arm"]), float(best["delta_night"])
     if delta <= 0:
         return (
-            "No intervention beat the baseline on the diagnosed night weakness — "
+            "No intervention beat the baseline on the diagnosed night weakness; "
             f"the closest was {arm_story_label(name)} (`{name}`, {delta:+.4f} night)."
         )
     return (
@@ -964,7 +964,7 @@ def _scene_diversity_sentence(base_row: pd.Series, arm_row: pd.Series) -> str | 
         subject = "The mined frames"
     sentence = f"{subject} came from {_count(scenes)} scene{'' if scenes == 1 else 's'}"
     if scenes > 1:
-        sentence += " — targeted, but not near-duplicates of one scene"
+        sentence += ": targeted, but not near-duplicates of one scene"
     return sentence + "."
 
 
@@ -1115,8 +1115,8 @@ def build_verdict(package: Package, writer: Writer) -> dict[str, Any]:
             else {"category": callout[0], "before": callout[1], "after": callout[2]}
         ),
         "callout_labels": {
-            "after": f"After — {arm_story_label(package.arm)}",
-            "before": f"Before — {arm_story_label(package.baseline)}",
+            "after": f"After: {arm_story_label(package.arm)}",
+            "before": f"Before: {arm_story_label(package.baseline)}",
         },
         "example_caveat": _EXAMPLE_CAVEAT,
         "example_label": _EXAMPLE_LABEL,
@@ -1245,7 +1245,7 @@ def _answer_data_added(package: Package) -> list[str]:
         if clause is not None
     ]
     if clauses:
-        sentence += " — " + "; ".join(clauses)
+        sentence += "; " + "; ".join(clauses)
     sentences = [sentence + "."]
     similarity = _similarity_sentence(package.arms)
     if similarity is not None:
@@ -1315,7 +1315,7 @@ def _answer_failures(package: Package) -> list[str]:
     if hero_conf is not None:
         sentences.append(
             f"The hero frame's pedestrian recovery is a low-confidence claim "
-            f"(conf {hero_conf:.3f}) — counted as a hit by the matching rule, not a "
+            f"(conf {hero_conf:.3f}): counted as a hit by the matching rule, not a "
             "confident detection."
         )
     return sentences
