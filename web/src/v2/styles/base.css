@@ -439,11 +439,6 @@ a:hover {
   margin-top: 1rem;
 }
 
-.cover-tagline {
-  margin-top: 0.5rem;
-  color: var(--muted);
-}
-
 .cover-title {
   margin-top: 0.55rem;
 }
@@ -1742,3 +1737,242 @@ a:hover {
     transform: translateX(3px);
   }
 }
+
+
+/* =============================================================================
+   V4 — THE CASE-STUDY SYSTEM (2026-10-01). Loaded last, so it wins the cascade.
+
+   Three voices, each with one job: the serif for headings only; the sans for
+   body, labels, captions and numbers; the mono for code, model and config
+   identifiers only. No italics. No boxed badges. The accent is spent on results,
+   emphasis and interactive elements only.
+   ============================================================================= */
+
+:root {
+  --space-section: clamp(2.4rem, 5vw, 4rem);
+}
+
+/* body voice for the lede and every caption: upright, sans */
+.lede {
+  font-family: var(--body);
+  font-style: normal;
+  font-weight: 500;
+  font-size: clamp(1.06rem, 1.4vw, 1.18rem);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.figure-caption {
+  font-family: var(--body);
+  font-style: normal;
+  font-size: 0.88rem;
+}
+
+.small {
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* indices and figure numbers are labels, not identifiers: sans, and muted */
+.section-index,
+.figure-number,
+.contents-index,
+.header-readout-index {
+  font-family: var(--body);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cover-dateline {
+  font-family: var(--body);
+  font-size: 0.86rem;
+}
+
+/* charts: axis ticks, step names and values are numbers and labels */
+.chart-title,
+.chart-tick,
+.chart-step,
+.chart-value {
+  font-family: var(--body);
+}
+
+/* identifiers keep the mono, without a box around them */
+.tick {
+  padding: 0;
+  background: none;
+}
+
+/* the overlay legend reads as a key, not a row of badges */
+.legend-chip {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--body);
+  font-size: 0.8rem;
+}
+
+.legend-swatch {
+  outline: 1px solid var(--line);
+}
+
+/* folds: a sans disclosure in the accent (it is interactive) */
+.fold > summary {
+  font-family: var(--body);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.factors dt,
+.chain-num {
+  font-family: var(--body);
+}
+
+/* chains: hairlines only, no filled band; stage names are labels */
+.chain-band {
+  background: none;
+  padding-block: 1rem;
+}
+
+.chain-text {
+  font-family: var(--body);
+  font-size: 0.98rem;
+}
+
+.chain-step::after {
+  font-family: var(--body);
+}
+
+.chain-band + .chain-band {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* ── the cover: the title on one line at desktop width ─────────────────────── */
+.cover .page {
+  max-width: calc(var(--figure-max) + 2 * var(--gutter));
+}
+
+.cover-title {
+  max-width: none;
+  font-size: clamp(1.7rem, 2.75vw, 2.15rem);
+}
+
+.cover-contents,
+.cover-dek {
+  max-width: var(--measure);
+}
+
+/* ── labelled facts, the design table, limitations ─────────────────────────── */
+.fact-list {
+  display: grid;
+  gap: 0;
+  margin: 0.4rem 0 0;
+  max-width: var(--measure);
+}
+
+.fact-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 13rem) 1fr;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.fact-row:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.fact-row dt {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.fact-row dd {
+  margin: 0;
+}
+
+.fact-row.is-accent dd {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .fact-row {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+}
+
+.design {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: clamp(1.6rem, 3.5vw, 2.2rem);
+}
+
+.design-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93rem;
+}
+
+.design-table th,
+.design-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5rem 0.9rem 0.5rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.design-table thead td {
+  border-top: 0;
+}
+
+@media (min-width: 561px) {
+  .design-table tbody th {
+    width: 11rem;
+  }
+}
+
+.design-table thead th {
+  border-top: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.design-table tbody th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.design-table tbody tr:last-child > * {
+  border-bottom: 1px solid var(--line);
+}
+
+.goal {
+  font-weight: 600;
+}
+
+.limitations {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.limitation-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.fold-figure {
+  display: grid;
+  gap: 0.5rem;
+}
+

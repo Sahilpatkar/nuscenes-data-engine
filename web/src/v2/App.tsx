@@ -4,129 +4,86 @@ import { Colophon } from "./components/Colophon";
 import { Cover, type CoverEntry } from "./components/Cover";
 import { Header } from "./components/Header";
 import { SectionFrame } from "./components/SectionFrame";
-/* The section components share their names with the bundle interfaces below
-   (both are named for the step they belong to), so each is aliased once here. */
-import { Blindspot as BlindspotSection } from "./sections/Blindspot";
-import { ClosedLoop as ClosedLoopSection } from "./sections/ClosedLoop";
+import { Baseline } from "./sections/Baseline";
+import { Example } from "./sections/Example";
 import { Intervention as InterventionSection } from "./sections/Intervention";
-import { MissedPedestrian as MissedPedestrianSection } from "./sections/MissedPedestrian";
-import { Scenario as ScenarioSection } from "./sections/Scenario";
-import { Verdict as VerdictSection } from "./sections/Verdict";
-import { WhyFrame as WhyFrameSection } from "./sections/WhyFrame";
+import { Mining } from "./sections/Mining";
+import { Results } from "./sections/Results";
+import { Selection } from "./sections/Selection";
 
-import blindspotJson from "../data/blindspot.json";
-import closedLoopJson from "../data/closed_loop.json";
 import heroFrameJson from "../data/hero_frame.json";
 import interventionJson from "../data/intervention.json";
+import reportJson from "../data/report.json";
 import scenarioJson from "../data/scenario.json";
 import verdictJson from "../data/verdict.json";
 import whyFrameJson from "../data/why_frame.json";
 
-import type {
-  Blindspot,
-  ClosedLoop,
-  HeroFrame,
-  Intervention,
-  Scenario,
-  Verdict,
-  WhyFrame,
-} from "../data/types";
+import type { HeroFrame, Intervention, Report, Scenario, Verdict, WhyFrame } from "../data/types";
 
-/* The bundle — the SAME eight files the original edition reads, so the two editions
-   cannot disagree on a number. The JSON's inferred types are widened (a `kind`
-   field is `string`, not the union), so each import is asserted into its exported
-   interface once, here, and never re-typed downstream. `meta.json` is read by the
-   cover (the package stamp, the live app's address) and the end matter (the
-   dataset attribution), which are the only places its facts appear. */
-const blindspot = blindspotJson as Blindspot;
+/* The bundle. `report.json` is this edition's own copy (every sentence and label
+   the report states, each figure derived at export); the other files supply the
+   images, the filmstrip, the strategy chart and the selection facts it shares
+   with the original edition. Each import is asserted into its interface once. */
+const report = reportJson as Report;
 const heroFrame = heroFrameJson as HeroFrame;
 const scenario = scenarioJson as Scenario;
 const whyFrame = whyFrameJson as WhyFrame;
 const intervention = interventionJson as Intervention;
 const verdict = verdictJson as Verdict;
-const closedLoop = closedLoopJson as ClosedLoop;
 
-interface StorySection {
-  /** The anchor — also the contents target and the section's `id`. */
+interface ReportSection {
+  /** The anchor: the contents target and the section's `id`. */
   id: string;
   step: number;
-  /** The step's fixed title, mirroring the live tour's own step titles. */
+  /** What the section does, stated technically. */
   title: string;
-  /** The closed-improvement-loop stage this step lights. */
-  stage: string;
-  /** The deck's act, so both tellings are structured the same way. */
-  act: string;
-  /** The section's own content: its ledes, figures, charts and evidence. */
   body: ReactNode;
 }
 
-/* The seven steps, in story order. Titles and stages are the live tour's own
-   (app/demo/views/tour.py `_STEPS`), typed out here a second time exactly as the
-   original edition types them: three front-ends, one set of names, pinned by test.
-   The ids are the original edition's too, so an anchor written for one edition means
-   the same section in the other. */
-const SECTIONS: readonly StorySection[] = [
+/* The six sections of the case study, in reading order: what fails, what it
+   looks like, how related scenarios are found, how training data is chosen,
+   what changed, and whether it worked. The report's own titles (the guided tour
+   keeps its conversational seven); pinned by tests/test_web_v2.py. */
+const SECTIONS: readonly ReportSection[] = [
   {
-    id: "blindspot",
+    id: "baseline",
     step: 1,
-    title: "We found a blind spot",
-    stage: "Diagnose",
-    act: "Problem",
-    body: <BlindspotSection data={blindspot} />,
+    title: "Baseline failure analysis",
+    body: <Baseline data={report} />,
   },
   {
-    id: "hero-frame",
+    id: "example",
     step: 2,
-    title: "What the failure looks like",
-    stage: "Diagnose",
-    act: "Problem",
-    body: <MissedPedestrianSection data={heroFrame} />,
+    title: "Example failure",
+    body: <Example data={heroFrame} report={report} />,
   },
   {
-    id: "scenario",
+    id: "mining",
     step: 3,
-    title: "Where else does this happen?",
-    stage: "Mine",
-    act: "Approach",
-    body: <ScenarioSection data={scenario} />,
+    title: "Context-aware failure mining",
+    body: <Mining data={scenario} report={report} />,
   },
   {
-    id: "why-frame",
+    id: "selection",
     step: 4,
-    title: "What data should we add?",
-    stage: "Mine",
-    act: "Approach",
-    body: <WhyFrameSection data={whyFrame} />,
+    title: "Targeted training-data selection",
+    body: <Selection data={whyFrame} report={report} />,
   },
   {
     id: "intervention",
     step: 5,
-    title: "We changed the training data",
-    stage: "Train",
-    act: "Approach",
-    body: <InterventionSection data={intervention} />,
+    title: "Training intervention",
+    body: <InterventionSection report={report} />,
   },
   {
-    id: "verdict",
+    id: "results",
     step: 6,
-    title: "Did it fix the failure?",
-    stage: "Evaluate",
-    act: "Results",
-    body: <VerdictSection data={verdict} />,
-  },
-  {
-    id: "closed-loop",
-    step: 7,
-    title: "Closed the loop",
-    // The result step lights every stage: by here the story has walked the whole
-    // loop rather than one stage of it.
-    stage: "The whole loop",
-    act: "Results",
-    body: <ClosedLoopSection data={closedLoop} />,
+    title: "Results",
+    body: <Results report={report} intervention={intervention} verdict={verdict} />,
   },
 ];
 
-/** The contents page and the running head index the same seven things. */
+/** The contents page and the running head index the same six things. */
 const CONTENTS: readonly CoverEntry[] = SECTIONS.map(({ id, step, title }) => ({
   id,
   step,
@@ -142,14 +99,7 @@ export default function App(): JSX.Element {
         <Cover entries={CONTENTS} />
 
         {SECTIONS.map((section) => (
-          <SectionFrame
-            key={section.id}
-            id={section.id}
-            step={section.step}
-            title={section.title}
-            stage={section.stage}
-            act={section.act}
-          >
+          <SectionFrame key={section.id} id={section.id} step={section.step} title={section.title}>
             {section.body}
           </SectionFrame>
         ))}

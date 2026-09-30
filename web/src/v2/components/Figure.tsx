@@ -17,7 +17,8 @@ import type { ReactNode } from "react";
 /**
  * The document's figure sequence, in reading order — one place to look, so the
  * numbers cannot silently double up or skip. They are hard-coded because the
- * report's layout is: seven sections in a fixed order, six figures among them.
+ * report's layout is: six sections in a fixed order, five numbered figures among
+ * them (the selected frame inside the acquisition fold is unnumbered).
  * A section that renders its figure conditionally (the filmstrip, on a package
  * with no keyframes) leaves a gap in the sequence rather than renumbering the
  * ones after it — a stable number is worth more than a gapless one.
@@ -26,9 +27,8 @@ export const FIGURE = {
   heroOverlay: 1,
   scenarioEvent: 2,
   filmstrip: 3,
-  selectedFrame: 4,
-  strategyChart: 5,
-  compareWipe: 6,
+  strategyChart: 4,
+  compareWipe: 5,
 } as const;
 
 export interface FigureProps {

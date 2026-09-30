@@ -289,3 +289,47 @@ export interface ClosedLoop {
   headline: string | null;
   provenance: Provenance[];
 }
+
+// --- report.json (the report edition's own copy, V4) --------------------------
+
+export interface LabelledValue {
+  label: string;
+  value: string;
+}
+
+export interface ReportCard {
+  label: string;
+  value: string;
+  delta?: string;
+}
+
+export interface Report {
+  baseline: {
+    cards: ReportCard[];
+    comparison: string;
+    lede: string;
+    metric_definition: string;
+  };
+  design: {
+    columns: string[];
+    goal: string;
+    rows: { label: string; baseline: string; engine: string }[];
+  };
+  example: { caption: string; caveat: string; facts: LabelledValue[] };
+  intervention: {
+    fairness: string;
+    headline: string;
+    night_shares: (LabelledValue & { highlight: boolean })[];
+  };
+  mining: { event_caption: string; facts: LabelledValue[]; lede: string };
+  results: {
+    cards: ReportCard[];
+    example_caveat: string;
+    limitations: string[];
+    overall_note: string;
+    pipeline: string[];
+    summary: string[];
+  };
+  selection: { chain: string[]; lede: string };
+}
+

@@ -39,12 +39,13 @@ hardcoded — and recorded outputs (semantic search, the chat session) are label
 screen as recorded: the public app never runs a model or calls an LLM. That package
 has two front-ends and no second set of numbers: this Streamlit app is the full
 instrument — every frame, every arm, every event, plus the recorded chat — while the
-**story site** ([web/](web/)) is a designed reading of the same seven-step story, its
+**story site** ([web/](web/)) is a designed reading of the same experiment, its
 figures exported from the same package at build time and every deep dive a link back
 into the app. Its main edition, at the site root
 ([live](https://sahilpatkar.github.io/nuscenes-data-engine/)), is the **report edition** —
-[web/src/v2/](web/src/v2/), designed entirely in code as a research report (paper and
-ink, Source Serif/Sans/Code, numbered sections and figures, light and dark); the
+[web/src/v2/](web/src/v2/), a concise technical case study in six sections (baseline
+failure analysis → example failure → context-aware mining → targeted selection →
+training intervention → results, with limitations), light and dark; the
 original scroll-through edition ([web/src/](web/src/)) stays one level down at
 [/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/), and the report's first
 address, `/v2/`, redirects to the root. Both editions render the **same committed

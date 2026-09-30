@@ -1,0 +1,157 @@
+{
+  "baseline": {
+    "cards": [
+      {
+        "label": "Overall",
+        "value": "0.2477"
+      },
+      {
+        "label": "Night",
+        "value": "0.1667"
+      },
+      {
+        "label": "Night pedestrians",
+        "value": "0.0826"
+      }
+    ],
+    "comparison": "Night mAP50-95 is 33% below overall; night-pedestrian mAP50-95 is 67% below overall.",
+    "lede": "Nighttime pedestrians are the baseline detector's weakest evaluated slice.",
+    "metric_definition": "mAP50-95: mean Average Precision averaged over IoU thresholds from 0.50 to 0.95; higher is better. Slices evaluated: overall, day, night, clear, rain, night pedestrians."
+  },
+  "design": {
+    "columns": [
+      "Baseline",
+      "Perception Data Engine"
+    ],
+    "goal": "Goal: determine whether failure-targeted data selection improves the diagnosed nighttime-pedestrian slice under a fixed training budget.",
+    "rows": [
+      {
+        "baseline": "Baseline training split",
+        "engine": "Failure-targeted mining from the pool",
+        "label": "Training-data selection"
+      },
+      {
+        "baseline": "Not used",
+        "engine": "Failure rate, image similarity, graph communities, night floor",
+        "label": "Selection signals"
+      },
+      {
+        "baseline": "7,035",
+        "engine": "8,535 (1,500 added)",
+        "label": "Training images"
+      },
+      {
+        "baseline": "n/a",
+        "engine": "31%",
+        "label": "Night share of added frames"
+      },
+      {
+        "baseline": "Held-out validation split",
+        "engine": "Same held-out validation split",
+        "label": "Evaluation"
+      }
+    ]
+  },
+  "example": {
+    "caption": "Night validation frame; ground-truth and detection boxes drawn for the selected model.",
+    "caveat": "One hand-approved frame, shown for illustration; the metric is the aggregate in section 06. The 0.135 claim is below the 0.40 hit floor; the matching rule still counts it as a hit.",
+    "facts": [
+      {
+        "label": "Baseline",
+        "value": "pedestrian missed"
+      },
+      {
+        "label": "Targeted retrain",
+        "value": "pedestrian recovered at low confidence (0.135)"
+      },
+      {
+        "label": "Distance",
+        "value": "11.1 m"
+      },
+      {
+        "label": "Evaluation",
+        "value": "held-out validation frame"
+      }
+    ]
+  },
+  "intervention": {
+    "fairness": "All intervention arms use the same detector, the same 8,535-image budget (the baseline's 7,035 images plus 1,500 added), the same training configuration, and the same held-out evaluation split.",
+    "headline": "1,500 targeted frames added across 368 scenes.",
+    "night_shares": [
+      {
+        "highlight": true,
+        "label": "Graph + night targeting",
+        "value": "31% night"
+      },
+      {
+        "highlight": false,
+        "label": "Random control",
+        "value": "13% night"
+      },
+      {
+        "highlight": false,
+        "label": "Visual similarity",
+        "value": "0% night"
+      }
+    ]
+  },
+  "mining": {
+    "event_caption": "Top-ranked match: scene-1084, 0.45g braking, 12 pedestrians within 10 m (closest 6.2 m), night. Ground-truth boxes drawn.",
+    "facts": [
+      {
+        "label": "Example query",
+        "value": "hard braking + pedestrian within 10 m"
+      },
+      {
+        "label": "Result",
+        "value": "30 matching events, 6 at night"
+      },
+      {
+        "label": "Validation",
+        "value": "SQL 30 = Knowledge Graph 30"
+      }
+    ],
+    "lede": "We search for failure-related scenarios using object proximity, time of day, and vehicle telemetry."
+  },
+  "results": {
+    "cards": [
+      {
+        "delta": "0.0826 → 0.1171 (+0.0345)",
+        "label": "Night-pedestrian mAP50-95",
+        "value": "+41.8%"
+      },
+      {
+        "delta": "0.1667 → 0.1768",
+        "label": "Night mAP50-95",
+        "value": "+0.0101"
+      }
+    ],
+    "example_caveat": "One hand-approved frame (illustrative, not the metric).",
+    "limitations": [
+      "Weak labels (negative result): with VLM-verified pseudo labels in place of ground truth, the same selection kept 39.4% of its overall mAP50-95 gain, and that weak-label arm posted the worst night result of the 13 arms (-0.0262).",
+      "Evaluation split: acquisition ranks baseline failures on the same 6,019-frame validation split used for evaluation. No validation frame enters training, but the selection signal is not independent of the evaluation set; a separate test split would give an unbiased estimate."
+    ],
+    "overall_note": "Overall mAP50-95: 0.2477 → 0.2731 (+0.0254). The best overall arm is `graph` (+0.0344); the targeted arm trades some overall gain for night gain.",
+    "pipeline": [
+      "Failure analysis",
+      "Context mining",
+      "Targeted data selection",
+      "Retraining",
+      "Evaluation"
+    ],
+    "summary": [
+      "1,500 targeted frames",
+      "31% nighttime representation",
+      "+41.8% night-pedestrian mAP50-95"
+    ]
+  },
+  "selection": {
+    "chain": [
+      "Validation failure",
+      "Similarity community",
+      "Candidate frames",
+      "Training selection"
+    ],
+    "lede": "The acquisition function targets the diagnosed night weakness: it ranks baseline validation frames by failure rate, routes the top 1,000 to their 10 most similar training-pool frames, splits the 1,500-frame budget across 97 similarity-graph communities in proportion to that failure mass, and fills a 375-frame night floor first."
+  }
+}

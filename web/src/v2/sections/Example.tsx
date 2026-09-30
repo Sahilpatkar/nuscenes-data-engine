@@ -1,36 +1,22 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { assetUrl } from "../../assetUrl";
+import { FactList } from "../components/FactList";
 import { FIGURE, Figure } from "../components/Figure";
 
 import { OverlayLegend } from "../../components/OverlayLegend";
-import { Ticks } from "../../components/Ticks";
-import type { HeroFrame } from "../../data/types";
+import type { HeroFrame, Report } from "../../data/types";
 
 /**
- * Step 2 — the failure as a picture: one held-out night frame, drawn twice, as
- * the report's Figure 1.
- *
- * The toggle is the whole point of the step, so it is a real tab pair (two
- * `role="tab"` buttons, roving tabindex, arrow keys) over two tab panels — not a
- * library, and not a link that swaps a `src`. BOTH images stay mounted; the
- * inactive panel is `hidden`, which keeps its image fetched but out of the
- * accessibility tree, so switching is instant with no flash and no reflow. The
- * mechanics are the original edition's, character for character; what this fork adds
- * is `assetUrl` on both srcs and the numbered figure around them.
- *
- * Order mirrors the live tour's own hero step: the pair, the legend, the two
- * captions, the per-model claims, the rarity sentence, and the bridge into the
- * mining half of the story.
- *
- * The arm is shown first. It is the state the story is heading towards ("the
- * night-targeted retrain recovers the pedestrian"), and arriving on the baseline
- * would silently change the picture under a reader who scrolled back to it.
+ * 02. Example failure: the one frame, with a baseline / targeted-retrain toggle
+ * (the original edition's tab mechanics, unchanged: arrow keys, Home/End, focus
+ * follows selection), then what each model did as labelled facts and the caveat
+ * in small type. No narration of what the image already shows.
  */
 const ORDER = ["baseline", "arm"] as const;
 type ModelKey = (typeof ORDER)[number];
 
-export function MissedPedestrian({ data }: { data: HeroFrame }): JSX.Element {
+export function Example({ data, report }: { data: HeroFrame; report: Report }): JSX.Element {
   const [current, setCurrent] = useState<ModelKey>("arm");
   const tablist = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -59,14 +45,7 @@ export function MissedPedestrian({ data }: { data: HeroFrame }): JSX.Element {
         number={FIGURE.heroOverlay}
         wide
         className="overlay-figure"
-        caption={
-          <>
-            {data.caption}
-            {data.held_out_caption ? (
-              <span className="figure-note mono">{data.held_out_caption}</span>
-            ) : null}
-          </>
-        }
+        caption={report.example.caption}
       >
         <div
           className="overlay-tabs"
@@ -124,23 +103,8 @@ export function MissedPedestrian({ data }: { data: HeroFrame }): JSX.Element {
         <OverlayLegend items={data.legend} />
       </Figure>
 
-      <ul className="claims">
-        {data.facts.map((fact) => (
-          <li key={fact.subject}>
-            <strong>{fact.subject}</strong>
-            <span className="claims-detail">
-              {" · "}
-              {fact.claims.map((claim) => `${claim.label}: ${claim.claim}`).join(" · ")}
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      <p className="measure">
-        <Ticks text={data.rarity_sentence} />
-      </p>
-
-      <p className="beat">{data.bridge_sentence}</p>
+      <FactList facts={report.example.facts} />
+      <p className="muted measure small">{report.example.caveat}</p>
     </>
   );
 }

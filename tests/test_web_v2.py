@@ -37,20 +37,17 @@ from pathlib import Path
 import pytest
 
 from tests.test_web_export import (
-    AGGREGATE_LABEL,
     CLOSING_THESIS,
-    EXAMPLE_CAVEAT,
-    EXAMPLE_LABEL,
+    COMMITTED_JSON,
     LEDE_SENTENCE,
     PROBLEM_SENTENCE,
     PURPOSE_SENTENCE,
-    SELECTION_CHAIN,
+    REPORT_EXPECTED,
     SITE_SRC,
-    TOUR_PY,
     WEB,
     _only,
     _source,
-    _tour_steps,
+    _strings,
 )
 
 V2_SRC = SITE_SRC / "v2"
@@ -89,95 +86,61 @@ def _code(path: Path) -> str:
     return _COMMENT.sub("", _source(path))
 
 
-def _v2_steps() -> list[tuple[str, str]]:
-    """``(title, stage)`` per ``web/src/v2/App.tsx``'s ``SECTIONS`` entry, in order.
+# The report's six sections (V4, 2026-10-01): technical titles of its own. The
+# report no longer mirrors the guided tour's seven conversational steps -- the
+# tour and the original edition keep those -- so its titles are pinned here.
+REPORT_SECTIONS = [
+    "Baseline failure analysis",
+    "Example failure",
+    "Context-aware failure mining",
+    "Targeted training-data selection",
+    "Training intervention",
+    "Results",
+]
 
-    Read exactly as the root edition's block is read (`_site_steps` over
-    `web/src/App.tsx`): the literal array is why v2 repeats the titles inline
-    instead of importing them -- a repeated literal is greppable, and this is what
-    greps it."""
+
+def _report_titles() -> list[str]:
+    """The ``title:`` of each ``SECTIONS`` entry in ``web/src/v2/App.tsx``, in order."""
     block = (
         _source(V2_SRC / "App.tsx")
-        .split("const SECTIONS: readonly StorySection[] = [", 1)[1]
-        .split("\nconst CONTENTS", 1)[0]
+        .split("const SECTIONS: readonly ReportSection[] = [", 1)[1]
+        .split("\n];", 1)[0]
     )
-    return [
-        (match.group(1), match.group(2))
-        for match in re.finditer(r'title: "([^"]+)",[\s\S]*?stage: "([^"]+)",', block)
-    ]
+    return re.findall(r'title: "([^"]+)",', block)
 
 
-def test_v2_step_titles_and_stages_are_the_tours_own() -> None:
-    tour, v2 = _tour_steps(), _v2_steps()
-    assert len(tour) == 7, tour
-    assert [title for title, _stage in v2] == [title for title, _stage in tour]
-    # Steps 1-6 each light exactly one loop stage, named identically on both.
-    assert [stage for _title, stage in v2[:6]] == [stage for _title, stage in tour[:6]]
-    # Step 7 is the one deliberate difference, and the report edition states it the
-    # same way the root edition does. The tour passes the whole ``render.LOOP_STAGES``
-    # tuple to its breadcrumb (every stage lit at once); neither web edition has a
-    # breadcrumb widget, so both say the same thing in words.
-    assert tour[6] == ("Closed the loop", "LOOP_STAGES")
-    assert v2[6] == ("Closed the loop", "The whole loop")
+def test_report_sections_are_the_six_technical_sections() -> None:
+    assert _report_titles() == REPORT_SECTIONS
 
 
-# The five fixed sentences of the story contract (spec §1). The exporter ships each
-# as a bundle field; a component that types one out instead would keep saying it
-# after the exporter stopped.
-_CONTRACT_SENTENCES = {
-    "problem sentence": PROBLEM_SENTENCE,
-    "purpose sentence": PURPOSE_SENTENCE,
-    "lede sentence": LEDE_SENTENCE,
-    "example caveat": EXAMPLE_CAVEAT,
-    "closing thesis": CLOSING_THESIS,
-}
-
-# The bundle fields those sentences (and the labels/chain around them) arrive in.
-_CONTRACT_FIELDS = (
-    "problem_sentence",
-    "purpose_sentence",
-    "lede_sentence",
-    "selection_chain",
-    "example_label",
-    "example_caveat",
-    "aggregate_label",
-    "closing_thesis",
-)
-
-
-def test_v2_contract_sentences_come_from_the_bundle_not_literals() -> None:
-    sources = {path: _source(path) for path in _v2_tsx()}
-    for what, sentence in _CONTRACT_SENTENCES.items():
-        typed_out = [
-            str(path.relative_to(V2_SRC)) for path, text in sources.items() if sentence in text
-        ]
-        assert not typed_out, (
-            f"the {what} is written out in {typed_out} — render the bundle field instead"
-        )
-
-    # The two evidence-tier labels and the four selection-chain steps are checked
-    # against the CODE rather than the raw file: Verdict.tsx's header comment names
-    # both tier labels while explaining that the tiers ARE the section's structure.
-    # Prose about a label is documentation; only a rendered literal is drift.
-    code = {path: _COMMENT.sub("", text) for path, text in sources.items()}
-    labels = {
-        "example label": EXAMPLE_LABEL,
-        "aggregate label": AGGREGATE_LABEL,
-        **{f"selection chain step {i}": step for i, step in enumerate(SELECTION_CHAIN, 1)},
-    }
-    for what, literal in labels.items():
-        typed_out = [
-            str(path.relative_to(V2_SRC)) for path, text in code.items() if literal in text
-        ]
-        assert not typed_out, (
-            f"the {what} is written out in {typed_out} — render the bundle field instead"
-        )
-
-    # ... and the fields they come from are actually read somewhere in v2, so the
-    # absence above means "read from the bundle", not "dropped from the edition".
+def test_report_copy_is_read_from_the_bundle_not_typed() -> None:
+    """Every sentence and label the report states lives in ``report.json`` (or the
+    shared bundle); none is typed into a component, where it would outlive the
+    next export. The tour's fixed sentences are not typed out either."""
+    code = {path: _code(path) for path in _v2_tsx()}
     joined = "\n".join(code.values())
-    for field in _CONTRACT_FIELDS:
-        assert field in joined, f"no v2 component reads the bundle's `{field}`"
+    # (The project name is also the column head of the design table; the wordmark
+    # owns it as chrome, so it is not "report copy".)
+    copy = [
+        text
+        for text in _strings(REPORT_EXPECTED)
+        if len(text) > 12 and text != "Perception Data Engine"
+    ]
+    typed = [text for text in copy if text in joined]
+    assert not typed, f"report copy typed into components: {typed}"
+    for sentence in (PROBLEM_SENTENCE, PURPOSE_SENTENCE, LEDE_SENTENCE, CLOSING_THESIS):
+        assert sentence not in joined
+    # ... and the report section is actually what the edition reads.
+    assert '"../data/report.json"' in _source(V2_SRC / "App.tsx")
+    assert (COMMITTED_JSON / "report.json").exists()
+
+
+def test_acquisition_details_are_folded() -> None:
+    """The per-frame selection facts (community, mass rank, quota, degree rank)
+    sit in one closed fold rather than on the page by default."""
+    code = _code(V2_SRC / "sections" / "Selection.tsx")
+    assert "<summary>Acquisition details</summary>" in code
+    assert re.search(r"<details(?![^>]*\bopen\b)[^>]*>", code), "the fold starts closed"
 
 
 # Every recorded figure the story states, as the bundle spells it. These live in
@@ -215,16 +178,6 @@ def test_v2_has_no_recorded_result_literals() -> None:
             if pattern.search(code)
         ]
     assert not offenders, f"result literals in v2 sources: {offenders} — read the bundle"
-
-
-def test_v2_selection_fold_and_fairness_lead_are_the_tours_own() -> None:
-    label = _only(r'st\.expander\("([^"]+)"\)', _source(TOUR_PY), "literal tour expander label")
-    assert label == "How selection works"
-    assert f"<summary>{label}</summary>" in _source(V2_SRC / "sections" / "WhyFrame.tsx")
-
-    lead = _only(r'_FAIRNESS_LEAD = "([^"]+)"', _source(TOUR_PY), "_FAIRNESS_LEAD")
-    assert lead == "Fair comparison"
-    assert f'<p className="eyebrow">{lead}</p>' in _source(V2_SRC / "sections" / "Intervention.tsx")
 
 
 @pytest.mark.parametrize("edition", _EDITIONS)
@@ -352,21 +305,20 @@ def test_report_edition_chrome_has_no_em_dashes() -> None:
 
 
 PROJECT_NAME = "Perception Data Engine"
-PROJECT_TAGLINE = "An autonomous-driving data engine built and evaluated on nuScenes"
+COVER_TITLE = "Improving perception models through targeted data selection"
 
 
-def test_site_carries_the_project_name_and_tagline() -> None:
-    """The project's display name (renamed 2026-09-30) and its one-line tagline:
-    the running head's wordmark, the cover's series line and tagline, and the root
-    document's titles carry the name, and no edition still says the old one. The
-    code identifiers -- the Python package, the repo slug in URLs, the npm name --
-    are deliberately not part of the rename."""
+def test_site_carries_the_project_name_and_the_v4_hero() -> None:
+    """The display name (renamed 2026-09-30) and the V4 hero: the running head's
+    wordmark and the cover's eyebrow carry the name, the cover's title says what
+    the project investigates, and the root document's titles follow. No edition
+    still says the old name. Code identifiers are deliberately not renamed."""
     header = _code(V2_SRC / "components" / "Header.tsx")
     cover = _code(V2_SRC / "components" / "Cover.tsx")
     assert f'const WORDMARK = "{PROJECT_NAME}"' in header
-    assert f'const SERIES = "{PROJECT_NAME} · Technical report"' in cover
-    assert f'const TAGLINE = "{PROJECT_TAGLINE}"' in cover
-    assert "{TAGLINE}" in cover, "the cover renders the tagline"
+    assert f'const SERIES = "{PROJECT_NAME}"' in cover
+    assert f'const COVER_TITLE = "{COVER_TITLE}"' in cover
+    assert "TAGLINE" not in cover, "the hero states the project once, not three times"
     document = _source(WEB / "index.html")
     assert f"<title>{PROJECT_NAME} · Report edition</title>" in document
     assert f'property="og:title" content="{PROJECT_NAME} · Report edition"' in document

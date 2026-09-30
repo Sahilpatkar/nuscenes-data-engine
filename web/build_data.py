@@ -1343,11 +1343,381 @@ def build_closed_loop(package: Package) -> dict[str, Any]:
     }
 
 
+# --- the report edition (V4): a technical case study --------------------------------
+#
+# The report edition at the site root reads this section and the shared images; it no
+# longer mirrors the guided tour's seven steps. Every figure below is derived from the
+# package through the same helpers the other sections use; the fixed words describe
+# the fixed experiment (the flagship preset, the acquisition function's design).
+
+# The evaluated mAP50-95 slices, as the arm table names them, in reading order.
+_REPORT_SLICES = (
+    ("overall_map5095", "overall"),
+    ("day_map5095", "day"),
+    ("night_map5095", "night"),
+    ("clear_map5095", "clear"),
+    ("rain_map5095", "rain"),
+    ("night_ped_map5095", "night pedestrians"),
+)
+# The report's labels for the three acquisition strategies it compares by name.
+_REPORT_ARM_LABELS = {"random": "Random control", "mined": "Visual similarity"}
+_REPORT_PIPELINE = [
+    "Failure analysis",
+    "Context mining",
+    "Targeted data selection",
+    "Retraining",
+    "Evaluation",
+]
+_REPORT_CHAIN = [
+    "Validation failure",
+    "Similarity community",
+    "Candidate frames",
+    "Training selection",
+]
+
+
+def _below(value: float, reference: float) -> str:
+    """How far ``value`` sits below ``reference``, as a whole-number percentage."""
+    return f"{1 - value / reference:.0%}"
+
+
+def _report_baseline(package: Package) -> dict[str, Any]:
+    row = package.arm_row(package.baseline)
+    evaluated = [
+        (label, float(row[column]))
+        for column, label in _REPORT_SLICES
+        if column in row.index and bool(pd.notna(row[column]))
+    ]
+    weakest = min(evaluated, key=lambda item: item[1])[0]
+    subject = (
+        "Nighttime pedestrians are"
+        if weakest == "night pedestrians"
+        else (f"The {weakest} slice is")
+    )
+    overall, night = float(row["overall_map5095"]), float(row["night_map5095"])
+    cards = [
+        {"label": "Overall", "value": _metric(overall)},
+        {"label": "Night", "value": _metric(night)},
+    ]
+    comparison = f"Night mAP50-95 is {_below(night, overall)} below overall"
+    night_ped = row.get("night_ped_map5095")
+    if bool(pd.notna(night_ped)):
+        cards.append({"label": "Night pedestrians", "value": _metric(float(night_ped))})
+        comparison += (
+            f"; night-pedestrian mAP50-95 is {_below(float(night_ped), overall)} below overall"
+        )
+    return {
+        "cards": cards,
+        "comparison": comparison + ".",
+        "lede": f"{subject} the baseline detector's weakest evaluated slice.",
+        "metric_definition": (
+            "mAP50-95: mean Average Precision averaged over IoU thresholds from 0.50 to "
+            "0.95; higher is better. Slices evaluated: "
+            + ", ".join(label for label, _value in evaluated)
+            + "."
+        ),
+    }
+
+
+def _report_design(package: Package) -> dict[str, Any]:
+    base_row, arm_row = package.arm_row(package.baseline), package.arm_row(package.arm)
+    base_n = int(_required(base_row, "n_train_images"))
+    arm_n = int(_required(arm_row, "n_train_images"))
+    return {
+        "columns": ["Baseline", "Perception Data Engine"],
+        "goal": (
+            "Goal: determine whether failure-targeted data selection improves the "
+            "diagnosed nighttime-pedestrian slice under a fixed training budget."
+        ),
+        "rows": [
+            {
+                "baseline": "Baseline training split",
+                "engine": "Failure-targeted mining from the pool",
+                "label": "Training-data selection",
+            },
+            {
+                "baseline": "Not used",
+                "engine": "Failure rate, image similarity, graph communities, night floor",
+                "label": "Selection signals",
+            },
+            {
+                "baseline": _count(base_n),
+                "engine": f"{_count(arm_n)} ({_count(arm_n - base_n)} added)",
+                "label": "Training images",
+            },
+            {
+                "baseline": "n/a",
+                "engine": _share(float(_required(arm_row, "night_share"))),
+                "label": "Night share of added frames",
+            },
+            {
+                "baseline": "Held-out validation split",
+                "engine": "Same held-out validation split",
+                "label": "Evaluation",
+            },
+        ],
+    }
+
+
+def _report_example(package: Package) -> dict[str, Any]:
+    """The hero frame's one pedestrian the baseline missed, as labelled facts."""
+    token = package.hero
+    gt_rows = visible_gt(package.gt, token)
+    peds = gt_rows.loc[
+        (gt_rows["category_group"] == "pedestrian")
+        & gt_rows[f"matched_{package.baseline}"].eq(False).fillna(False)
+    ]
+    if peds.empty:
+        raise SystemExit("build_data: the hero frame has no pedestrian the baseline missed")
+    ped = peds.iloc[0]
+    annotation = str(ped["annotation_token"])
+    claim = _claim(package, token=token, model=package.arm, annotation=annotation)
+    notes = [
+        "One hand-approved frame, shown for illustration; the metric is the aggregate "
+        "in section 06."
+    ]
+    if claim is None:
+        recovered = "pedestrian still missed"
+    else:
+        conf, status = claim
+        if status == "low_conf":
+            recovered = f"pedestrian recovered at low confidence ({conf:.3f})"
+            notes.append(
+                f"The {conf:.3f} claim is below the {_CONF_HIT_FLOOR:.2f} hit floor; the "
+                "matching rule still counts it as a hit."
+            )
+        else:
+            recovered = f"pedestrian detected ({conf:.3f})"
+    facts = [
+        {"label": "Baseline", "value": "pedestrian missed"},
+        {"label": "Targeted retrain", "value": recovered},
+    ]
+    distance = ped.get("distance_to_ego_m")
+    if distance is not None and bool(pd.notna(distance)):
+        facts.append({"label": "Distance", "value": f"{float(distance):.1f} m"})
+    if _held_out_caption(package, token) is not None:
+        facts.append({"label": "Evaluation", "value": "held-out validation frame"})
+    return {
+        "caption": (
+            "Night validation frame; ground-truth and detection boxes drawn for the "
+            "selected model."
+        ),
+        "caveat": " ".join(notes),
+        "facts": facts,
+    }
+
+
+def _report_mining(package: Package) -> dict[str, Any]:
+    ranked = rank_events(package.events, _TOUR_PRESET)
+    row = ranked.iloc[0]
+    n_peds = int(row["n_peds_within_10m"]) if bool(pd.notna(row["n_peds_within_10m"])) else 0
+    nearest = row["min_dist_pedestrian_m"]
+    where = f"{n_peds} pedestrian{'' if n_peds == 1 else 's'} within 10 m"
+    if bool(pd.notna(nearest)):
+        where += f" (closest {float(nearest):.1f} m)"
+    condition = "night" if bool(row["is_night"]) else "day"
+    n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
+    sql = int(package.subgraph["sql_count"])
+    cypher, parity = package.subgraph["cypher_count"], package.subgraph["parity"]
+    if cypher is None:
+        validation = f"SQL {sql}; knowledge graph not run for this preset"
+    elif parity is True:
+        validation = f"SQL {sql} = Knowledge Graph {cypher}"
+    else:
+        validation = f"SQL {sql} ≠ Knowledge Graph {cypher} (mismatch recorded)"
+    return {
+        "event_caption": (
+            f"Top-ranked match: {row['scene_name']}, "
+            f"{severity_caption(_TOUR_PRESET, row.to_dict())}, {where}, {condition}. "
+            "Ground-truth boxes drawn."
+        ),
+        "facts": [
+            {"label": "Example query", "value": "hard braking + pedestrian within 10 m"},
+            {
+                "label": "Result",
+                "value": (
+                    f"{len(ranked)} matching event{'' if len(ranked) == 1 else 's'}, "
+                    f"{n_night} at night"
+                ),
+            },
+            {"label": "Validation", "value": validation},
+        ],
+        "lede": (
+            "We search for failure-related scenarios using object proximity, time of day, "
+            "and vehicle telemetry."
+        ),
+    }
+
+
+def _report_selection(package: Package) -> dict[str, Any]:
+    config = package.validation.get("config") or {}
+    n_communities = int(package.validation.get("n_communities", len(package.communities)))
+    n_selected = int(package.validation.get("n_selected", len(package.explain)))
+    lede = (
+        "The acquisition function targets the diagnosed night weakness: it ranks "
+        f"baseline validation frames by failure rate, routes the top "
+        f"{_count(int(_required(pd.Series(config), 'top_k')))} to their "
+        f"{int(_required(pd.Series(config), 'route_k'))} most similar training-pool "
+        f"frames, splits the {_count(n_selected)}-frame budget across {n_communities} "
+        "similarity-graph communities in proportion to that failure mass"
+    )
+    night_floor = config.get("night_floor")
+    lede += (
+        f", and fills a {_count(int(night_floor))}-frame night floor first."
+        if night_floor is not None
+        else "."
+    )
+    return {"chain": list(_REPORT_CHAIN), "lede": lede}
+
+
+def _report_intervention(package: Package) -> dict[str, Any]:
+    base_row, arm_row = package.arm_row(package.baseline), package.arm_row(package.arm)
+    base_n = int(_required(base_row, "n_train_images"))
+    arm_n = int(_required(arm_row, "n_train_images"))
+    added, scenes = arm_n - base_n, int(_required(arm_row, "n_scenes"))
+    shares = [
+        {
+            "highlight": True,
+            "label": arm_story_label(package.arm),
+            "value": f"{_share(float(_required(arm_row, 'night_share')))} night",
+        }
+    ]
+    for name, label in _REPORT_ARM_LABELS.items():
+        rows = package.arms.loc[package.arms["arm"] == name]
+        if rows.empty or not bool(pd.notna(rows.iloc[0].get("night_share"))):
+            continue
+        shares.append(
+            {
+                "highlight": False,
+                "label": label,
+                "value": f"{_share(float(rows.iloc[0]['night_share']))} night",
+            }
+        )
+    others = package.arms.loc[package.arms["arm"].isin([package.arm, *_REPORT_ARM_LABELS])]
+    budgets = {int(value) for value in others["n_train_images"].dropna()}
+    budget = (
+        f"the same {_count(arm_n)}-image budget (the baseline's {_count(base_n)} images "
+        f"plus {_count(added)} added)"
+        if budgets == {arm_n}
+        else "the same image budget"
+    )
+    return {
+        "fairness": (
+            f"All intervention arms use the same detector, {budget}, the same training "
+            "configuration, and the same held-out evaluation split."
+        ),
+        "headline": (
+            f"{_count(added)} targeted frames added across {scenes} "
+            f"scene{'' if scenes == 1 else 's'}."
+        ),
+        "night_shares": shares,
+    }
+
+
+def _report_results(package: Package) -> dict[str, Any]:
+    base_row, arm_row = package.arm_row(package.baseline), package.arm_row(package.arm)
+    cards: list[dict[str, str]] = []
+    summary_gain: str | None = None
+    before, after = base_row.get("night_ped_map5095"), arm_row.get("night_ped_map5095")
+    if bool(pd.notna(before)) and bool(pd.notna(after)):
+        relative = relative_gain(float(before), float(after))
+        delta = float(after) - float(before)
+        value = f"{relative:+.1%}" if relative is not None else f"{delta:+.4f}"
+        cards.append(
+            {
+                "delta": f"{_metric(float(before))} → {_metric(float(after))} ({delta:+.4f})",
+                "label": "Night-pedestrian mAP50-95",
+                "value": value,
+            }
+        )
+        summary_gain = f"{value} night-pedestrian mAP50-95"
+    base_night, arm_night = float(base_row["night_map5095"]), float(arm_row["night_map5095"])
+    recorded = arm_row.get("delta_night")
+    night_delta = float(recorded) if bool(pd.notna(recorded)) else arm_night - base_night
+    cards.append(
+        {
+            "delta": f"{_metric(base_night)} → {_metric(arm_night)}",
+            "label": "Night mAP50-95",
+            "value": f"{night_delta:+.4f}",
+        }
+    )
+
+    base_overall, arm_overall = (
+        float(base_row["overall_map5095"]),
+        float(arm_row["overall_map5095"]),
+    )
+    overall_note = (
+        f"Overall mAP50-95: {_metric(base_overall)} → {_metric(arm_overall)} "
+        f"({arm_overall - base_overall:+.4f})."
+    )
+    ranked = package.arms.dropna(subset=["delta_overall"])
+    if not ranked.empty:
+        best = ranked.loc[ranked["delta_overall"].idxmax()]
+        if str(best["arm"]) != package.arm:
+            overall_note += (
+                f" The best overall arm is `{best['arm']}` ({float(best['delta_overall']):+.4f}); "
+                "the targeted arm trades some overall gain for night gain."
+            )
+
+    limitations: list[str] = []
+    pair = package.loss.loc[package.loss["base_arm"] == package.arm]
+    night_ranked = package.arms.dropna(subset=["delta_night"])
+    if not pair.empty and not night_ranked.empty:
+        worst = night_ranked.loc[night_ranked["delta_night"].idxmin()]
+        sentence = (
+            "Weak labels (negative result): with VLM-verified pseudo labels in place of "
+            f"ground truth, the same selection kept {float(pair.iloc[0]['retention']):.1%} of "
+            "its overall mAP50-95 gain"
+        )
+        if str(worst["arm"]) == f"weak_{package.arm}":
+            sentence += (
+                ", and that weak-label arm posted the worst night result of the "
+                f"{len(night_ranked)} arms ({float(worst['delta_night']):+.4f})"
+            )
+        limitations.append(sentence + ".")
+    val_images = arm_row.get("val_images")
+    if bool(pd.notna(val_images)):
+        limitations.append(
+            "Evaluation split: acquisition ranks baseline failures on the same "
+            f"{_count(int(val_images))}-frame validation split used for evaluation. No "
+            "validation frame enters training, but the selection signal is not independent "
+            "of the evaluation set; a separate test split would give an unbiased estimate."
+        )
+
+    n_added = int(_required(arm_row, "n_train_images")) - int(_required(base_row, "n_train_images"))
+    summary = [
+        f"{_count(n_added)} targeted frames",
+        f"{_share(float(_required(arm_row, 'night_share')))} nighttime representation",
+    ]
+    if summary_gain is not None:
+        summary.append(summary_gain)
+    return {
+        "cards": cards,
+        "example_caveat": "One hand-approved frame (illustrative, not the metric).",
+        "limitations": limitations,
+        "overall_note": overall_note,
+        "pipeline": list(_REPORT_PIPELINE),
+        "summary": summary,
+    }
+
+
+def build_report(package: Package) -> dict[str, Any]:
+    return {
+        "baseline": _report_baseline(package),
+        "design": _report_design(package),
+        "example": _report_example(package),
+        "intervention": _report_intervention(package),
+        "mining": _report_mining(package),
+        "results": _report_results(package),
+        "selection": _report_selection(package),
+    }
+
+
 # --- entrypoint -------------------------------------------------------------------------
 
 
 def build(out: Path, *, demo_data: Path) -> list[tuple[str, int]]:
-    """Write the eight sections and the story images; return the image sizes."""
+    """Write the nine sections and the story images; return the image sizes."""
     package = Package(demo_data)
     writer = Writer(out)
     writer.section("meta", build_meta(package))
@@ -1358,6 +1728,7 @@ def build(out: Path, *, demo_data: Path) -> list[tuple[str, int]]:
     writer.section("intervention", build_intervention(package))
     writer.section("verdict", build_verdict(package, writer))
     writer.section("closed_loop", build_closed_loop(package))
+    writer.section("report", build_report(package))
     return writer.story_bytes()
 
 
