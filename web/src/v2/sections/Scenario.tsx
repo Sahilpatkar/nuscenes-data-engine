@@ -12,13 +12,17 @@ import type { Scenario as ScenarioData } from "../../data/types";
  * Step 3 — one failure, or a recurring driving scenario?
  *
  * Figure 2 answers "what is this": the top-ranked event of the flagship scenario
- * query, with its severity, what is near the ego and its conditions set as a
- * ruled fact block underneath rather than a card beside it — the report reads
+ * query as a situation first (its title, one plain sentence, what is near the
+ * vehicle, its conditions), with the row it came from — scene, severity figure,
+ * preset — as small technical metadata under it. All of it is a ruled fact
+ * block underneath the figure rather than a card beside it: the report reads
  * down one column.
  *
- * Figure 3 answers "is it a moment or a manoeuvre": five keyframes against the
- * CAN speed and acceleration behind them, sharing one active step — point at a
- * thumb and both curves mark it; point at a curve and the thumb lights. The sync
+ * Figure 3 answers "is it a moment or a manoeuvre": a sentence saying what to
+ * notice, then five keyframes against the CAN speed and acceleration behind
+ * them, then the sentence that reads them. The pair shares one active step —
+ * point at a thumb and both curves mark it; point at a curve and the thumb
+ * lights. The sync
  * is the original edition's mechanic exactly: one `active` index owned here and
  * handed to both halves, starting on the event's own frame (`is_current`), which
  * is also the one the strip rings permanently. Nothing reverts on mouse-out: a
@@ -46,11 +50,8 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
       </Figure>
 
       <div className="event-facts">
-        <h3 className="event-head">
-          {data.event.scene_name}
-          <span aria-hidden="true"> · </span>
-          {data.event.severity_caption}
-        </h3>
+        <h3 className="event-head">{data.event.title}</h3>
+        <p>{data.event.summary}</p>
         <p>{data.event.facts}</p>
         <ul className="chip-row">
           {data.event.chips.map((chip) => (
@@ -60,27 +61,39 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
           ))}
         </ul>
         <p className="mono event-preset">
+          <span className="muted">scene</span> {data.event.scene_name}
+          <span aria-hidden="true"> · </span>
+          {data.event.severity_caption}
+          <span aria-hidden="true"> · </span>
           <span className="muted">preset</span> {data.preset}
         </p>
       </div>
 
       {steps.length > 0 ? (
-        <Figure number={FIGURE.filmstrip} wide caption={data.filmstrip.caption}>
-          <div className="sync">
-            <Filmstrip steps={steps} active={active} onActivate={setActive} />
-            <CanCurves
-              steps={steps}
-              speedTitle={data.filmstrip.speed_title}
-              accelTitle={data.filmstrip.accel_title}
-              active={active}
-              onActivate={setActive}
-            />
-          </div>
-        </Figure>
+        <>
+          <p className="measure">{data.timeline_lede}</p>
+          <Figure number={FIGURE.filmstrip} wide caption={data.filmstrip.caption}>
+            <div className="sync">
+              <Filmstrip steps={steps} active={active} onActivate={setActive} />
+              <CanCurves
+                steps={steps}
+                speedTitle={data.filmstrip.speed_title}
+                accelTitle={data.filmstrip.accel_title}
+                active={active}
+                onActivate={setActive}
+              />
+            </div>
+          </Figure>
+          {data.timeline_sentence ? <p className="measure">{data.timeline_sentence}</p> : null}
+        </>
       ) : null}
 
+      <p className="key-line">
+        {data.found_sentence}
+        <br />
+        {data.night_sentence}
+      </p>
       <p className="mono muted">{data.parity_caption}</p>
-      <p className="key-line">{data.night_sentence}</p>
       <p className="measure">{data.mechanism_sentence}</p>
 
       <Learned text={data.takeaway} />

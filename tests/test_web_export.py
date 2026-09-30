@@ -387,6 +387,43 @@ def test_why_frame_chips_state_only_facts_the_package_carries(
     assert not [chip for chip in chips if "rate" in chip]
 
 
+def test_scenario_states_the_event_and_the_search_in_plain_words(
+    bundle: dict[str, dict[str, Any]],
+) -> None:
+    """Step 3's reader-facing copy (wording fixed 2026-09-29), every figure in it
+    the package's: the event as a situation rather than a row, the timeline
+    sentence off the filmstrip's first and last CAN speeds, the search result
+    with the match count as the hero number and the SQL/graph parity underneath
+    it, and the mechanism + takeaway in the tour's own words."""
+    scenario = bundle["scenario"]
+    assert scenario["event"]["title"] == "A hard-braking event at night"
+    assert scenario["event"]["summary"] == (
+        "The vehicle brakes sharply while pedestrians are nearby."
+    )
+    assert scenario["event"]["facts"] == "12 pedestrians within 10 m · closest: 6.2 m"
+    assert scenario["timeline_lede"] == (
+        "Instead of looking at a single image, we reconstruct what was happening around it."
+    )
+    assert scenario["timeline_sentence"] == (
+        "The vehicle slows from 26.2 km/h to about 8 km/h while experiencing strong "
+        "braking. Combining the camera sequence with vehicle telemetry tells us that this "
+        "is not simply a nighttime image — it is a nighttime hard-braking event with "
+        "pedestrians nearby."
+    )
+    assert scenario["found_sentence"] == "The system found 30 similar driving events."
+    assert scenario["night_sentence"] == "6 occurred at night."
+    assert scenario["parity_caption"] == "SQL: 30 · Knowledge graph: 30 ✓"
+    assert scenario["mechanism_sentence"] == (
+        "The system doesn't just search for images that look similar. It searches for "
+        "situations that are similar — nighttime driving, hard braking, and pedestrians "
+        "near the vehicle."
+    )
+    assert scenario["takeaway"] == (
+        "A single image doesn't tell the whole story. Understanding a model failure "
+        "requires knowing what was happening around the vehicle."
+    )
+
+
 def test_scenario_filmstrip_is_the_five_can_steps(bundle: dict[str, dict[str, Any]]) -> None:
     filmstrip = bundle["scenario"]["filmstrip"]
     assert filmstrip["speed_is_can"] is True

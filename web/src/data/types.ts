@@ -121,9 +121,14 @@ export interface HeroFrame {
 
 export interface ScenarioEvent {
   chips: string[];
+  /** "12 pedestrians within 10 m · closest: 6.2 m" */
   facts: string;
   scene_name: string;
   severity_caption: string;
+  /** "The vehicle brakes sharply while pedestrians are nearby." */
+  summary: string;
+  /** "A hard-braking event at night" — the situation, before the row. */
+  title: string;
   token: string;
 }
 
@@ -148,14 +153,21 @@ export interface Filmstrip {
 export interface Scenario {
   event: ScenarioEvent;
   filmstrip: Filmstrip;
+  /** The match count as the hero line of the search result. */
+  found_sentence: string;
   headline: string;
   image: ImageRef;
   mechanism_sentence: string;
   night_sentence: string;
+  /** The SQL / knowledge-graph parity, set under the counts. */
   parity_caption: string;
   preset: string;
   provenance: Provenance[];
   takeaway: string;
+  /** What to notice, set before the filmstrip and the curves. */
+  timeline_lede: string;
+  /** What they add up to, set after them; null when the row has no strip. */
+  timeline_sentence: string | null;
 }
 
 // --- why_frame.json (story contract §1.2, the centrepiece) -------------------

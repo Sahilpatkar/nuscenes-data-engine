@@ -45,6 +45,7 @@ if str(APP_DEMO) not in sys.path:
     sys.path.insert(0, str(APP_DEMO))
 
 from filters import (  # noqa: E402
+    FilmstripCurve,
     arm_story_label,
     failure_flags,
     filmstrip_steps,
@@ -52,7 +53,7 @@ from filters import (  # noqa: E402
     frame_quota_before,
     gain_text,
     gt_for_render,
-    parity_short,
+    parity_line,
     rank_events,
     reason_chips,
     relative_gain,
@@ -100,8 +101,9 @@ _BRIDGE_TO_MINING = (
     "where the same thing happens."
 )
 _MINING_MECHANISM = (
-    "The system searches driving context — night, braking, pedestrians near the ego — "
-    "not just similar-looking images."
+    "The system doesn't just search for images that look similar. It searches for "
+    "situations that are similar — nighttime driving, hard braking, and pedestrians "
+    "near the vehicle."
 )
 _SELECTION_PATH = (
     "failed val frame → similarity community → representative train-pool frames → "
@@ -599,17 +601,71 @@ def build_hero_frame(package: Package, writer: Writer) -> dict[str, Any]:
 # --- 3. the scenario --------------------------------------------------------------------
 
 
+# Step 3's reader-facing copy -- each helper mirrors its ``views/tour.py`` twin by
+# name, so the site and the tour say the same thing about the same event.
+_TIMELINE_LEDE = (
+    "Instead of looking at a single image, we reconstruct what was happening around it."
+)
+
+
+def _event_title(*, is_night: bool) -> str:
+    """``views/tour.py::_event_title``."""
+    return f"A hard-braking event{' at night' if is_night else ''}"
+
+
+def _event_summary(*, n_peds: int) -> str:
+    """``views/tour.py::_event_summary``."""
+    return f"The vehicle brakes sharply{' while pedestrians are nearby' if n_peds > 0 else ''}."
+
+
+def _event_facts(n_peds: int, nearest: float | None) -> str:
+    """``views/tour.py::_event_facts``."""
+    facts = f"{n_peds} pedestrian{'' if n_peds == 1 else 's'} within 10 m"
+    if nearest is not None and bool(pd.notna(nearest)):
+        facts += f" · closest: {float(nearest):.1f} m"
+    return facts
+
+
+def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) -> str:
+    """``views/tour.py::_timeline_sentence`` -- the slow-down off the first and last
+    steps' speeds (dropped when either reading is missing), then the conceptual
+    jump from a still image to an event."""
+    parts: list[str] = []
+    if curve.steps:
+        first, last = curve.steps[0].can_speed_kmh, curve.steps[-1].can_speed_kmh
+        if first is not None and last is not None and pd.notna(first) and pd.notna(last):
+            parts.append(
+                f"The vehicle slows from {first:.1f} km/h to about {round(last)} km/h while "
+                "experiencing strong braking."
+            )
+    image = "a nighttime image" if is_night else "a single image"
+    event = f"a {'nighttime ' if is_night else ''}hard-braking event"
+    peds = " with pedestrians nearby" if n_peds > 0 else ""
+    parts.append(
+        "Combining the camera sequence with vehicle telemetry tells us that this is not "
+        f"simply {image} — it is {event}{peds}."
+    )
+    return " ".join(parts)
+
+
+def _found_sentence(n_events: int) -> str:
+    """``views/tour.py::_found_sentence``."""
+    return f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}."
+
+
+def _night_sentence(n_night: int) -> str:
+    """``views/tour.py::_night_sentence``."""
+    return f"{n_night} occurred at night."
+
+
 def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
     ranked = rank_events(package.events, _TOUR_PRESET)
     row = ranked.iloc[0]
     token = str(row["sample_data_token"])
     scene = str(row["scene_name"])
 
+    is_night = bool(row["is_night"])
     n_peds = int(row["n_peds_within_10m"]) if bool(pd.notna(row["n_peds_within_10m"])) else 0
-    nearest = row["min_dist_pedestrian_m"]
-    facts = f"within 10 m: {n_peds} pedestrian{'' if n_peds == 1 else 's'}"
-    if bool(pd.notna(nearest)):
-        facts += f" · nearest at {float(nearest):.1f} m"
 
     curve = filmstrip_steps(row)
     steps = [
@@ -631,12 +687,14 @@ def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
     return {
         "event": {
             "chips": [
-                "night" if bool(row["is_night"]) else "day",
+                "night" if is_night else "day",
                 *(["rain"] if bool(row["is_rain"]) else []),
             ],
-            "facts": facts,
+            "facts": _event_facts(n_peds, row["min_dist_pedestrian_m"]),
             "scene_name": scene,
             "severity_caption": severity_caption(_TOUR_PRESET, row.to_dict()),
+            "summary": _event_summary(n_peds=n_peds),
+            "title": _event_title(is_night=is_night),
             "token": token,
         },
         "filmstrip": {
@@ -660,9 +718,10 @@ def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
                 f"The {scene} hard-braking event with its ground-truth boxes drawn on it."
             ),
         ),
+        "found_sentence": _found_sentence(len(ranked)),
         "mechanism_sentence": _MINING_MECHANISM,
-        "night_sentence": f"{n_night} of {len(ranked)} matching events are at night.",
-        "parity_caption": parity_short(
+        "night_sentence": _night_sentence(n_night),
+        "parity_caption": parity_line(
             int(package.subgraph["sql_count"]),
             package.subgraph["cypher_count"],
             package.subgraph["parity"],
@@ -674,7 +733,14 @@ def build_scenario(package: Package, writer: Writer) -> dict[str, Any]:
             ),
             _provenance("recomputed", "overlay from gt_boxes.parquet"),
         ],
-        "takeaway": "Perception failures must be analyzed in driving context.",
+        "takeaway": (
+            "A single image doesn't tell the whole story. Understanding a model failure "
+            "requires knowing what was happening around the vehicle."
+        ),
+        "timeline_lede": _TIMELINE_LEDE,
+        "timeline_sentence": (
+            _timeline_sentence(curve, is_night=is_night, n_peds=n_peds) if curve.steps else None
+        ),
     }
 
 
