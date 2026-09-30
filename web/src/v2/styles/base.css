@@ -1850,15 +1850,35 @@ a:hover {
   padding-top: 0;
 }
 
-/* ── the cover: in the report's column, the title on one line at desktop width ──
-   The cover shares the sections' left edge. Only the title may run past the
-   column's right edge, up to the viewport's gutter (50vw + half the column), and
-   its size tracks that room (~26.8 px of line per px of type), so it holds one
-   line at desktop widths and wraps only where there is no room. */
+/* ── one left edge (2026-10-01) ─────────────────────────────────────────────
+   The report is anchored left, not centred: the column sits a fixed inset from
+   the viewport's left edge, and everything (cover, section heads, text, wide
+   figures, chain bands) starts at that same edge. Wide elements extend to the
+   RIGHT only. */
+:root {
+  --page-inset: clamp(0rem, 6vw - 1rem, 6rem);
+  --page-left: calc(var(--page-inset) + var(--gutter));
+  --wide-room: calc(100vw - var(--page-left) - var(--gutter));
+}
+
+.page {
+  width: auto;
+  margin-inline: var(--page-inset) auto;
+}
+
+.figure-wide,
+.chain-band {
+  width: min(var(--figure-max), var(--wide-room));
+  margin-left: 0;
+  transform: none;
+}
+
+/* The title may run past the column to the right gutter, sized to hold one line
+   at desktop widths; it wraps only where there is no room. */
 .cover-title {
   width: max-content;
-  max-width: calc(50vw + 50% - var(--gutter));
-  font-size: clamp(1.6rem, calc(1.8vw + 9px), 2.15rem);
+  max-width: var(--wide-room);
+  font-size: clamp(1.6rem, 3vw, 2.15rem);
 }
 
 .cover-contents,
