@@ -318,3 +318,21 @@ def test_report_edition_carries_no_provenance_apparatus() -> None:
     for gone in ("exporter", "colophon-stamp", "git_sha", "originalEdition", "Colophon</h2>"):
         assert gone not in colophon, f"{gone} is still in the end matter"
     assert "attribution" in colophon, "the dataset attribution must stay"
+
+
+def test_cover_dek_is_the_root_documents_description() -> None:
+    """The cover's dek is, verbatim, the `<meta name="description">` of the root
+    document (and its `og:description`), so what a search result or a link
+    preview promises and what the cover says are one sentence. The three copies
+    are typed out in two files, which is exactly the kind of drift nothing at
+    runtime notices."""
+    cover = _code(V2_SRC / "components" / "Cover.tsx")
+    literal = _only(r"const DEK =\s*((?:\"[^\"]*\"\s*\+?\s*)+);", cover, "DEK literal")
+    dek = "".join(re.findall(r'"([^"]*)"', literal))
+    document = _source(WEB / "index.html")
+    description = _only(r'name="description"\s+content="([^"]+)"', document, "meta description")
+    og_description = _only(
+        r'property="og:description"\s+content="([^"]+)"', document, "og:description"
+    )
+    assert dek == description
+    assert og_description == description
