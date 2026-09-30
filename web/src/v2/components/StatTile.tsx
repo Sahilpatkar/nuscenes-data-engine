@@ -24,7 +24,7 @@ export function StatTile({ label, value, detail, accent = false }: StatTileProps
     <div className={accent ? "stat-tile is-accent" : "stat-tile"}>
       <p className="stat-label">{label}</p>
       <p className="stat-value">{value}</p>
-      {detail ? <p className="stat-note mono">{detail}</p> : null}
+      {detail ? <p className="stat-note tnum">{detail}</p> : null}
     </div>
   );
 }

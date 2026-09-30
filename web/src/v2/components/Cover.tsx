@@ -6,37 +6,23 @@ import type { Meta } from "../../data/types";
 const meta = metaJson as Meta;
 
 /**
- * The report's masthead: rule, series line, title, dek, dateline, contents, the
- * cross-reference to the live app, rule. (The original edition at /v1/ is not
- * linked from here — this is the site's main edition; that one links back.)
+ * The report's masthead: the project's name, the title, one sentence on what the
+ * project does, the package metadata, and the contents. It states the project
+ * once; the name, title and description each say something the others do not.
  *
- * SITE-EDITORIAL COPY — the four constants below are the site's OWN fixed
- * words, not the package's, and they are the only prose on this page that the
- * bundle does not supply:
- *
- *   · SERIES is the running series line a report carries above its title;
- *   · TAGLINE is the project's one-line description, set under the series line;
- *   · COVER_TITLE is the promise the original edition already makes in its own
- *     landing headline — the two editions are one story and title it once;
- *   · DEK is, verbatim, the `<meta name="description">` of `web/index.html`,
- *     so what a search result promises and what the cover says are the same
- *     sentence.
- *
- * None of the three contains a number or a result, so nothing here can drift
- * away from the package. Everything that IS a fact — the version, the build date,
- * the commit, the live app's address — is read from `meta.json`.
+ * SITE-EDITORIAL COPY: the three constants below are the site's own fixed words
+ * and the only prose on this page the bundle does not supply. DEK is, verbatim,
+ * the `<meta name="description">` of `web/index.html` (a test pins the pair).
+ * None of them contains a number, so nothing here can drift from the package;
+ * the version, build date and commit are read from `meta.json`.
  */
-const SERIES = "Perception Data Engine · Technical report";
+const SERIES = "Perception Data Engine";
 
-const TAGLINE = "An autonomous-driving data engine built and evaluated on nuScenes";
-
-const COVER_TITLE = "From model failure to better training data";
+const COVER_TITLE = "Improving perception models through targeted data selection";
 
 const DEK =
-  "An autonomous-driving model is only as good as the data it learns from. This report " +
-  "shows how we identify where a detector struggles, find the data behind those " +
-  "failures, and use those insights to build a better training set then measure " +
-  "whether the model actually improves.";
+  "A data engine that identifies failure modes in an object detector, mines relevant " +
+  "training samples from nuScenes, and measures the effect of targeted retraining.";
 
 /** Abbreviated-commit length — the dateline is the one place the commit appears. */
 const SHA_CHARS = 7;
@@ -67,7 +53,6 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
         <hr className="rule" />
 
         <p className="eyebrow cover-series">{SERIES}</p>
-        <p className="measure cover-tagline">{TAGLINE}</p>
 
         <h1 id="cover-title" className="cover-title">
           {COVER_TITLE}
@@ -75,7 +60,7 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
 
         <p className="lede measure cover-dek">{DEK}</p>
 
-        <p className="mono cover-dateline">
+        <p className="tnum cover-dateline">
           package v{version}
           <span aria-hidden="true"> · </span>
           built {builtOn}
@@ -104,15 +89,6 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
           </ol>
         </nav>
 
-        <ul className="crossrefs">
-          <li>
-            <span className="eyebrow crossref-label">Live instrument</span>
-            <a href={meta.streamlit_base} target="_blank" rel="noopener noreferrer">
-              the Streamlit app
-              <span aria-hidden="true"> ↗</span>
-            </a>
-          </li>
-        </ul>
 
         <hr className="rule" />
       </div>

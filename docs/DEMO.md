@@ -14,7 +14,7 @@ own:
   instrument**: every frame, every arm, every scenario event, the interactive graph
   panel and the recorded chat session, with the guided tour as its default path.
 - **The story site** (`web/`, Vite + React + TypeScript) is a **designed reading**
-  of the same seven-step story — one page, seven sections, hand-rolled SVG charts,
+  of the same experiment — one page, hand-rolled SVG charts,
   first-class light and dark themes. It holds no deep-dive pages of its own: every
   deep dive is a labelled deep link back into the live Streamlit app. It ships in
   two editions over one bundle: the **report edition** at the site root (the main
@@ -22,7 +22,7 @@ own:
   edition" below.
 
 Every figure the site renders is exported at build time by `web/build_data.py`, which
-imports the app's own `filters.py` / `render.py` helpers and writes eight JSON files
+imports the app's own `filters.py` / `render.py` helpers and writes nine JSON files
 (`web/src/data/`) plus eleven pre-rendered overlays and thumbs (`web/public/story/`).
 That bundle is committed, and `tests/test_web_export.py` re-runs the exporter and
 asserts it comes back **byte-identical** — JSON byte-for-byte, images by name and
@@ -52,11 +52,17 @@ a change that breaks the site fails the PR rather than the deploy.
 
 ### Report edition (the site root)
 
-The site's main edition, served at the root `…/nuscenes-data-engine/`: the same seven
-steps in a research-report idiom — paper and ink with a cobalt accent, the Source
-superfamily (Serif 4 / Sans 3 / Code Pro), hairline rules, numbered sections and
-figures, light-first with a first-class dark — designed entirely
-in code rather than from the deck's identity. Its code is `web/src/v2/` behind the
+The site's main edition, served at the root `…/nuscenes-data-engine/`: the experiment
+written as a concise technical case study (V4, 2026-10-01) in six sections — baseline
+failure analysis (with the baseline-vs-engine study design and the research
+question), example failure, context-aware failure mining, targeted training-data
+selection, training intervention, and results (quantitative result first, then the
+strategy chart, one qualitative before/after, the pipeline, limitations, and links
+into the live app). Paper and ink with a cobalt accent spent only on results,
+emphasis and interactive elements; Source Serif 4 for headings, Source Sans 3 for
+body, labels and numbers, Source Code Pro only for code/model/config identifiers; no
+italics; per-frame acquisition facts folded under **Acquisition details**. The guided
+tour and the original edition keep the conversational seven-step telling. Its code is `web/src/v2/` behind the
 root MPA entry `web/index.html`; the original scroll-through edition (`web/src/`,
 entry `web/v1/index.html`) is served one directory down at `…/v1/`, and one Vite
 build emits both editions (`dist/index.html` and `dist/v1/index.html`) from the one
@@ -65,14 +71,13 @@ address, `…/v2/`, stays alive as a static redirect to the root
 (`web/public/v2/index.html`, copied through to `dist/v2/`), so links made before the
 swap still land.
 
-Zero data drift is structural rather than promised: the report edition imports the
-**same** `web/src/data/*.json` and `web/public/story/` bundle the original edition
-does — no second export, no second set of numbers — and `tests/test_web_v2.py` pins
-its copy the way `test_web_export.py` pins the original edition's: the seven step
-titles and stages against `views/tour.py`, the five story-contract sentences read
-from bundle fields instead of typed out, no recorded figure as a literal anywhere in
-the sources, the selection fold and fairness lead against their tour literals, and
-every image in **either** edition routed through the shared `web/src/assetUrl.ts`
+Zero data drift is structural rather than promised: the report edition reads the
+**same** exported bundle — its own copy is one more section of it,
+`web/src/data/report.json` (`build_report` in the exporter, every figure derived
+from the package through the helpers the other sections use, pinned whole by
+`test_web_export.py`) — and `tests/test_web_v2.py` pins the edition: its six
+section titles, no report sentence or recorded figure typed into a component, the
+acquisition fold closed by default, and every image in **either** edition routed through the shared `web/src/assetUrl.ts`
 (the base-prefix helper that keeps the bundle's document-relative srcs resolving from
 `/v1/`). The layout itself is pinned there too — the report at the root, the original
 at `/v1/`, the `/v2/` redirect, and the original edition's link back to the root

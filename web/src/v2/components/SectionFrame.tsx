@@ -7,8 +7,8 @@ import { useReveal } from "../../hooks/useReveal";
  *
  * A section opens on a full-measure hairline, carries a two-digit index beside
  * the step's PINNED title ("01 / We found a blind spot" — the numbering is the
- * report's frame, the title string is the live tour's own), and states its loop
- * stage and act in small caps on the right. It sources nothing: the report
+ * report's frame), and nothing else: no stage or act label beside it, because
+ * the title already says what the section does. It sources nothing: the report
  * carries no footnote apparatus, so a section ends where its content ends.
  *
  * Everything above is FRAME. The section's own content — figures, charts,
@@ -34,16 +34,12 @@ export interface SectionFrameProps {
   id: string;
   /** 1-based position in the seven-step story. */
   step: number;
-  /** The step's fixed title, as the live tour writes it. */
+  /** The section's technical title. */
   title: string;
-  /** The closed-improvement-loop stage this step lights. */
-  stage: string;
-  /** The deck's act, so both tellings are structured the same way. */
-  act: string;
   children?: ReactNode;
 }
 
-export function SectionFrame({ id, step, title, stage, act, children }: SectionFrameProps): JSX.Element {
+export function SectionFrame({ id, step, title, children }: SectionFrameProps): JSX.Element {
   const reveal = useReveal<HTMLDivElement>();
 
   return (
@@ -60,11 +56,6 @@ export function SectionFrame({ id, step, title, stage, act, children }: SectionF
             </span>
             {title}
           </h2>
-          <p className="eyebrow section-stage">
-            {stage}
-            <span aria-hidden="true"> · </span>
-            {act}
-          </p>
         </div>
 
         {children ? <div className="section-body">{children}</div> : null}
