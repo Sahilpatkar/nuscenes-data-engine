@@ -1850,14 +1850,15 @@ a:hover {
   padding-top: 0;
 }
 
-/* ── the cover: the title on one line at desktop width ─────────────────────── */
-.cover .page {
-  max-width: calc(var(--figure-max) + 2 * var(--gutter));
-}
-
+/* ── the cover: in the report's column, the title on one line at desktop width ──
+   The cover shares the sections' left edge. Only the title may run past the
+   column's right edge, up to the viewport's gutter (50vw + half the column), and
+   its size tracks that room (~26.8 px of line per px of type), so it holds one
+   line at desktop widths and wraps only where there is no room. */
 .cover-title {
-  max-width: none;
-  font-size: clamp(1.7rem, 2.75vw, 2.15rem);
+  width: max-content;
+  max-width: calc(50vw + 50% - var(--gutter));
+  font-size: clamp(1.6rem, calc(1.8vw + 9px), 2.15rem);
 }
 
 .cover-contents,
