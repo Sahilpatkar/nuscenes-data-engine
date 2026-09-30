@@ -17,10 +17,10 @@
       "value": "0.0826"
     }
   ],
-  "derived_sentence": "`baseline` scores 0.2477 mAP50-95 overall but 0.1667 at night — and 0.0826 on night pedestrians, the case that matters most.",
+  "derived_sentence": "The overall score of 0.2477 hid the severity of the problem. At night, performance fell to 0.1667 and for nighttime pedestrians, it dropped to just 0.0826.",
   "headline": "Aggregate accuracy was hiding a night-driving blind spot.",
-  "miss_sentence": "60 of 62 night validation frames carry at least one baseline miss.",
-  "problem_sentence": "The detector looked reasonable overall — but performance dropped sharply at night, especially for pedestrians.",
+  "miss_sentence": "The problem was widespread: the detector missed at least one object in 60 of the 62 nighttime test frames.",
+  "problem_sentence": "At first, the detector seemed to perform reasonably well. But when we looked at different driving conditions, a major weakness appeared: at night, its ability to detect pedestrians dropped dramatically.",
   "provenance": [
     {
       "detail": "mAP from active_learning_results.parquet",
@@ -33,6 +33,6 @@
       "sentence": "recomputed in this app from the package tables"
     }
   ],
-  "purpose_sentence": "The goal of the system: automatically find failures like this and turn them into better training data.",
-  "takeaway": "Aggregate metrics hide important failure slices."
+  "purpose_sentence": "So we built a system that finds weaknesses like this, identifies the data the model needs, and turns those failures into better training data.",
+  "takeaway": "A single overall score can hide where a model actually struggles."
 }

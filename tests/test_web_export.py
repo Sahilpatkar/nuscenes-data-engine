@@ -69,12 +69,13 @@ STREAMLIT_BASE = "https://nuscenes-data-engine-sahil.streamlit.app"
 # The five story contracts of the spec (§1), fixed sentences the exporter ships as
 # bundle fields rather than the site hard-coding them in a component.
 PROBLEM_SENTENCE = (
-    "The detector looked reasonable overall — but performance dropped sharply at "
-    "night, especially for pedestrians."
+    "At first, the detector seemed to perform reasonably well. But when we looked at "
+    "different driving conditions, a major weakness appeared: at night, its ability to "
+    "detect pedestrians dropped dramatically."
 )
 PURPOSE_SENTENCE = (
-    "The goal of the system: automatically find failures like this and turn them "
-    "into better training data."
+    "So we built a system that finds weaknesses like this, identifies the data the "
+    "model needs, and turns those failures into better training data."
 )
 LEDE_SENTENCE = (
     "Instead of randomly adding more images, the system searches the training pool "
@@ -262,7 +263,8 @@ def test_blindspot_drops_the_night_pedestrian_card_when_the_package_has_none(
         "Night mAP50-95",
     ]
     assert section["derived_sentence"] == (
-        "`baseline` scores 0.2477 mAP50-95 overall but 0.1667 at night."
+        "The overall score of 0.2477 hid the severity of the problem. At night, "
+        "performance fell to 0.1667."
     )
     for text in _strings(section):
         assert not _BARE_NAN.search(text), f"bare 'nan' in {text!r}"
@@ -311,9 +313,24 @@ def test_story_contract_sentences_are_shipped_verbatim(
 def test_blindspot_states_the_three_recorded_metrics(
     bundle: dict[str, dict[str, Any]],
 ) -> None:
-    cards = bundle["blindspot"]["cards"]
-    assert [card["value"] for card in cards] == ["0.2477", "0.1667", "0.0826"]
-    assert "60 of 62" in bundle["blindspot"]["miss_sentence"]
+    blindspot = bundle["blindspot"]
+    assert [card["value"] for card in blindspot["cards"]] == ["0.2477", "0.1667", "0.0826"]
+    # The two sentences that carry those numbers in prose, as the exporter derives
+    # them (wording fixed 2026-09-29; every figure in them is the package's).
+    assert blindspot["miss_sentence"] == (
+        "The problem was widespread: the detector missed at least one object in 60 of "
+        "the 62 nighttime test frames."
+    )
+    assert blindspot["derived_sentence"] == (
+        "The overall score of 0.2477 hid the severity of the problem. At night, "
+        "performance fell to 0.1667 and for nighttime pedestrians, it dropped to just "
+        "0.0826."
+    )
+    assert blindspot["takeaway"] == (
+        "A single overall score can hide where a model actually struggles."
+    )
+    # ... and step 7 recaps the miss count in the same words.
+    assert blindspot["miss_sentence"] in bundle["closed_loop"]["answers"][0]["sentences"]
 
 
 def test_winner_sentence_is_computed_not_asserted(bundle: dict[str, dict[str, Any]]) -> None:

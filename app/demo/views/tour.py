@@ -126,13 +126,23 @@ _TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as 
 # ships them as bundle fields for the site, and the two front-ends must say exactly
 # the same thing -- the same copy-contract the tour keeps with the deep pages.
 _PROBLEM_SENTENCE = (
-    "The detector looked reasonable overall — but performance dropped sharply at "
-    "night, especially for pedestrians."
+    "At first, the detector seemed to perform reasonably well. But when we looked at "
+    "different driving conditions, a major weakness appeared: at night, its ability to "
+    "detect pedestrians dropped dramatically."
 )
 _PURPOSE_SENTENCE = (
-    "The goal of the system: automatically find failures like this and turn them "
-    "into better training data."
+    "So we built a system that finds weaknesses like this, identifies the data the "
+    "model needs, and turns those failures into better training data."
 )
+
+
+def _miss_sentence(n_night_fn: int, n_night: int) -> str:
+    """The counted miss line, worded once for step 1 and its step-7 recap. The site's
+    exporter (`web/build_data.py::_miss_sentence`) says it in the same words."""
+    return (
+        "The problem was widespread: the detector missed at least one object in "
+        f"{n_night_fn} of the {n_night} nighttime test frames."
+    )
 # Step 1: what the frame IS (written only where the manifest says so), and the
 # question it hands to the mining steps.
 _HELD_OUT_CAPTION = "Held-out validation frame — never in any training set"
@@ -357,30 +367,28 @@ def _render_weakness(data: _TourData) -> None:
         st.info(STALE_PACKAGE_NOTE)
     else:
         n_night, n_night_fn, n_val = counts
-        st.markdown(
-            f"**{n_night_fn} of {n_night} night validation frames carry at least one "
-            f"baseline miss.**"
-        )
+        st.markdown(f"**{_miss_sentence(n_night_fn, n_night)}**")
         recomputed_detail = (
             f"frame counts from frame_manifest/gt_boxes/predictions ({n_val} curated "
             "val frames)"
         )
-    # One sentence off the same baseline row the cards are read from -- and the
+    # The prose off the same baseline row the cards are read from -- and the
     # night-pedestrian clause is dropped on a package that has no such number,
     # exactly as its card is (a sentence must not out-claim the cards above it).
     night_ped_clause = (
-        f" — and {float(night_ped):.4f} on night pedestrians, the case that matters most"
+        f" and for nighttime pedestrians, it dropped to just {float(night_ped):.4f}"
         if has_night_ped
         else ""
     )
     st.markdown(
-        f"`{data.baseline}` scores {row['overall_map5095']:.4f} mAP50-95 overall but "
-        f"{row['night_map5095']:.4f} at night{night_ped_clause}."
+        f"The overall score of {row['overall_map5095']:.4f} hid the severity of the "
+        f"problem. At night, performance fell to {row['night_map5095']:.4f}"
+        f"{night_ped_clause}."
     )
     # Beat (c), and the last thing on the screen before the takeaway: the numbers
     # above are a diagnosis, and this is what the rest of the tour does with one.
     st.markdown(_PURPOSE_SENTENCE)
-    learned("Aggregate metrics hide important failure slices.")
+    learned("A single overall score can hide where a model actually struggles.")
     provenance("recorded", "mAP from active_learning_results.parquet")
     if recomputed_detail:
         provenance("recomputed", recomputed_detail)
@@ -1318,10 +1326,7 @@ def _result_weakness(data: _TourData) -> None:
         st.info(STALE_PACKAGE_NOTE)
     else:
         n_night, n_night_fn, _n_val = counts
-        st.markdown(
-            f"{n_night_fn} of {n_night} night validation frames carry at least one "
-            "baseline miss."
-        )
+        st.markdown(_miss_sentence(n_night_fn, n_night))
     provenance("recorded", "mAP from active_learning_results.parquet")
     if counts is not None:
         provenance("recomputed", "frame counts from frame_manifest/gt_boxes/predictions")
