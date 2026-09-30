@@ -10,8 +10,9 @@ const AUTHOR = "Sahil Patkar";
  * The report's end matter: the dataset attribution the nuScenes licence asks
  * for, and the author line. Nothing else — the report sources nothing on the
  * page (no provenance sentence, no package stamp, no edition note; the cover's
- * dateline is the one place the package version appears, and the cover's
- * cross-references are the one door to the original edition).
+ * dateline is the one place the package version appears). Nothing here links
+ * to the original edition at /v1/ either — that one links back to this, the
+ * site's main edition, not the other way round.
  *
  * The attribution is read from `meta.json`, so a re-export moves it without
  * anyone editing this file.

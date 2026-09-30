@@ -7,7 +7,8 @@ const meta = metaJson as Meta;
 
 /**
  * The report's masthead: rule, series line, title, dek, dateline, contents, the
- * two cross-references, rule.
+ * cross-reference to the live app, rule. (The original edition at /v1/ is not
+ * linked from here — this is the site's main edition; that one links back.)
  *
  * SITE-EDITORIAL COPY — the three constants below are the site's OWN fixed
  * words, not the package's, and they are the only prose on this page that the
@@ -55,10 +56,6 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
      checker, so the whole stamp is the fallback — a longer line, never a wrong
      one. */
   const builtOn = builtAt.split("T")[0] ?? builtAt;
-  /* Vite's base: "/" in dev and preview, "/nuscenes-data-engine/" on Pages —
-     always with a trailing slash, and always THIS document's directory. The
-     original edition is one level down from it. */
-  const originalEdition = `${import.meta.env.BASE_URL}v1/`;
 
   return (
     <section className="cover" id={COVER_ID} aria-labelledby="cover-title">
@@ -109,10 +106,6 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
               the Streamlit app
               <span aria-hidden="true"> ↗</span>
             </a>
-          </li>
-          <li>
-            <span className="eyebrow crossref-label">Original edition</span>
-            <a href={originalEdition}>the scroll-through story site at /v1/</a>
           </li>
         </ul>
 
