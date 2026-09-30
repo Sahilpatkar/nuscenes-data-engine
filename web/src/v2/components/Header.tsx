@@ -25,7 +25,7 @@ import { useActiveSection } from "../hooks/useActiveSection";
  * "Contents"). The seven titles are the tour's, passed down from App.
  */
 
-const WORDMARK = "nuScenes Data Engine";
+const WORDMARK = "Perception Data Engine";
 const EDITION = "Report edition";
 /** What the readout says while the reader is still above the first section. */
 const CONTENTS_LABEL = "Contents";

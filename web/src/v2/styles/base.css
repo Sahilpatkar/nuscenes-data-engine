@@ -439,6 +439,11 @@ a:hover {
   margin-top: 1rem;
 }
 
+.cover-tagline {
+  margin-top: 0.5rem;
+  color: var(--muted);
+}
+
 .cover-title {
   margin-top: 0.55rem;
 }

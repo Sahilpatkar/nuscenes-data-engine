@@ -300,8 +300,8 @@ def render_chat(health: dict) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="nuScenes Data Engine — Demo", page_icon="🚗", layout="wide")
-    st.title("nuScenes Data Engine")
+    st.set_page_config(page_title="Perception Data Engine — Demo", page_icon="🚗", layout="wide")
+    st.title("Perception Data Engine")
 
     health = api_health()
     if health is None:

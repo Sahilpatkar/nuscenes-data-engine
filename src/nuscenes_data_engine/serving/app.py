@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="nuScenes Data Engine — Detection API", version=__version__, lifespan=lifespan)
+app = FastAPI(title="Perception Data Engine — Detection API", version=__version__, lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)

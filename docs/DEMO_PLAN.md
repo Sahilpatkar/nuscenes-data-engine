@@ -1,4 +1,4 @@
-# nuScenes Perception Data Engine — Demo Plan
+# Perception Data Engine: Demo Plan
 
 ## Objective
 
@@ -46,7 +46,7 @@ Immediately explain what the project is and why it matters.
 
 Suggested project description:
 
-> **nuScenes Perception Data Engine**  
+> **Perception Data Engine**  
 > A system for training, evaluating, diagnosing, and improving autonomous-driving perception models using active learning, semantic search, knowledge graphs, CAN-bus context, and weak supervision.
 
 ## Headline Scale Metrics
