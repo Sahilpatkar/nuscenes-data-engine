@@ -20,7 +20,7 @@ from views import (
 
 from data import package_missing
 
-st.set_page_config(page_title="nuScenes Perception Data Engine", layout="wide")
+st.set_page_config(page_title="Perception Data Engine", layout="wide")
 
 if package_missing():
     st.error(

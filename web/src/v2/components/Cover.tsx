@@ -10,11 +10,12 @@ const meta = metaJson as Meta;
  * cross-reference to the live app, rule. (The original edition at /v1/ is not
  * linked from here — this is the site's main edition; that one links back.)
  *
- * SITE-EDITORIAL COPY — the three constants below are the site's OWN fixed
+ * SITE-EDITORIAL COPY — the four constants below are the site's OWN fixed
  * words, not the package's, and they are the only prose on this page that the
  * bundle does not supply:
  *
  *   · SERIES is the running series line a report carries above its title;
+ *   · TAGLINE is the project's one-line description, set under the series line;
  *   · COVER_TITLE is the promise the original edition already makes in its own
  *     landing headline — the two editions are one story and title it once;
  *   · DEK is, verbatim, the `<meta name="description">` of `web/index.html`,
@@ -25,7 +26,9 @@ const meta = metaJson as Meta;
  * away from the package. Everything that IS a fact — the version, the build date,
  * the commit, the live app's address — is read from `meta.json`.
  */
-const SERIES = "nuScenes Data Engine · Technical report";
+const SERIES = "Perception Data Engine · Technical report";
+
+const TAGLINE = "An autonomous-driving data engine built and evaluated on nuScenes";
 
 const COVER_TITLE = "From model failure to better training data";
 
@@ -64,6 +67,7 @@ export function Cover({ entries }: { entries: readonly CoverEntry[] }): JSX.Elem
         <hr className="rule" />
 
         <p className="eyebrow cover-series">{SERIES}</p>
+        <p className="measure cover-tagline">{TAGLINE}</p>
 
         <h1 id="cover-title" className="cover-title">
           {COVER_TITLE}

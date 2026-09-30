@@ -5020,7 +5020,7 @@ def test_navigation_sections_keep_every_page_reachable(
     at = AppTest.from_file(str(DEMO_DIR / "main.py"))
     at.run(timeout=30)
     assert not at.exception
-    assert [str(title.value) for title in at.title] == ["nuScenes Perception Data Engine"]
+    assert [str(title.value) for title in at.title] == ["Perception Data Engine"]
 
     for page_path, title in _SECTIONED_PAGES:
         at.switch_page(page_path).run(timeout=30)

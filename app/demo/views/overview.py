@@ -196,11 +196,12 @@ def _loop_beats(results: dict[str, Any], arms: pd.DataFrame) -> list[str | None]
 
 
 def render() -> None:
-    st.title("nuScenes Perception Data Engine")
+    st.title("Perception Data Engine")
     st.markdown(
-        "> A system for training, evaluating, diagnosing, and improving "
-        "autonomous-driving perception models using active learning, semantic "
-        "search, knowledge graphs, CAN-bus context, and weak supervision."
+        "> **An autonomous-driving data engine built and evaluated on nuScenes.** "
+        "A system for training, evaluating, diagnosing, and improving perception "
+        "models using active learning, semantic search, knowledge graphs, CAN-bus "
+        "context, and weak supervision."
     )
 
     metrics = load_overview()

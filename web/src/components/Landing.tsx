@@ -33,7 +33,7 @@ export function Landing(): JSX.Element {
     <header className="landing">
       <div className="page landing-inner">
         <div className="landing-top">
-          <p className="eyebrow">nuScenes Data Engine</p>
+          <p className="eyebrow">Perception Data Engine</p>
           <ThemeToggle />
         </div>
 

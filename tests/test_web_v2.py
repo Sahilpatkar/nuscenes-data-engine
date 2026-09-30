@@ -349,3 +349,36 @@ def test_report_edition_chrome_has_no_em_dashes() -> None:
     document = _source(WEB / "index.html")
     titles = re.findall(r"<title>([^<]*)</title>|og:title\" content=\"([^\"]*)\"", document)
     assert titles and not any("\u2014" in "".join(match) for match in titles), titles
+
+
+PROJECT_NAME = "Perception Data Engine"
+PROJECT_TAGLINE = "An autonomous-driving data engine built and evaluated on nuScenes"
+
+
+def test_site_carries_the_project_name_and_tagline() -> None:
+    """The project's display name (renamed 2026-09-30) and its one-line tagline:
+    the running head's wordmark, the cover's series line and tagline, and the root
+    document's titles carry the name, and no edition still says the old one. The
+    code identifiers -- the Python package, the repo slug in URLs, the npm name --
+    are deliberately not part of the rename."""
+    header = _code(V2_SRC / "components" / "Header.tsx")
+    cover = _code(V2_SRC / "components" / "Cover.tsx")
+    assert f'const WORDMARK = "{PROJECT_NAME}"' in header
+    assert f'const SERIES = "{PROJECT_NAME} · Technical report"' in cover
+    assert f'const TAGLINE = "{PROJECT_TAGLINE}"' in cover
+    assert "{TAGLINE}" in cover, "the cover renders the tagline"
+    document = _source(WEB / "index.html")
+    assert f"<title>{PROJECT_NAME} · Report edition</title>" in document
+    assert f'property="og:title" content="{PROJECT_NAME} · Report edition"' in document
+    stale = [
+        str(path.relative_to(SITE_SRC))
+        for path in SITE_SRC.rglob("*.tsx")
+        if "nuScenes Data Engine" in _code(path)
+    ]
+    assert not stale, f"the old name is still rendered by {stale}"
+    for doc in (
+        WEB / "index.html",
+        WEB / "v1" / "index.html",
+        WEB / "public" / "v2" / "index.html",
+    ):
+        assert "nuScenes Data Engine" not in _source(doc), doc

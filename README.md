@@ -1,4 +1,6 @@
-# nuscenes-data-engine
+# Perception Data Engine
+
+**An autonomous-driving data engine built and evaluated on nuScenes.**
 
 [![CI](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahilpatkar/nuscenes-data-engine/actions/workflows/ci.yml)
 
