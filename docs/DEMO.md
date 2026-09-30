@@ -75,8 +75,9 @@ the sources, the selection fold and fairness lead against their tour literals, a
 every image in **either** edition routed through the shared `web/src/assetUrl.ts`
 (the base-prefix helper that keeps the bundle's document-relative srcs resolving from
 `/v1/`). The layout itself is pinned there too — the report at the root, the original
-at `/v1/`, the `/v2/` redirect, and each edition's link to the other built from
-Vite's base — because a build emits any input map without comment.
+at `/v1/`, the `/v2/` redirect, and the original edition's link back to the root
+built from Vite's base (the report edition links to nothing but the live app) —
+because a build emits any input map without comment.
 
 **Report edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/](https://sahilpatkar.github.io/nuscenes-data-engine/) (first deployed at `/v2/` on 2026-09-08, since promoted to the site root; `/v2/` redirects there).
 **Original edition URL:** [https://sahilpatkar.github.io/nuscenes-data-engine/v1/](https://sahilpatkar.github.io/nuscenes-data-engine/v1/)

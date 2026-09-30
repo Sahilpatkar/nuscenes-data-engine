@@ -293,12 +293,14 @@ def test_retired_v2_address_redirects_to_the_root() -> None:
     assert 'name="robots" content="noindex"' in text
 
 
-def test_editions_link_to_each_other_through_the_base() -> None:
-    """Each edition's door to the other is an `href` built from Vite's base: the
-    report edition (at the root) points at `v1/`, the original edition (at `/v1/`)
-    points back at the base itself. A hard-coded `/v1/` breaks under the Pages
-    base `/nuscenes-data-engine/`; a hard-coded Pages URL breaks the preview."""
-    assert "${import.meta.env.BASE_URL}v1/" in _code(V2_SRC / "components" / "Cover.tsx")
+def test_only_the_original_edition_links_to_the_other() -> None:
+    """The report edition is the site's main edition and carries no link to the
+    original one (the cover's "Original edition" cross-reference was removed on
+    2026-09-29, the colophon's note before it). The original edition's footer
+    still points back at the root, through Vite's base so the link holds under
+    the Pages prefix `/nuscenes-data-engine/` and in the preview alike."""
+    assert "v1/" not in _code(V2_SRC / "components" / "Cover.tsx")
+    assert "v1/" not in _code(V2_SRC / "components" / "Colophon.tsx")
     assert "import.meta.env.BASE_URL" in _code(SITE_SRC / "components" / "Footer.tsx")
 
 
