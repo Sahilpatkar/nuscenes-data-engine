@@ -578,7 +578,10 @@ REPORT_EXPECTED: dict[str, Any] = {
         "comparison": (
             "Night mAP50-95 is 33% below overall; night-pedestrian mAP50-95 is 67% below overall."
         ),
-        "lede": "Nighttime pedestrians are the baseline detector's weakest evaluated slice.",
+        "lede": (
+            "Nighttime pedestrian detection has the lowest mAP50-95 among the evaluated "
+            "slices."
+        ),
         "metric_definition": (
             "mAP50-95: mean Average Precision averaged over IoU thresholds from 0.50 to "
             "0.95; higher is better. Slices evaluated: overall, day, night, clear, rain, "

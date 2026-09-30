@@ -1390,9 +1390,9 @@ def _report_baseline(package: Package) -> dict[str, Any]:
     ]
     weakest = min(evaluated, key=lambda item: item[1])[0]
     subject = (
-        "Nighttime pedestrians are"
+        "Nighttime pedestrian detection has"
         if weakest == "night pedestrians"
-        else (f"The {weakest} slice is")
+        else f"The {weakest} slice has"
     )
     overall, night = float(row["overall_map5095"]), float(row["night_map5095"])
     cards = [
@@ -1409,7 +1409,7 @@ def _report_baseline(package: Package) -> dict[str, Any]:
     return {
         "cards": cards,
         "comparison": comparison + ".",
-        "lede": f"{subject} the baseline detector's weakest evaluated slice.",
+        "lede": f"{subject} the lowest mAP50-95 among the evaluated slices.",
         "metric_definition": (
             "mAP50-95: mean Average Precision averaged over IoU thresholds from 0.50 to "
             "0.95; higher is better. Slices evaluated: "
