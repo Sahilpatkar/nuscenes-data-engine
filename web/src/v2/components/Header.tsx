@@ -29,8 +29,8 @@ const WORDMARK = "nuScenes Data Engine";
 const EDITION = "Report edition";
 /** What the readout says while the reader is still above the first section. */
 const CONTENTS_LABEL = "Contents";
-/** The index slot before the first section — a held place, not a "00". */
-const NO_INDEX = "—";
+/** The index slot before the first section: the front matter's own number. */
+const NO_INDEX = "00";
 
 export interface HeaderStep {
   id: string;
@@ -102,7 +102,7 @@ export function Header({ steps }: { steps: readonly HeaderStep[] }): JSX.Element
               {current ? reportIndex(current.step) : NO_INDEX} / {reportIndex(steps.length)}
             </span>
             <span className="header-readout-dash" aria-hidden="true">
-              {" — "}
+              {" · "}
             </span>
             <span className="header-readout-title">
               {current ? current.title : CONTENTS_LABEL}

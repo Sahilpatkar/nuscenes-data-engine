@@ -59,7 +59,7 @@ export function Figure({
       {children}
       <figcaption className="figure-caption">
         <span className="figure-number">Figure {number}</span>
-        <span aria-hidden="true"> — </span>
+        <span aria-hidden="true">. </span>
         {caption}
       </figcaption>
     </figure>

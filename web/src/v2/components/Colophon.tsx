@@ -26,7 +26,7 @@ export function Colophon(): JSX.Element {
         <hr className="rule" />
 
         <p className="measure colophon-attribution">
-          Data: {attribution.dataset} — {attribution.citation}. Licensed {attribution.license};
+          Data: {attribution.dataset} ({attribution.citation}). Licensed {attribution.license};
           this project is non-commercial and shares alike.{" "}
           <a href={attribution.url} target="_blank" rel="noopener noreferrer">
             {attribution.url}

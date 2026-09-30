@@ -129,7 +129,7 @@ export function MissedPedestrian({ data }: { data: HeroFrame }): JSX.Element {
           <li key={fact.subject}>
             <strong>{fact.subject}</strong>
             <span className="claims-detail">
-              {" — "}
+              {" · "}
               {fact.claims.map((claim) => `${claim.label}: ${claim.claim}`).join(" · ")}
             </span>
           </li>

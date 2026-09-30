@@ -80,7 +80,7 @@ _EXPLAIN_ABSENT_NOTE = (
 _EXPLAIN_FRAME_ABSENT_NOTE = (
     "this frame is not in the staged selection facts — re-run `demo al-explain`"
 )
-_TRAIN_POOL_NOTE = "train-pool frame — no predictions (models never saw it as a test image)"
+_TRAIN_POOL_NOTE = "train-pool frame: no predictions (models never saw it as a test image)"
 
 # The paired quota chart gets crowded well before all 97 communities fit; the
 # heaviest ones are where the night floor's reallocation is visible anyway.

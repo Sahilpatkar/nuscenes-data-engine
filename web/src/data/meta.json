@@ -7,32 +7,32 @@
   },
   "deep_links": [
     {
-      "label": "Guided tour — the same story, one screen at a time in the live app",
+      "label": "Guided tour: the same story, one screen at a time in the live app",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/tour",
       "url_path": "tour"
     },
     {
-      "label": "Failure Explorer — every miss, filterable by condition",
+      "label": "Failure Explorer: every miss, filterable by condition",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/failures",
       "url_path": "failures"
     },
     {
-      "label": "Scenario Search — every preset, every matching event",
+      "label": "Scenario Search: every preset, every matching event",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/scenarios",
       "url_path": "scenarios"
     },
     {
-      "label": "Active Learning — the full experiment, all arms",
+      "label": "Active Learning: the full experiment, all arms",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/active_learning",
       "url_path": "active_learning"
     },
     {
-      "label": "Weak Supervision — where the rest of the gain went",
+      "label": "Weak Supervision: where the rest of the gain went",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/weak_supervision",
       "url_path": "weak_supervision"
     },
     {
-      "label": "Ask the Dataset — recorded chat replays",
+      "label": "Ask the Dataset: recorded chat replays",
       "url": "https://nuscenes-data-engine-sahil.streamlit.app/chat_replay",
       "url_path": "chat_replay"
     }

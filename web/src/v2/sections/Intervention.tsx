@@ -29,14 +29,14 @@ import type { Intervention as InterventionData } from "../../data/types";
  */
 export function Intervention({ data }: { data: InterventionData }): JSX.Element {
   /* Which clause is the control clause: the exporter appends it last and joins it
-     with an em dash (`_fairness_parts` / `_fairness_sentence`), and writes it at
+     with a semicolon (`_fairness_parts` / `_fairness_sentence`), and writes it at
      all only when the control arm is one of the charted ones. Reading it back off
      the sentence — rather than assuming "the last chip" — means a package without
      a charted control emphasises nothing instead of promoting a held-constant
      clause into the role. */
   const last = data.fairness_parts[data.fairness_parts.length - 1];
   const control =
-    last !== undefined && data.fairness_sentence.endsWith(`— ${last}.`) ? last : null;
+    last !== undefined && data.fairness_sentence.endsWith(`; ${last}.`) ? last : null;
 
   return (
     <>

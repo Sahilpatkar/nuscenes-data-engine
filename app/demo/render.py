@@ -81,11 +81,11 @@ _PRED_STYLES: dict[str, BoxStyle] = {"tp": STYLE_TP, "fp": STYLE_FP, "low_conf":
 # The badge COLOUR is only a hint -- Streamlit has no white badge, and "dashed" is not
 # a colour at all -- so the WORDING carries the on-image description in every item.
 LEGEND_ITEMS: tuple[tuple[str, str], ...] = (
-    ("green", "green — ground truth"),
-    ("orange", "orange dashed — GT box the model missed"),
-    ("gray", "white — true positive"),
-    ("yellow", "yellow dotted — low-confidence claim (below the hit floor)"),
-    ("red", "red — false positive"),
+    ("green", "green: ground truth"),
+    ("orange", "orange dashed: GT box the model missed"),
+    ("gray", "white: true positive"),
+    ("yellow", "yellow dotted: low-confidence claim (below the hit floor)"),
+    ("red", "red: false positive"),
 )
 # STYLE_PSEUDO deliberately has NO entry here (consolidated review M4): a pseudo box
 # is not a prediction status, and the one page that draws them -- Weak Supervision --

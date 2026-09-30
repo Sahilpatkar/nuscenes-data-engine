@@ -36,7 +36,7 @@
         "n_scenes": 501,
         "n_train_images": 8535,
         "night_share": 0.127,
-        "strategy": "Random sample — control"
+        "strategy": "Random sample (control)"
       },
       {
         "arm": "mined",
@@ -69,7 +69,7 @@
     "title": "Night mAP50-95 vs baseline, by acquisition strategy",
     "y_title": "Δ night mAP50-95"
   },
-  "charted_ids_caption": "Baseline (no mined data) (`baseline`) · Random sample — control (`random`) · Similarity mining (`mined`) · Rate + stratified mining (`rate_strat`) · Graph + night targeting (`graph_rate_night`)",
+  "charted_ids_caption": "Baseline (no mined data) (`baseline`) · Random sample (control) (`random`) · Similarity mining (`mined`) · Rate + stratified mining (`rate_strat`) · Graph + night targeting (`graph_rate_night`)",
   "fairness_parts": [
     "Same detector",
     "same 8,535-frame budget",
@@ -77,9 +77,9 @@
     "scored on the same held-out split",
     "Random sample is the control"
   ],
-  "fairness_sentence": "Same detector · same 8,535-frame budget · same training configuration · scored on the same held-out split — Random sample is the control.",
-  "headline": "We did not just add data — we changed what the model trains on.",
-  "night_share_line": "Graph + night targeting: 31% night · Random sample — control: 13% night · Similarity mining: 0% night",
+  "fairness_sentence": "Same detector · same 8,535-frame budget · same training configuration · scored on the same held-out split; Random sample is the control.",
+  "headline": "We did not just add data. We changed what the model trains on.",
+  "night_share_line": "Graph + night targeting: 31% night · Random sample (control): 13% night · Similarity mining: 0% night",
   "provenance": [
     {
       "detail": "active_learning_results.parquet",
@@ -88,6 +88,6 @@
     }
   ],
   "similarity_caption": "Visual similarity alone concentrated on daytime appearance (0% night); the graph + night-floor arm explicitly preserved night coverage.",
-  "spread_sentence": "The 1,500 frames came from 368 scenes — targeted, but not near-duplicates of one scene.",
+  "spread_sentence": "The 1,500 frames came from 368 scenes: targeted, but not near-duplicates of one scene.",
   "winner_sentence": "Best intervention for the diagnosed night weakness: Graph + night targeting (`graph_rate_night`, +0.0101 night)."
 }

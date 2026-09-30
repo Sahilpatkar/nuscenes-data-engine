@@ -1074,7 +1074,7 @@ def test_selection_factors_from_explain_row() -> None:
         ("Community quota", "323 frames", None),
         ("Picked in", "night pass (night floor 375)", None),
         ("Similarity-degree rank", "3rd of 916", None),
-        ("Routed failures", "none — not itself a routing target", None),
+        ("Routed failures", "none (not itself a routing target)", None),
     ]
 
 
@@ -2218,7 +2218,7 @@ def test_arm_story_label_says_what_each_mining_arm_did() -> None:
     ``model_label``, so a story label is never invented for an arm nobody wrote one
     for."""
     assert arm_story_label("baseline") == "Baseline (no mined data)"
-    assert arm_story_label("random") == "Random sample — control"
+    assert arm_story_label("random") == "Random sample (control)"
     assert arm_story_label("mined") == "Similarity mining"
     assert arm_story_label("rate") == "Failure-rate mining"
     assert arm_story_label("strat") == "Stratified mining"
@@ -2245,7 +2245,7 @@ def test_tour_strategies_orders_the_comparison_as_the_story_tells_it() -> None:
     ]
     assert list(strategies.values()) == [
         "Baseline (no mined data)",
-        "Random sample — control",
+        "Random sample (control)",
         "Similarity mining",
         "Rate + stratified mining",
         "Graph + night targeting",
