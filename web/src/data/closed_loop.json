@@ -5,7 +5,7 @@
       "sentences": [
         "Night mAP50-95 0.1667 vs overall 0.2477.",
         "Night pedestrian mAP50-95 0.0826.",
-        "60 of 62 night validation frames carry at least one baseline miss."
+        "The problem was widespread: the detector missed at least one object in 60 of the 62 nighttime test frames."
       ]
     },
     {

@@ -3801,8 +3801,9 @@ def test_tour_walks_steps_0_and_1(
     # for -- the story site's own opening sentence (web-frontend-v1 spec §1.1), so
     # both front-ends open on the same claim.
     assert [str(head.value) for head in at.subheader] == [
-        "The detector looked reasonable overall — but performance dropped sharply at "
-        "night, especially for pedestrians."
+        "At first, the detector seemed to perform reasonably well. But when we looked at "
+        "different driving conditions, a major weakness appeared: at night, its ability to "
+        "detect pedestrians dropped dramatically."
     ]
 
     # The nav row is drawn FIRST, and Back is dead on the first step.
@@ -3818,9 +3819,9 @@ def test_tour_walks_steps_0_and_1(
 
     markdowns = [str(block.value) for block in at.markdown]
     # (step 0) the recomputed line: the fixture's only night val frame ("v0")
-    # carries baseline's miss of GT box a2 -> 1 of 1.
+    # carries baseline's miss of GT box a2 -> 1 of the 1.
     assert any(
-        "1 of 1 night validation frames carry at least one baseline miss" in text
+        "the detector missed at least one object in 1 of the 1 nighttime test frames" in text
         for text in markdowns
     )
     # (step 0, beat b) the single derived sentence: all three numbers off the same
@@ -3828,25 +3829,26 @@ def test_tour_walks_steps_0_and_1(
     derived = next(
         index
         for index, text in enumerate(markdowns)
-        if "`baseline` scores 0.2000 mAP50-95 overall but 0.1000 at night — and "
-        "0.0500 on night pedestrians, the case that matters most." in text
+        if "The overall score of 0.2000 hid the severity of the problem. At night, "
+        "performance fell to 0.1000 and for nighttime pedestrians, it dropped to just "
+        "0.0500." in text
     )
     # (step 0, beat c) ... and the purpose line under it: what the system IS, in the
     # site's own words, written AFTER the numbers it is the answer to.
     purpose = next(
         index
         for index, text in enumerate(markdowns)
-        if text.startswith("The goal of the system:")
+        if text.startswith("So we built a system")
     )
     assert markdowns[purpose] == (
-        "The goal of the system: automatically find failures like this and turn them "
-        "into better training data."
+        "So we built a system that finds weaknesses like this, identifies the data the "
+        "model needs, and turns those failures into better training data."
     )
     assert derived < purpose
     # ... closed by the takeaway callout
     assert any(
         ":material/school:" in text
-        and "Aggregate metrics hide important failure slices." in text
+        and "A single overall score can hide where a model actually struggles." in text
         for text in markdowns
     )
     # the breadcrumb lights this step's stage only
@@ -4447,10 +4449,10 @@ def test_tour_result_screen(built_demo_data: Path, monkeypatch: pytest.MonkeyPat
         assert f":orange-badge[{stage}]" in breadcrumb
 
     # (1) the weakness -- baseline's night vs overall, straight off results.json,
-    # plus the recomputed miss count step 0 already pins (1 of 1)
+    # plus the recomputed miss count step 0 already pins (1 of the 1), in step 0's words
     assert any("Night mAP50-95 0.1000 vs overall 0.2000." in text for text in markdowns)
     assert any(
-        "1 of 1 night validation frames carry at least one baseline miss" in text
+        "the detector missed at least one object in 1 of the 1 nighttime test frames" in text
         for text in markdowns
     )
 

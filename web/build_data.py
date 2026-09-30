@@ -136,12 +136,13 @@ _HERO_CAPTION = (
 # sentence that lives in the bundle is one a test can pin.
 
 _PROBLEM_SENTENCE = (
-    "The detector looked reasonable overall — but performance dropped sharply at "
-    "night, especially for pedestrians."
+    "At first, the detector seemed to perform reasonably well. But when we looked at "
+    "different driving conditions, a major weakness appeared: at night, its ability to "
+    "detect pedestrians dropped dramatically."
 )
 _PURPOSE_SENTENCE = (
-    "The goal of the system: automatically find failures like this and turn them "
-    "into better training data."
+    "So we built a system that finds weaknesses like this, identifies the data the "
+    "model needs, and turns those failures into better training data."
 )
 _LEDE_SENTENCE = (
     "Instead of randomly adding more images, the system searches the training pool "
@@ -401,6 +402,15 @@ def _night_miss_counts(package: Package) -> tuple[int, int, int]:
     return int(is_night.sum()), int((is_night & flags["has_fn"]).sum()), len(flags)
 
 
+def _miss_sentence(n_night_fn: int, n_night: int) -> str:
+    """``views/tour.py::_miss_sentence`` -- the counted miss line, worded once for
+    step 1 and its step-7 recap, in the tour's own words."""
+    return (
+        "The problem was widespread: the detector missed at least one object in "
+        f"{n_night_fn} of the {n_night} nighttime test frames."
+    )
+
+
 def build_blindspot(package: Package) -> dict[str, Any]:
     row = package.arm_row(package.baseline)
     overall, night = float(row["overall_map5095"]), float(row["night_map5095"])
@@ -420,14 +430,14 @@ def build_blindspot(package: Package) -> dict[str, Any]:
     if has_night_ped:
         cards.append({"label": "Night pedestrian mAP50-95", "value": _metric(float(night_ped))})
         night_ped_clause = (
-            f" — and {_metric(float(night_ped))} on night pedestrians, the case that matters most"
+            f" and for nighttime pedestrians, it dropped to just {_metric(float(night_ped))}"
         )
     return {
         "baseline": _label(package.baseline),
         "cards": cards,
         "derived_sentence": (
-            f"`{package.baseline}` scores {_metric(overall)} mAP50-95 overall but "
-            f"{_metric(night)} at night{night_ped_clause}."
+            f"The overall score of {_metric(overall)} hid the severity of the problem. "
+            f"At night, performance fell to {_metric(night)}{night_ped_clause}."
         ),
         # Site-only editorial, deliberately with no tour twin to pin it to: the tour's
         # step 1 leads with `_PROBLEM_SENTENCE` as its own heading, while a scrolling
@@ -435,10 +445,7 @@ def build_blindspot(package: Package) -> dict[str, Any]:
         # is evidenced by the very cards below it (overall 0.2477 vs night 0.1667), so
         # tests/test_web_export.py asserts it is non-empty rather than tour-bound.
         "headline": "Aggregate accuracy was hiding a night-driving blind spot.",
-        "miss_sentence": (
-            f"{n_night_fn} of {n_night} night validation frames carry at least one "
-            "baseline miss."
-        ),
+        "miss_sentence": _miss_sentence(n_night_fn, n_night),
         "problem_sentence": _PROBLEM_SENTENCE,
         "provenance": [
             _provenance("recorded", "mAP from active_learning_results.parquet"),
@@ -449,7 +456,7 @@ def build_blindspot(package: Package) -> dict[str, Any]:
             ),
         ],
         "purpose_sentence": _PURPOSE_SENTENCE,
-        "takeaway": "Aggregate metrics hide important failure slices.",
+        "takeaway": "A single overall score can hide where a model actually struggles.",
     }
 
 
@@ -1129,9 +1136,7 @@ def _answer_weakness(package: Package) -> list[str]:
     if bool(pd.notna(night_ped)):
         sentences.append(f"Night pedestrian mAP50-95 {_metric(float(night_ped))}.")
     n_night, n_night_fn, _n_val = _night_miss_counts(package)
-    sentences.append(
-        f"{n_night_fn} of {n_night} night validation frames carry at least one baseline miss."
-    )
+    sentences.append(_miss_sentence(n_night_fn, n_night))
     return sentences
 
 
