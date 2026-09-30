@@ -1731,6 +1731,24 @@ def parity_short(
     return f"{sql_count} {label} found · SQL {sql_count} / Graph {graph}"
 
 
+def parity_line(sql_count: int, cypher_count: int | None, parity: bool | None) -> str:
+    """The guided tour's SQL / knowledge-graph parity line in its plain-language form
+    ("SQL: 30 · Knowledge graph: 30 ✓"): the trust indicator set UNDER the match
+    count rather than in front of it, so the story reads first and the engineering
+    validation second. Same ✓ / ✗ / n-a rules as ``parity_short``; the story site's
+    exporter ships the identical string.
+    """
+    if cypher_count is None:
+        graph = "n/a (GT-only preset)"
+    elif parity is False:
+        graph = f"{cypher_count} ✗ mismatch recorded"
+    elif parity is True:
+        graph = f"{cypher_count} ✓"
+    else:
+        graph = f"{cypher_count}"
+    return f"SQL: {sql_count} · Knowledge graph: {graph}"
+
+
 def tour_frame_candidates(
     manifest: pd.DataFrame, explain: pd.DataFrame, gt: pd.DataFrame, *, arm: str
 ) -> list[str]:

@@ -10,10 +10,13 @@ import type { Scenario as ScenarioData } from "../data/types";
  * Step 3 — one failure, or a recurring driving scenario?
  *
  * The event card answers "what is this": the top-ranked event of the flagship
- * scenario query, its severity, what is near the ego, and its conditions. The
- * synced pair under it answers "is it a moment or a manoeuvre": five keyframes
- * against the CAN speed and acceleration behind them, sharing one active step —
- * point at a thumb and both curves mark it; point at a curve and the thumb lights.
+ * scenario query as a situation first (title, one plain sentence, what is near
+ * the vehicle, conditions), with the row — scene, severity figure, preset — as
+ * small metadata. The synced pair under it answers "is it a moment or a
+ * manoeuvre": a sentence saying what to notice, five keyframes against the CAN
+ * speed and acceleration behind them, and the sentence that reads them, sharing
+ * one active step — point at a thumb and both curves mark it; point at a curve
+ * and the thumb lights.
  *
  * The active step starts on the event's own frame (`is_current`), which is also
  * the one the strip rings permanently. Nothing here reverts on mouse-out: a
@@ -36,9 +39,8 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
           decoding="async"
         />
         <div className="event-facts">
-          <h3 className="event-head">
-            {data.event.scene_name} · {data.event.severity_caption}
-          </h3>
+          <h3 className="event-head">{data.event.title}</h3>
+          <p>{data.event.summary}</p>
           <p>{data.event.facts}</p>
           <ul className="chip-row">
             {data.event.chips.map((chip) => (
@@ -48,27 +50,36 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
             ))}
           </ul>
           <p className="mono event-preset">
-            <span className="muted">preset</span> {data.preset}
+            <span className="muted">scene</span> {data.event.scene_name} ·{" "}
+            {data.event.severity_caption} · <span className="muted">preset</span> {data.preset}
           </p>
         </div>
       </div>
 
       {steps.length > 0 ? (
-        <div className="sync">
-          <Filmstrip steps={steps} active={active} onActivate={setActive} />
-          <CanCurves
-            steps={steps}
-            speedTitle={data.filmstrip.speed_title}
-            accelTitle={data.filmstrip.accel_title}
-            active={active}
-            onActivate={setActive}
-          />
-          <p className="mono muted sync-caption">{data.filmstrip.caption}</p>
-        </div>
+        <>
+          <p className="measure">{data.timeline_lede}</p>
+          <div className="sync">
+            <Filmstrip steps={steps} active={active} onActivate={setActive} />
+            <CanCurves
+              steps={steps}
+              speedTitle={data.filmstrip.speed_title}
+              accelTitle={data.filmstrip.accel_title}
+              active={active}
+              onActivate={setActive}
+            />
+            <p className="mono muted sync-caption">{data.filmstrip.caption}</p>
+          </div>
+          {data.timeline_sentence ? <p className="measure">{data.timeline_sentence}</p> : null}
+        </>
       ) : null}
 
+      <p className="key-line">
+        {data.found_sentence}
+        <br />
+        {data.night_sentence}
+      </p>
       <p className="mono muted">{data.parity_caption}</p>
-      <p className="key-line">{data.night_sentence}</p>
       <p className="measure">{data.mechanism_sentence}</p>
 
       <Learned text={data.takeaway} />

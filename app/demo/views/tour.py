@@ -27,6 +27,7 @@ import pandas as pd
 import streamlit as st
 from filters import (
     FILMSTRIP_STEPS,
+    FilmstripCurve,
     arm_story_label,
     failure_flags,
     filmstrip_steps,
@@ -34,7 +35,7 @@ from filters import (
     frame_quota_before,
     gain_text,
     gt_for_render,
-    parity_short,
+    parity_line,
     rank_events,
     reason_chips,
     relative_gain,
@@ -154,9 +155,69 @@ _BRIDGE_TO_MINING = (
 # event, its filmstrip and its CAN curves above it are the evidence that the
 # failure recurs; this is the mechanism that found them.
 _MINING_MECHANISM = (
-    "The system searches driving context — night, braking, pedestrians near the ego — "
-    "not just similar-looking images."
+    "The system doesn't just search for images that look similar. It searches for "
+    "situations that are similar — nighttime driving, hard braking, and pedestrians "
+    "near the vehicle."
 )
+
+# The event as a situation, and the timeline as a reading: step 2's reader-facing
+# copy. Every figure in it is the event's own; the fixed words describe the fixed
+# flagship preset (`_TOUR_PRESET`, hard braking near pedestrians) and nothing else.
+# `web/build_data.py` mirrors each helper by name so the site says the same thing.
+_TIMELINE_LEDE = (
+    "Instead of looking at a single image, we reconstruct what was happening around it."
+)
+
+
+def _event_title(*, is_night: bool) -> str:
+    """"A hard-braking event at night" -- the preset is the flagship's, the condition
+    is the event's own flag."""
+    return f"A hard-braking event{' at night' if is_night else ''}"
+
+
+def _event_summary(*, n_peds: int) -> str:
+    return f"The vehicle brakes sharply{' while pedestrians are nearby' if n_peds > 0 else ''}."
+
+
+def _event_facts(n_peds: int, nearest: float | None) -> str:
+    """"12 pedestrians within 10 m · closest: 6.2 m" -- the distance clause only where
+    the event has one."""
+    facts = f"{n_peds} pedestrian{'' if n_peds == 1 else 's'} within 10 m"
+    if nearest is not None and bool(pd.notna(nearest)):
+        facts += f" · closest: {float(nearest):.1f} m"
+    return facts
+
+
+def _timeline_sentence(curve: FilmstripCurve, *, is_night: bool, n_peds: int) -> str:
+    """What the strip and the two curves add up to, read AFTER them: the slow-down
+    off the first and last steps' speeds (dropped when either reading is missing),
+    then the conceptual jump -- a still image becomes an event."""
+    parts: list[str] = []
+    if curve.steps:
+        first, last = curve.steps[0].can_speed_kmh, curve.steps[-1].can_speed_kmh
+        if first is not None and last is not None and pd.notna(first) and pd.notna(last):
+            parts.append(
+                f"The vehicle slows from {first:.1f} km/h to about {round(last)} km/h while "
+                "experiencing strong braking."
+            )
+    image = "a nighttime image" if is_night else "a single image"
+    event = f"a {'nighttime ' if is_night else ''}hard-braking event"
+    peds = " with pedestrians nearby" if n_peds > 0 else ""
+    parts.append(
+        "Combining the camera sequence with vehicle telemetry tells us that this is not "
+        f"simply {image} — it is {event}{peds}."
+    )
+    return " ".join(parts)
+
+
+def _found_sentence(n_events: int) -> str:
+    """The match count as the hero line of the search result."""
+    return f"The system found {n_events} similar driving event{'' if n_events == 1 else 's'}."
+
+
+def _night_sentence(n_night: int) -> str:
+    return f"{n_night} occurred at night."
+
 # Step 3: the centerpiece (web-frontend-v1 spec §1.2) -- the lede that says what
 # the system does INSTEAD of randomly adding images, and the chain it walks to do
 # it, in the words a viewer already has. The implementation-oriented chain
@@ -677,37 +738,54 @@ def _render_mine(data: _TourData) -> None:
     st.subheader("Is this one bad photo, or a recurring driving scenario?")
     row = ranked.iloc[0]
     token = str(row["sample_data_token"])
+    is_night = bool(row["is_night"])
+    n_peds = int(row["n_peds_within_10m"]) if pd.notna(row["n_peds_within_10m"]) else 0
 
     left, right = st.columns([3, 2])
     with left:
         _render_event_frame(data, row)
     with right:
-        st.markdown(f"**{row['scene_name']} · {severity_caption(_TOUR_PRESET, row.to_dict())}**")
-        n_peds = int(row["n_peds_within_10m"]) if pd.notna(row["n_peds_within_10m"]) else 0
-        nearest = row["min_dist_pedestrian_m"]
-        facts = f"within 10 m: {n_peds} pedestrian{'' if n_peds == 1 else 's'}"
-        if pd.notna(nearest):
-            facts += f" · nearest at {float(nearest):.1f} m"
-        st.markdown(facts)
+        # The situation first, in plain words; the row -- scene, severity figure,
+        # preset -- as small technical metadata under it, not as the explanation.
+        st.markdown(f"**{_event_title(is_night=is_night)}**")
+        st.markdown(_event_summary(n_peds=n_peds))
+        st.markdown(_event_facts(n_peds, row["min_dist_pedestrian_m"]))
         chip_row([
-            "night" if bool(row["is_night"]) else "day",
+            "night" if is_night else "day",
             *(["rain"] if bool(row["is_rain"]) else []),
         ])
-    _render_event_filmstrip(row)
-    _render_event_curves(row)
+        st.caption(
+            f"{row['scene_name']} · {severity_caption(_TOUR_PRESET, row.to_dict())} · "
+            f"preset `{_TOUR_PRESET}`"
+        )
 
-    # The parity line is a trust indicator, not a claim about this event: a package
-    # with no subgraphs staged simply omits it (the Scenario page's own no-op).
+    # The timeline: what to notice before the strip and the curves, and what they
+    # add up to after them. A row with no strip (scene-edge neighbours all NA)
+    # shows neither, exactly as it showed no strip before.
+    curve = filmstrip_steps(row)
+    if curve.steps:
+        st.markdown(_TIMELINE_LEDE)
+        _render_event_filmstrip(row)
+        _render_event_curves(row)
+        st.markdown(_timeline_sentence(curve, is_night=is_night, n_peds=n_peds))
+
+    # The search result: the match count as the hero line, the night count under
+    # it, and the SQL / graph parity as a caption beneath both -- a trust indicator,
+    # not a claim about this event: a package with no subgraphs staged simply omits
+    # it (the Scenario page's own no-op).
+    n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
+    st.markdown(f"**{_found_sentence(len(ranked))}**")
+    st.markdown(_night_sentence(n_night))
     payload = load_subgraphs(_TOUR_PRESET) if subgraphs_available() else None
     if payload is not None:
         st.caption(
-            parity_short(int(payload["sql_count"]), payload["cypher_count"], payload["parity"])
+            parity_line(int(payload["sql_count"]), payload["cypher_count"], payload["parity"])
         )
-
-    n_night = int(ranked["is_night"].fillna(False).astype(bool).sum())
-    st.markdown(f"{n_night} of {len(ranked)} matching events are at night.")
     st.markdown(_MINING_MECHANISM)
-    learned("Perception failures must be analyzed in driving context.")
+    learned(
+        "A single image doesn't tell the whole story. Understanding a model failure "
+        "requires knowing what was happening around the vehicle."
+    )
     provenance("recorded", "event counts computed at build against SQL and the Neo4j graph")
     provenance("recomputed", "overlay from gt_boxes.parquet")
     if st.button("Open this event in Scenario Search →", key="tour_open_event"):

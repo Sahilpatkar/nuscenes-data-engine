@@ -3964,27 +3964,47 @@ def test_tour_walks_steps_2_to_5(
     assert [str(head.value) for head in at.subheader] == [
         "Is this one bad photo, or a recurring driving scenario?"
     ]
-    # the fixture's only hard_braking_near_pedestrians event: "s1", scene-X, its own
-    # severity figure (accel_long_min_mps2 = -7.5) and its near-pedestrian facts
-    # (f1 at 5m within 10m, f2 at 20m outside it).
-    assert any("scene-X" in text and "0.76g braking" in text for text in markdowns)
-    assert any("within 10 m: 1 pedestrian · nearest at 5.0 m" in text for text in markdowns)
+    # the fixture's only hard_braking_near_pedestrians event: "s1", scene-X, a DAY
+    # event (so no "at night" on its title), its own severity figure
+    # (accel_long_min_mps2 = -7.5) and its near-pedestrian facts (f1 at 5m within
+    # 10m, f2 at 20m outside it) -- the situation first, the row as a caption.
+    assert "**A hard-braking event**" in markdowns
+    assert "The vehicle brakes sharply while pedestrians are nearby." in markdowns
+    assert "1 pedestrian within 10 m · closest: 5.0 m" in markdowns
+    assert any(
+        "scene-X · 0.76g braking · preset `hard_braking_near_pedestrians`" in text
+        for text in captions
+    )
     # the event frame itself plus its filmstrip thumbs (s1 and its t+1 neighbour v1)
     assert len(at.image) >= 2
-    # parity read from graph_subgraphs/hard_braking_near_pedestrians.json (1/1, True)
-    assert any("found · SQL 1 / Graph 1 ✓" in text for text in captions)
-    # the counted night line: s1 is a day event, so 0 of the 1 matching events
-    assert any("0 of 1 matching events are at night" in text for text in markdowns)
-    # the one mechanism sentence: what the search matched on to find those events
-    assert any(
-        "The system searches driving context — night, braking, pedestrians near the "
-        "ego — not just similar-looking images." in text
-        for text in markdowns
+    # the timeline, framed before the strip and read after the curves: s1's own
+    # CAN speed (36.0) to its t+1 neighbour's (18.0), and a day event's wording
+    assert (
+        "Instead of looking at a single image, we reconstruct what was happening around it."
+        in markdowns
     )
+    assert (
+        "The vehicle slows from 36.0 km/h to about 18 km/h while experiencing strong "
+        "braking. Combining the camera sequence with vehicle telemetry tells us that this "
+        "is not simply a single image — it is a hard-braking event with pedestrians nearby."
+    ) in markdowns
+    # the search result: the match count as the hero line, the night count under it,
+    # then the SQL/graph parity read from graph_subgraphs/hard_braking_near_pedestrians
+    # .json (1/1, True) as a caption -- s1 is a day event, so 0 occurred at night
+    assert "**The system found 1 similar driving event.**" in markdowns
+    assert "0 occurred at night." in markdowns
+    assert any("SQL: 1 · Knowledge graph: 1 ✓" in text for text in captions)
+    # the one mechanism sentence: what the search matched on to find those events
+    assert (
+        "The system doesn't just search for images that look similar. It searches for "
+        "situations that are similar — nighttime driving, hard braking, and pedestrians "
+        "near the vehicle."
+    ) in markdowns
     # ... closed by the step's takeaway callout
     assert any(
         ":material/school:" in text
-        and "Perception failures must be analyzed in driving context." in text
+        and "A single image doesn't tell the whole story. Understanding a model failure "
+        "requires knowing what was happening around the vehicle." in text
         for text in markdowns
     )
     assert "Scenario Search" in str(at.button(key="tour_open_event").label)
