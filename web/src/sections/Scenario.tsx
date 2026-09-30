@@ -29,6 +29,8 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
 
   return (
     <>
+      <p className="lede section-lede">{data.lede_sentence}</p>
+
       <div className="event-card">
         <img
           className="event-image"
@@ -49,6 +51,7 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
               </li>
             ))}
           </ul>
+          <p>{data.signals_sentence}</p>
           <p className="mono event-preset">
             <span className="muted">scene</span> {data.event.scene_name} ·{" "}
             {data.event.severity_caption} · <span className="muted">preset</span> {data.preset}
@@ -74,11 +77,7 @@ export function Scenario({ data }: { data: ScenarioData }): JSX.Element {
         </>
       ) : null}
 
-      <p className="key-line">
-        {data.found_sentence}
-        <br />
-        {data.night_sentence}
-      </p>
+      <p className="key-line">{data.found_sentence}</p>
       <p className="mono muted">{data.parity_caption}</p>
       <p className="measure">{data.mechanism_sentence}</p>
 
