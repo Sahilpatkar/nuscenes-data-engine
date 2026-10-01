@@ -9,6 +9,12 @@ active-learning loop.
 Everything is reproducible from this repo: config-driven pipelines, versioned data,
 tracked experiments, CI-gated code, and a Docker demo stack.
 
+**See it live:** the [story site](https://sahilpatkar.github.io/nuscenes-data-engine/)
+(a six-section technical case study of the model-improvement loop) and the
+[interactive demo](https://nuscenes-data-engine-sahil.streamlit.app/) (a guided tour
+plus six pages over the real results). Both read one committed artifact package, so
+they cannot disagree on a number; see §3 "Public demo" and docs/DEMO.md.
+
 ---
 
 ## 1. Objective
@@ -58,8 +64,9 @@ raw nuScenes  ───►  │ flatten + 3D→2D projection → Parquet        
  training (2)                data engine (6)                            analytics
  YOLOv8 fine-tune            ├─ 6a embed: SigLIP2 → LanceDB             DuckDB views
  MLflow + W&B                ├─ 6b autolabel: VLM → labels.parquet      (query CLI)
-      ▼                      ├─ 6c chat: LLM agent (SQL + vectors)
- evaluation (3)              └─ 6d active learning: mine → retrain
+      ▼                      ├─ 6c chat: LLM agent (SQL + vectors + Cypher)
+ evaluation (3)              ├─ 6d active learning: mine → retrain
+                             └─ 6e knowledge graph: Neo4j context graph
  sliced mAP + gate
       ▼
  registry (MLflow) ──► serving (4): FastAPI /predict /search /chat /chat/stream ──► Streamlit demo
@@ -67,9 +74,10 @@ raw nuScenes  ───►  │ flatten + 3D→2D projection → Parquet        
                             └─► monitoring (5): request capture → Evidently drift
 ```
 
-CI (GitHub Actions) runs two jobs on every PR: **quality** (ruff + mypy strict +
-the torch-free test suite — 137 tests) and **smoke-train** (a 1-epoch CPU training
-run on a tiny fixture dataset). Modules that need heavy extras guard themselves
+CI (GitHub Actions) runs three jobs on every PR: **quality** (ruff + mypy strict +
+the torch-free test suite; ~850 tests collected locally, the torch-dependent ones
+skip in CI), **smoke-train** (a 1-epoch CPU training run on a tiny fixture dataset),
+and **web** (typecheck + build of the story site). Modules that need heavy extras guard themselves
 with `importorskip`, so the same suite runs everywhere.
 
 ## 3. The build: phases, steps, and decisions
@@ -197,6 +205,59 @@ search — against a **1,500-frame random control**. Leakage guards assert mined
 pool and an identical val set across arms. Results (including the negative
 headline) in §5.
 
+**Later rounds (same harness, same random-control gate):**
+- **Round 2** (`rate`, `strat`, `rate_strat`): smoothed per-object miss *rates*
+  instead of absolute counts, and night 25% / rain 20% quotas.
+- **Round 3** (`graph_rate`, `graph_rate_night`): budgets spread across the 6e graph's
+  Louvain similarity communities, weighted by failure-rate mass, with an optional
+  375-frame night floor.
+- **Weak supervision** (`weak_random`, `weak_graph_rate_night`, each with a `_gt`
+  twin): the added frames get no ground truth. The detector proposes boxes, the 6b
+  VLM verifies per-class counts (±1), and frames that disagree are dropped. The GT
+  twin trains on the identical accepted frames with real labels, so the cost of
+  dropped frames and the cost of label quality can be separated.
+
+Across rounds 1–3 that is nine acquisition arms; with the four weak-supervision runs,
+13 trained arms, all on the identical val split.
+
+### Phase 6e — Knowledge graph
+
+**What:** A Neo4j context graph built from the existing Parquet and LanceDB vectors
+(no re-ingestion): scenes, keyframes, frames, categories, locations and VLM hazards,
+joined by `CONTAINS` / `CO_OCCURS_WITH` / `SIMILAR_TO` / temporal `NEXT` edges. The
+chat agent gains a guarded read-only `run_cypher` tool when the graph is reachable,
+and GDS Louvain communities over `SIMILAR_TO` power the graph-diversity
+active-learning arms. Details: docs/GRAPH.md.
+
+### Phase B — Ego pose, 3D geometry and CAN bus
+
+**What:** `ingest-geometry` persists ego pose and all 1.17M 3D GT boxes (world
+position, size, heading, velocity, distance to ego, instance tracking) into
+`ego_pose` / `annotations_3d` / `instances` Parquet, DuckDB views and Neo4j
+`EgoPose` / `ObjectObservation` / `ObjectInstance` nodes. `ingest-canbus`
+keyframe-aligns the nuScenes CAN-bus expansion (speed, steering, brake, throttle,
+windowed longitudinal acceleration, `is_hard_braking`). This makes driving-context
+queries such as "hard braking with a pedestrian within 10 m" answerable in both SQL
+and Cypher. Details: docs/DATA.md, docs/GRAPH.md.
+
+### Public demo and story site
+
+**What:** A self-contained presentation layer that never runs a model or calls an
+LLM. `demo build` exports a committed 25 MB artifact package (`demo_data/`), every
+number derived from real run artifacts at build time. Two front-ends read it:
+- **Streamlit app** (`app/demo/`), live on Streamlit Community Cloud: a seven-step
+  guided tour ("From model failure to better training data") plus Overview, Failure
+  Explorer, Scenario Search, Active Learning, Weak Supervision and a recorded
+  dataset-chat session.
+- **Story site** (`web/`, Vite + React + TypeScript), published to GitHub Pages on
+  merge: the main edition is a six-section technical case study (baseline failure
+  analysis, an example failure, context-aware mining, targeted selection, the
+  training intervention, results with limitations); the original scroll-through
+  edition is at `/v1/`.
+
+Tests pin the exported bundle byte-for-byte against the package, so the site, the app
+and the docs cannot drift apart. Details: docs/DEMO.md, docs/DEMO_PLAN.md.
+
 ## 4. Models: what we use and why
 
 | Role | Model | Why this one | Alternatives considered |
@@ -247,19 +308,8 @@ undercounted (recall 0.58). Conclusion: VLM labels are production-useful for
 | + 1,500 random (control) | 8,535 | **0.2817 (+0.034)** | 0.1619 (−0.005) |
 | + 958 weak (pseudo, VLM-verified) | 7,993 | 0.2539 (+0.006) | 0.1483 (−0.018) |
 
-*(Round 2 added three acquisition-score arms — best: `rate_strat` at +0.0239
-overall/+0.0069 night; none beat the random gate. Round 3 added rate-weighted
-graph-community budgets: `graph_rate_night` posts the project's best night gain,
-**+0.0101 night mAP50-95**, at +0.0254 overall. Full nine-arm table and analysis:
-docs/ACTIVE_LEARNING.md. Weak supervision — no GT on the added frames, detector
-proposes + VLM verifies — retains 18% of random's GT gain (+0.0062 vs +0.0340);
-three-way decomposition: dropping the 542 verifier-rejected frames costs ~50% of
-the gain, losing GT on the 958 kept frames costs another ~32%. A second weak arm
-on the night-champion `graph_rate_night` retains overall GT gain *more*
-efficiently (39.4% vs 18.2%) but its night gain inverts, +0.0101 → **−0.0262**,
-with a GT twin proving the damage is the labels, not the dropped frames. Full
-breakdown: docs/ACTIVE_LEARNING.md, "Weak supervision" and "A second arm: the
-night champion".)*
+This is round 1. Later rounds and the weak-supervision arms follow the negative
+result below; the full 13-arm table and analysis are in docs/ACTIVE_LEARNING.md.
 
 **The random control beat similarity mining** — a negative result worth more than
 a fake win, with a quantified mechanism:
@@ -274,6 +324,52 @@ a fake win, with a quantified mechanism:
   lives in confidence/localization, which the score couldn't see.
 - The harness itself is the win: any future acquisition function is gated on
   beating an equal-budget random control.
+
+**Diversity first (6e graph arm).** Sampling across GDS-Louvain communities of the
+`SIMILAR_TO` graph matched the random control's overall gain (+0.0344) *and*
+recovered night (+0.0036, where random regressed), spanning 473 scenes vs mined's 219.
+
+**Round 2: better scores.** Smoothed-rate scoring and night/rain quotas compose
+(`rate_strat` +0.0239 overall, one of the few arms to lift overall *and* night), and
+`rate` posts the best night mAP50 of the seven arms at that point (0.3076). Quotas
+without a night-aware score actively hurt (`strat` night −0.0086). None beat the
+random control (+0.0340) or `graph` (+0.0344) overall: the diversity lesson survives
+a better score.
+
+**Round 3: diversity + rate + night floor.** Rate-mass weighting alone matches size
+weighting (+0.0330 vs +0.0344, within partition noise), but `graph_rate_night`
+delivers **the best night gain of all 13 arms, +0.0101 night mAP50-95** (0.1768) at
++0.0254 overall (~75% of the best overall gain). The overall/night trade-off becomes
+an explicit, tunable choice.
+
+### Weak supervision (6b → 6d) — VLM-verified pseudo labels
+
+| Base arm | Frames kept by the verifier | Share of GT gain retained | Night mAP50-95: GT → pseudo |
+|---|---|---|---|
+| `random` | 958 / 1,500 (63.9%) | 18.2% (+0.0062 vs +0.0340) | −0.0048 → −0.0184 |
+| `graph_rate_night` | 1,101 / 1,500 (73.4%) | 39.4% | **+0.0101 → −0.0262** |
+
+- On `random`, dropping the 542 rejected frames costs ~50% of the gain and losing GT
+  on the 958 kept frames costs another ~32%.
+- On the night champion, the GT twin (identical 1,101 frames, real labels) keeps
+  +0.0099 of the night gain, so the inversion is caused by the *labels*, not the
+  dropped frames (a 0.0361 night swing between twins vs a 0.0002 frame cost; single
+  seed).
+- Mechanism: detector and VLM share a pedestrian blind spot (6b: VLM pedestrian
+  presence recall 0.58). 870 of the 1,101 accepted night-arm frames have zero
+  pedestrians in *both* the proposal and the VLM count (79%, up from 72% on
+  `random`), teaching the model "pedestrian here = background" on the class that
+  matters most. Pseudo labels carry 1.62 boxes per frame vs 3.41 in GT.
+
+Full breakdown: docs/ACTIVE_LEARNING.md, "Weak supervision" and "A second arm: the
+night champion".
+
+### Knowledge graph + CAN bus (6e, Phase B)
+
+- **34,149** keyframe-aligned CAN rows, **94** hard-braking events; CAN speed
+  cross-checks against GT-derived ego speed at **r = 0.999**.
+- The flagship "hard braking near pedestrians" query returns **30** events
+  identically in SQL and Cypher.
 
 ### Dataset chat (Phase 6c) — live transcripts
 
@@ -298,12 +394,18 @@ results: docs/DATASET_CHAT.md.
   Parquet → trained detector → sliced evaluation → registry promotion → serving →
   drift monitoring — operated across two machines by one command (`gpu-run.sh`).
 - **A working data-engine layer**: semantic search over 204,894 frames, $0 VLM
-  labeling with a real GT evaluation, natural-language dataset chat, and a
-  measured active-learning loop with leakage guards and a random control.
+  labeling with a real GT evaluation, natural-language dataset chat, a Neo4j
+  knowledge graph with CAN-bus driving context, and a measured active-learning loop
+  (13 arms, leakage guards, an equal-budget random control) including weak
+  supervision with GT-twin controls.
 - **Honest measurement culture**: night gap quantified (−20 mAP50); VLM counting
   limits quantified (MAE 6.67 at 10+ objects); active-learning similarity mining
-  *disproven* against random at equal budget, with the mechanism identified.
-- **Engineering hygiene**: 137 offline tests (torch-free CI), mypy strict, ruff,
+  *disproven* against random at equal budget, with the mechanism identified;
+  pseudo-label damage to the night slice isolated with a GT twin; pre-registered
+  predictions scored, including the ones that were wrong.
+- **A public, self-consistent presentation**: a live Streamlit demo and a story site
+  built from one committed artifact package, with tests that pin every figure.
+- **Engineering hygiene**: ~850 offline tests (torch-free CI), mypy strict, ruff,
   data versioning (DVC), experiment tracking (MLflow + W&B), branch-protected CI,
   provider seams for every paid dependency, and a security-reviewed SQL guard.
 
@@ -335,88 +437,29 @@ results: docs/DATASET_CHAT.md.
 
 ## 9. Future scope
 
-Ordered roughly by value-per-effort:
+Completed items that used to live here (active-learning rounds 2–3, Phase B ego pose
++ CAN bus, weak supervision, the chat evaluation harness) are now in §3 and §5.
+Remaining, ordered roughly by value-per-effort:
 
-1. **Active learning round 2** — the 6e graph-diversity arm delivered the first 6d
-   lesson (a diversity term): GDS-Louvain community sampling over the SIMILAR_TO graph
-   matched the random control's overall gain (+0.0344) *and* recovered night (+0.0036,
-   where random regressed), spanning 473 scenes vs mined's 219. Was open (built in
-   round 2): rate-based acquisition and night/rain-stratified
-   quotas — the harness and random-control gate already exist; only the score changes.
-   *Round 2 is DONE (arms `rate`, `strat`, `rate_strat` — smoothed-rate scoring and
-   night 25% / rain 20% floors, spec `2026-08-02-al-round-2-design.md`). Results: the
-   mechanisms compose (`rate_strat` +0.0239 overall beats both components; only arm
-   besides `mined`/`graph` to lift overall AND night), `rate` posts the best night
-   mAP50 of all seven arms (0.3076), quotas-without-a-night-aware-score actively hurt
-   (`strat` night −0.0086) — but none beats the random control (+0.0340) or `graph`
-   (+0.0344) overall: the diversity lesson survives a better score. Next: combine
-   graph-community diversity with rate-weighted, night-floored budgets
-   (docs/ACTIVE_LEARNING.md, "Round 2 results").*
-   *Round 3 — DONE (budget ∝ embedding-routed smoothed-rate failure mass across
-   Louvain communities, floor 1/community, ± night-375 floor; GDS Louvain pinned
-   deterministic via `concurrency: 1`; spec `2026-08-04-al-round-3-design.md`).
-   Results: rate-mass weighting alone matches size weighting (+0.0330 vs +0.0344,
-   within partition noise) — but `graph_rate_night` delivers **the project's best
-   night gain of all 13 arms, +0.0101 night mAP50-95** (0.1768) at ~75% of the
-   best overall gain. With diversity held by the community floor, an explicit night
-   floor finally moves the night slice; the overall/night trade-off is now an
-   explicit, tunable choice (docs/ACTIVE_LEARNING.md, "Round 3 results").*
-2. **Ego-pose / 3D geometry ingestion (Phase B) — DONE.** `ingest-geometry` now persists
-   the ego pose + all 1.17M 3D GT boxes (world position, size, heading, velocity, BEV
-   distance-to-ego, ego-relative coords, instance tracking) into `ego_pose`/`annotations_3d`/
-   `instances` Parquet, DuckDB views, and Neo4j `EgoPose`/`ObjectObservation`/`ObjectInstance`
-   nodes with point indexes. The project plan's "pedestrians within 5 m of ego at night" is
-   answerable in both SQL and Cypher (see docs/GRAPH.md). **CAN-bus (steering/braking) —
-   DONE.** `ingest-canbus` keyframe-aligns the nuScenes `can_bus` expansion (vehicle
-   speed/steering/brake/throttle, windowed longitudinal accel, `is_hard_braking`) into
-   `canbus.parquet`, a DuckDB view, and CAN properties on the `EgoPose` graph nodes:
-   **34,149** keyframe-aligned rows, **94** hard-braking, an independent speed
-   cross-check of **r = 0.999** against the GT-derived `ego_pose.speed_mps`, and the
-   flagship "hard braking near pedestrians" query returns **30** identically in SQL and
-   Cypher (docs/DATA.md, docs/GRAPH.md).
-3. **Terraform cloud deployment** (the remaining roadmap item) — lift the compose
-   stack to a cloud host; the chat agent's Anthropic flip means no GPU is needed
-   for any serving-path component.
-4. **Close the 6b→6d loop — DONE.** Use VLM labels as *weak supervision*:
-   auto-label mined frames instead of relying on GT, making the engine work on
-   genuinely unlabeled data (the real-world case). *The verifier (detector
-   proposes, VLM confirms within ±1 count per class, frame-level accept/reject)
-   retains **63.9%** of `random`'s 1,500 mined frames (958). Weak supervision
-   retains **18%** of `random`'s GT gain (+0.0062 vs +0.0340 overall mAP50-95),
-   and the loss splits roughly **~50% dropped frames / ~32% label quality** on the
-   frames it keeps. Design, pipeline, and the full three-way decomposition:
-   docs/ACTIVE_LEARNING.md, "Weak supervision", spec
-   `2026-08-06-vlm-weak-supervision-design.md`. A second weak-supervision arm on
-   round 3's night champion (`graph_rate_night`, 30.9% night in its mined set)
-   sharpens this into a paradox: it retains **more** of the overall GT gain than
-   the random arm did (39.4% vs 18.2%), because sparser night frames make
-   detector/VLM agreement easier — but the night gain itself *inverts*, from GT's
-   +0.0101 to the pseudo-labelled arm's **−0.0262**. The GT twin
-   (`weak_graph_rate_night_gt`, the identical 1,101 accepted frames) keeps +0.0099
-   of the night gain, proving — on a single seed, with an effect size (a 0.0361
-   night swing between twins vs a 0.0002 frame cost) far outside the run-to-run
-   noise band — that the damage is the *labels*, not the frames the verifier
-   dropped. docs/ACTIVE_LEARNING.md, "A second arm: the night champion".*
-5. **Chat agent upgrades** — streaming responses, chart generation from SQL
-   results, and a saved-questions gallery in Streamlit remain open. **Evaluation
-   harness — DONE; grounding v2 — DONE (2026-08-11).** A 20-case set (reference
-   SQL, no LLM judge) swept across three models: **Claude 17/20** (replayed),
-   **`qwen2.5:32b` 12/20** (live), **`qwen2.5:14b` 4/20** (replayed) — 32b
-   eliminates 14b's language-drift and tool-call failures at $0, making it the
-   recommended local model (config default stays `qwen2.5:14b`; flipping it is a
-   deployment decision — 32b needs ~20 GB RAM and 2.2x latency). v1's `grounded`
-   check had penalised Claude for showing correct
-   arithmetic (11/20 vs local's vacuous 18/20); the pre-registered v2 fix resolved
-   it exactly as predicted (Claude 18/20 grounded), with one documented
-   composition miss. Full results and the prediction scorecard:
-   docs/DATASET_CHAT.md, "Answer-correctness evaluation".
-6. **Richer monitoring** — score production captures with the drift job on a
+1. **Better weak supervision.** Two untried levers: verify pedestrian *presence*
+   rather than counts (where the VLM's recall is weakest), and raise the proposer's
+   recall with a lower confidence threshold. Either directly targets the shared
+   pedestrian blind spot behind the night inversion.
+2. **Multi-seed active-learning reruns.** Every arm is a single seed; the headline
+   effects are well outside the measured run-to-run noise, but small differences
+   between the top arms (e.g. `graph` vs `random`) are not.
+3. **Terraform cloud deployment** — lift the compose stack to a cloud host; the chat
+   agent's Anthropic flip means no GPU is needed for any serving-path component.
+4. **Chat agent upgrades** — streaming in the UI, chart generation from SQL results,
+   a saved-questions gallery; flip the local default to `qwen2.5:32b` where the host
+   has ~20 GB RAM.
+5. **Richer monitoring** — score production captures with the drift job on a
    schedule, alert on night-share/brightness shifts, and correlate drift windows
    with slice metrics.
-7. **Multi-camera + temporal training** — the ingestion already carries all 6
+6. **Multi-camera + temporal training** — the ingestion already carries all 6
    cameras; training currently uses them frame-independently. Scene-level
    train/val splits are in place, enabling sequence models later.
-8. **Scale-out storage** — if the corpus grows past single-machine Parquet,
+7. **Scale-out storage** — if the corpus grows past single-machine Parquet,
    the DuckDB seam makes an Iceberg/lakehouse migration localized to `catalog.py`
    and the ingestion writers.
 
@@ -432,5 +475,8 @@ Ordered roughly by value-per-effort:
 | [AUTOLABEL_EVAL.md](AUTOLABEL_EVAL.md) | 6b methodology, sampling, results, cost |
 | [DATASET_CHAT.md](DATASET_CHAT.md) | 6c architecture, SQL guard, transcripts |
 | [ACTIVE_LEARNING.md](ACTIVE_LEARNING.md) | 6d experiment design + results |
-| [GRAPH.md](GRAPH.md) | 6e Neo4j context graph, `run_cypher`, Cypher guard |
-| [PHASE4_PLAN.md](PHASE4_PLAN.md) | Serving design notes |
+| [GRAPH.md](GRAPH.md) | 6e Neo4j context graph, `run_cypher`, Cypher guard, Phase B geometry + CAN queries |
+| [DEMO.md](DEMO.md) | Public demo + story site: package, pages, runbook, deploy, success walk |
+| [DEMO_PLAN.md](DEMO_PLAN.md) | The demo's original design (historical plan) |
+| [PHASE4_PLAN.md](PHASE4_PLAN.md) | Serving design notes (historical plan) |
+| [../nuscenes-mlops-project-plan.md](../nuscenes-mlops-project-plan.md) | The original project plan and rationale (historical) |

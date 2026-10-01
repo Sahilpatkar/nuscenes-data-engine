@@ -70,12 +70,12 @@ The screenshots above and the packaged frames are nuScenes-derived imagery — s
 tracking, condition-sliced evaluation with gated registry promotion, the promoted model
 (`nuscenes-yolo-detector@production`, yolov8m@960, val mAP50 0.740) served behind a
 FastAPI + Streamlit serving UI, and Evidently drift monitoring over the serving inputs
-with a three-job CI (quality + CPU smoke-train + the story-site build). **Demo phases
-1–11 shipped:** a story-led guided tour plus the six-page public demo above runs
-entirely off the committed `demo_data/` package and is deployable to Streamlit
-Community Cloud, and the story site (`web/`) tells the same loop as a designed
-scroll-through, built from that same package and published to GitHub Pages by its
-own workflow on merge.
+with a three-job CI (quality + CPU smoke-train + the story-site build). **The public
+demo is live:** a story-led guided tour plus the six-page app above runs entirely off
+the committed `demo_data/` package on Streamlit Community Cloud, and the story site
+(`web/`) is published to GitHub Pages on merge from the same package. Its main
+edition is a six-section technical case study; the original scroll-through edition is
+at `/v1/`.
 
 ## Architecture
 
@@ -186,8 +186,9 @@ src/nuscenes_data_engine/
 app/                        Streamlit serving UI (`app/streamlit_app.py`) + the public demo (`app/demo/`)
 app/demo/                   public demo app — reads demo_data/ only, no backend
 demo_data/                  committed artifact package the public demo reads
-web/                        the story site — a designed scrollytelling front-end over
-                            the same committed package (GitHub Pages)
+web/                        the story site — the report edition (web/src/v2/) and the
+                            original scroll-through (web/src/) over the same committed
+                            package (GitHub Pages)
 tests/                      pytest suite
 docs/                       DATA.md, EVALUATION.md, DEMO.md
 .github/workflows/          CI (ruff + mypy + pytest + the story-site build) + Pages deploy
@@ -303,16 +304,19 @@ manifest (why: radar/LiDAR-sweep files are absent on the server) is documented i
 
 ## Auto-labeling (Phase 6b)
 
-A stratified 5,000-frame sample is labeled by Claude (`claude-haiku-4-5`, plus a
-500-frame `claude-opus-4-8` comparison subset) through the Batch API with structured
-outputs, then scored against nuScenes ground truth — condition flags, per-class object
-counts, and cheap-vs-frontier labeler agreement. Methodology, sampling strategy, cost
-(~$15), and the runbook: [docs/AUTOLABEL_EVAL.md](docs/AUTOLABEL_EVAL.md).
+A stratified 5,000-frame sample is labeled by a vision-language model with
+schema-validated structured outputs, then scored against nuScenes ground truth —
+condition flags and per-class object counts. The run used the default **local
+provider**: Qwen2.5-VL-7B-Instruct self-hosted on vLLM, **$0**, 99.7% valid JSON,
+night-flag F1 0.989, with counting accuracy that degrades in crowded frames. A Claude
+Batch API provider (`--provider anthropic`, ~$15 for 5K frames) is built behind the
+same seam. Methodology, sampling strategy, results, and both runbooks:
+[docs/AUTOLABEL_EVAL.md](docs/AUTOLABEL_EVAL.md).
 
 ```bash
 uv run nuscenes-data-engine autolabel sample            # stratified sample (deterministic)
-uv run nuscenes-data-engine autolabel submit --dry-run  # sizing + cost, no API calls
-uv run nuscenes-data-engine autolabel submit --yes      # paid run (needs ANTHROPIC_API_KEY)
+# serve Qwen2.5-VL on a 24 GB GPU node first (see AUTOLABEL_EVAL.md), then:
+uv run nuscenes-data-engine autolabel submit             # provider: local (default), free
 uv run nuscenes-data-engine autolabel collect && uv run nuscenes-data-engine autolabel eval
 ```
 
@@ -350,7 +354,7 @@ uv run nuscenes-data-engine graph query --canned top_co_occurrence
 ### Branch protection (manual, one-time)
 
 GitHub → Settings → Branches → Add rule for `main`: require a pull request before
-merging + require status checks **quality** and **smoke-train** (they appear in the
+merging + require status checks **quality**, **smoke-train** and **web** (they appear in the
 picker after the first PR run).
 
 ## Build roadmap
@@ -361,19 +365,20 @@ picker after the first PR run).
 | 2 ✅ | Training pipeline | Config-driven YOLO fine-tuning, MLflow-tracked, Dagster job |
 | 3 ✅ | Evaluation & registry | Condition-sliced mAP (night/rain) + MLflow registry promotion |
 | 4 ✅ | Serving | FastAPI + Streamlit serving UI via `docker compose up` |
-| 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + 2-job CI (quality, smoke-train) |
+| 5 ✅ | Monitoring & CI/CD | Evidently drift demo (day vs night) + CI (quality, smoke-train; later the story-site `web` build) |
 | 6a ✅ | Scene search | SigLIP embeddings → LanceDB; text/image search API + Streamlit tab |
 | 6b ✅ | VLM auto-labeling | 5K frames labeled by self-hosted Qwen2.5-VL ($0); night F1 0.99, counts degrade with crowding — see AUTOLABEL_EVAL.md |
 | 6c ✅ | Dataset chat | Tool-calling agent (guarded DuckDB SQL + vector search), $0 local Ollama with a Claude-API deploy flip — see DATASET_CHAT.md |
-| 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine: `graph_rate_night` **+0.0101 night mAP50-95** |
+| 6d ✅ | Active learning | Mined-vs-random controlled retrain: random +0.034 mAP beat similarity-mining +0.016 (diversity wins) — see ACTIVE_LEARNING.md. Rounds 2–3 added six more acquisition arms; best night gain of all nine acquisition arms (13 trained arms with the weak-supervision runs): `graph_rate_night` **+0.0101 night mAP50-95**. Weak supervision (detector proposes, VLM verifies) retains 18–39% of the GT gain, and pseudo-labels flip the night arm's gain to −0.0262 |
 | 6e ✅ | Knowledge graph | Neo4j context graph from existing Parquet + vectors; guarded `run_cypher` chat tool + visual exploration; graph-diversity AL arm matched random's +0.034 mAP *and* recovered night (+0.004) where random regressed — see GRAPH.md |
-| Demo 1-11 ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, deployable to Streamlit Community Cloud — plus the story site (`web/`), a designed scrollytelling front-end over the same package, exported by `web/build_data.py`, CI-guarded and published to GitHub Pages on merge — see [DEMO.md](docs/DEMO.md) |
+| Demo ✅ | Public demo | Self-contained Streamlit app (`app/demo/`) over a committed 25 MB artifact package: a story-led guided tour ("From model failure to better training data") plus six deep pages, every number derived at build time, recorded chat replay, live on Streamlit Community Cloud — plus the story site (`web/`) over the same package, exported by `web/build_data.py`, CI-guarded and published to GitHub Pages on merge: a six-section report edition at the root, the original scroll-through at `/v1/` — see [DEMO.md](docs/DEMO.md) |
 
 | B ✅ | Geo-spatial + CAN bus | Ego pose, all 1.17M 3D boxes, and keyframe-aligned CAN dynamics → Parquet, DuckDB, and Neo4j `EgoPose`/`ObjectObservation` nodes. *"Hard braking with a pedestrian within 10 m"* answers **30, identically in SQL and Cypher**; CAN speed cross-checks against GT pose at r = 0.999 — see [DATA.md](docs/DATA.md), [GRAPH.md](docs/GRAPH.md) |
 
-Future work: Terraform-provisioned cloud deployment of the serving stack; VLM labels as
-weak supervision to close the auto-labeling → active-learning loop on genuinely unlabeled
-data.
+Future work: Terraform-provisioned cloud deployment of the serving stack; better weak
+supervision (presence-based verification for pedestrians, where the VLM's recall is
+weakest); multi-seed reruns of the active-learning arms. Full list:
+[docs/PROJECT.md](docs/PROJECT.md#9-future-scope).
 
 ## License
 

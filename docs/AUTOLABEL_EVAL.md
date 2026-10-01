@@ -3,9 +3,15 @@
 Can an LLM be trusted as a labeler? nuScenes is one of the few settings where that
 question is *measurable*: every frame already has human-quality ground truth, so VLM
 labels can be scored instead of eyeballed. This phase labels a stratified sample of
-front-camera frames with Claude and evaluates the labels against GT.
+5,000 front-camera frames with a vision-language model and evaluates the labels against GT.
 
-## Setup
+**What actually ran:** the labelling run used the **local provider**,
+Qwen2.5-VL-7B-Instruct self-hosted on vLLM, for **$0** (99.7% parse rate). Its
+results are in "Results — Qwen2.5-VL-7B-Instruct" below. The Claude Batch API
+provider described in this Setup section is built and tested but has not been run on
+the full sample; it stays available behind the same provider seam (see "Providers").
+
+## Setup (anthropic provider design)
 
 - **Labelers:** `claude-haiku-4-5` over the full sample; `claude-opus-4-8` over a
   500-frame subset of the same sample (so Haiku, Opus, and GT are three-way

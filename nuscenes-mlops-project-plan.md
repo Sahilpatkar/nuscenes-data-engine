@@ -1,5 +1,7 @@
 # A Miniature AV Data Engine: Search, Curate, Train, Serve, and Monitor on nuScenes
 
+> **Status (2026-10-01):** the original project plan, kept for its design rationale. The project is now named Perception Data Engine and every planned phase is built; see [docs/PROJECT.md](docs/PROJECT.md) for what was built and measured.
+
 An end-to-end MLOps + data engine project built on the [nuScenes](https://www.nuscenes.org/) dataset. The system ingests multimodal autonomous vehicle sensor data, validates and versions it, trains and evaluates an object detection model, serves it behind an API, and monitors it for drift — then layers a modern **data engine** on top: natural-language scene search over embeddings, VLM-based auto-labeling with rigorous evaluation, a chat interface over the dataset, and embedding-driven active learning that closes the loop back to training.
 
 **The problem:** Autonomous vehicles generate enormous volumes of sensor data, but model quality is bottlenecked by a needle-in-a-haystack problem — the scenarios that matter (a pedestrian stepping out at night, a hard-braking event in rain) are buried in hours of uneventful driving, and no team can manually review it all.

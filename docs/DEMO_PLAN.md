@@ -1,5 +1,7 @@
 # Perception Data Engine: Demo Plan
 
+> **Status (2026-10-01):** historical design document. The demo it plans is built and live; for the current pages, package, runbook and live URLs see [DEMO.md](DEMO.md), and for the project overview see [PROJECT.md](PROJECT.md).
+
 ## Objective
 
 Build a polished, public-facing Streamlit demo that makes the project understandable in a few minutes.

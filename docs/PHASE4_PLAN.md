@@ -1,5 +1,7 @@
 # Phase 4 — Serving (FastAPI + Streamlit + Docker) — implementation plan
 
+> **Status (2026-10-01):** historical plan; Phase 4 is built. Current serving usage lives in the README's "Serving (Phase 4)" section.
+
 > Resume point for Phase 4. Phases 1–3 + the model-improvement pass are done and pushed;
 > the promoted model is `nuscenes-yolo-detector` **@production = v2** (yolov8m @ 960,
 > overall mAP50 0.740).
